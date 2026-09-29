@@ -1,0 +1,108 @@
+#!/bin/bash
+# 公司 VPN 輔助程式（以 root 執行，由 SplitSwan.app 透過 sudo -n 呼叫）
+# 安裝位置：/usr/local/libexec/splitswan-helper（root:wheel 755，一般使用者不可改）
+#
+#   splitswan-helper status        輸出一行：connected <conn> <虛擬IP> <本機IP> <已建立秒數> | connecting <conn> | disconnected
+#                                （舊版只輸出前三欄；App 要能處理兩種格式）
+#   splitswan-helper up [auto|1|2|3]
+#   splitswan-helper down
+#   splitswan-helper log           即時輸出 charon log
+#   splitswan-helper reload        重新載入設定（App 儲存設定後呼叫）
+#   splitswan-helper reload-settings  重新讀取 strongswan.conf（重送參數、log 設定）
+#   splitswan-helper sas           輸出 swanctl --list-sas 原始結果（唯讀，排查用）
+#
+# 只接受上面這幾種參數，其餘一律拒絕（sudoers 免密碼只放行這支程式）。
+set -uo pipefail
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+
+SS=/opt/homebrew/opt/strongswan
+SWANCTL="$SS/bin/swanctl"
+CHARON="$SS/libexec/ipsec/charon"
+CONNS=(vpn1 vpn2 vpn3)
+
+charon_running() { pgrep -x charon >/dev/null; }
+
+ensure_charon() {
+  if ! charon_running; then
+    nohup "$CHARON" </dev/null >/dev/null 2>&1 &
+    for _ in $(seq 1 20); do
+      "$SWANCTL" --stats >/dev/null 2>&1 && break
+      sleep 0.25
+    done
+  fi
+  "$SWANCTL" --load-all --noprompt >/dev/null 2>&1
+}
+
+terminate_all() {
+  for c in "${CONNS[@]}"; do
+    "$SWANCTL" --terminate --ike "$c" --force --timeout 5 >/dev/null 2>&1
+  done
+}
+
+try_conn() {
+  local c=$1
+  if "$SWANCTL" --initiate --child corp --ike "$c" --timeout 20 >/dev/null 2>&1; then
+    echo "ok $c"
+    return 0
+  fi
+  "$SWANCTL" --terminate --ike "$c" --force --timeout 5 >/dev/null 2>&1
+  return 1
+}
+
+cmd_status() {
+  if ! charon_running; then echo "disconnected"; return; fi
+  local out; out=$("$SWANCTL" --list-sas 2>/dev/null)
+  for c in "${CONNS[@]}"; do
+    local block; block=$(printf '%s\n' "$out" | awk -v c="$c:" '$1==c{p=1;print;next} /^[^ ]/{p=0} p')
+    [ -z "$block" ] && continue
+    if printf '%s\n' "$block" | head -1 | grep -q ESTABLISHED && printf '%s\n' "$block" | grep -q INSTALLED; then
+      # local 那行：local  '<IKE 身分>' @ <本機IP>[<埠>] [<虛擬IP>]
+      local vip lip est
+      vip=$(printf '%s\n' "$block" | sed -n 's/^ *local .*\] \[\([^]]*\)\].*/\1/p' | head -1)
+      lip=$(printf '%s\n' "$block" | sed -n 's/^ *local .* @ \([^[ ]*\)\[.*/\1/p' | head -1)
+      est=$(printf '%s\n' "$block" | sed -n 's/^ *established \([0-9]*\)s ago.*/\1/p' | head -1)
+      echo "connected $c ${vip:--} ${lip:--} ${est:--}"
+      return
+    fi
+    echo "connecting $c"
+    return
+  done
+  echo "disconnected"
+}
+
+case "${1:-}" in
+  status)
+    cmd_status ;;
+  up)
+    target="${2:-auto}"
+    case "$target" in auto|1|2|3) ;; *) echo "invalid target" >&2; exit 2 ;; esac
+    ensure_charon
+    terminate_all
+    case "$target" in
+      auto) for c in "${CONNS[@]}"; do try_conn "$c" && exit 0; done
+            echo "fail all"; exit 1 ;;
+      1|2|3) try_conn "vpn$target" && exit 0
+             echo "fail vpn$target"; exit 1 ;;
+      *) echo "invalid target" >&2; exit 2 ;;
+    esac ;;
+  down)
+    charon_running && terminate_all
+    echo "ok down" ;;
+  log)
+    ensure_charon
+    exec "$SWANCTL" --log ;;
+  reload)
+    # App 儲存設定後呼叫：charon 在跑就重新載入 swanctl.conf 與 secrets.conf
+    if charon_running; then "$SWANCTL" --load-all --noprompt >/dev/null 2>&1; fi
+    echo "ok reload" ;;
+  reload-settings)
+    # App 更新重送參數或 log 設定後呼叫；已建立的通道不受影響，之後的交換才套用
+    if charon_running; then "$SWANCTL" --reload-settings >/dev/null 2>&1 || { echo "fail reload-settings"; exit 1; }; fi
+    echo "ok reload-settings" ;;
+  sas)
+    # 唯讀：輸出 swanctl 原始 SA 清單（含雙方 traffic selector），排查用
+    charon_running || { echo "charon 未執行"; exit 0; }
+    exec "$SWANCTL" --list-sas ;;
+  *)
+    echo "usage: splitswan-helper {status|up [auto|1|2|3]|down|reload|reload-settings|log|sas}" >&2; exit 2 ;;
+esac

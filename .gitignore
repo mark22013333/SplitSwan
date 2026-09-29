@@ -1,0 +1,17 @@
+# 編譯產物
+build/
+
+# 診斷輸出（含內部網段與路由資訊）
+diag-*.txt
+
+# 實際的密碼檔絕不進版控，只放 config/secrets.conf.example
+config/secrets.conf
+secrets.conf
+
+.DS_Store
+
+# 打包產物
+dist/
+
+# 公司設定檔（含公司位址）
+company.env
