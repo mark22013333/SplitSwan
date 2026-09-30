@@ -620,6 +620,7 @@ struct FieldRow<Field: View>: View {
 struct EnvironmentTab: View {
     @ObservedObject var env: EnvChecker
     @ObservedObject var window: WindowModel
+    @ObservedObject private var report = DiagnosticRunner.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -653,6 +654,22 @@ struct EnvironmentTab: View {
                 }
                 Spacer()
                 Button("重新檢查") { env.check() }.disabled(env.running)
+            }
+
+            // F3：診斷報告（規格 §5）。只讀取現況，不會改變連線狀態
+            HStack {
+                if report.running {
+                    ProgressView().controlSize(.small)
+                    Text(report.progressText).font(.callout).foregroundStyle(.secondary)
+                } else if let msg = report.lastMessage {
+                    Text(msg).font(.callout).foregroundStyle(.secondary)
+                } else {
+                    Text("連線有問題時，產生報告傳給管理者（不含密碼與預設共享金鑰）")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("產生診斷報告") { report.generate(checks: env.items) }
+                    .disabled(report.running)
             }
         }
         .onAppear { env.check() }
