@@ -95,6 +95,18 @@ enum ConfigStore {
         return unquote(raw)
     }
 
+    /// 診斷報告遮蔽用（第二道防線）：目前 secrets.conf 裡實際的 PSK 與密碼，
+    /// 原始（含跳脫字元）與還原後兩種寫法都列出；未設定的略過
+    static func secretsForRedaction() -> [String] {
+        let (psk, pwd) = existingSecrets()
+        var out: [String] = []
+        for raw in [psk, pwd] {
+            guard let raw, isRealSecret(raw) else { continue }
+            for s in [raw, unquote(raw)] where !s.isEmpty && !out.contains(s) { out.append(s) }
+        }
+        return out
+    }
+
     /// quote() 的反向：\\ → \、\" → "
     static func unquote(_ s: String) -> String {
         var out = "", esc = false
@@ -179,20 +191,43 @@ enum ConfigStore {
         if let data = try? JSONEncoder().encode(s) { UserDefaults.standard.set(data, forKey: defaultsKey) }
     }
 
-    /// 縮短重送參數：失聯判定約 26 秒、連不上的閘道約 16 秒放棄（規格 §2.2，數字待實測 Q6）。
-    /// 內容沒變就不寫，回傳是否有更新（有更新才需要 reload-settings）
-    @discardableResult
-    static func writeCharonTuning() throws -> Bool {
-        let text = """
+    /// charon 的 log 檔（F3 診斷報告直接讀取）。目錄與檔案由 install-root.sh 以 root 建立，
+    /// 大小由輔助程式 logtrim 控制（規格 §5.3）
+    static let charonLogPath = "/var/log/splitswan/charon.log"
+
+    /// strongswan.d/splitswan.conf 的內容：§2.2 的重送參數＋§5.3 的 filelog
+    static func renderCharonTuning() -> String {
+        """
         \(marker)，請勿手動修改。
-        # 縮短重送參數，讓 DPD 更快判定失聯（預設約 185 秒 → 約 26 秒）
         charon {
+            # 縮短重送參數，讓 DPD 更快判定失聯（預設約 185 秒 → 約 26 秒）
             retransmit_timeout = 2.0
             retransmit_tries = 3
             retransmit_base = 1.5
+
+            # 診斷報告用的 log 檔。等級固定 1（基本控制訊息）：等級越高越詳細，最高等級會含金鑰。
+            # append = yes：logtrim 就地截斷後不會留下空洞；flush_line = yes：報告讀得到最新幾行
+            filelog {
+                splitswan {
+                    path = \(charonLogPath)
+                    default = 1
+                    append = yes
+                    flush_line = yes
+                    time_format = %Y-%m-%d %H:%M:%S
+                    ike_name = yes
+                }
+            }
         }
 
         """
+    }
+
+    /// 縮短重送參數：失聯判定約 26 秒、連不上的閘道約 16 秒放棄（規格 §2.2，數字待實測 Q6）；
+    /// 並設定 charon 的 filelog（規格 §5.3）。
+    /// 內容沒變就不寫，回傳是否有更新（有更新才需要 reload-settings）
+    @discardableResult
+    static func writeCharonTuning() throws -> Bool {
+        let text = renderCharonTuning()
         if (try? String(contentsOfFile: charonTuningPath, encoding: .utf8)) == text { return false }
         guard FileManager.default.fileExists(atPath: (charonTuningPath as NSString).deletingLastPathComponent) else { return false }
         try writePrivate(text, to: charonTuningPath)

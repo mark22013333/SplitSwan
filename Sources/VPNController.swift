@@ -147,6 +147,7 @@ final class VPNController: ObservableObject {
     }
 
     private var timer: Timer?
+    private var logTrimTimer: Timer?
     private var refreshing = false
     private var status = HelperStatus(state: .disconnected, localIP: nil, establishedSeconds: nil)
     private var firstRefreshDone = false
@@ -178,6 +179,10 @@ final class VPNController: ObservableObject {
         Task { _ = await Self.runHelper(["reload-settings"]) }
         timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
+        }
+        // F3：App 執行中每小時控制一次 charon log 大小（規格 §5.3）
+        logTrimTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in
+            Task { await VPNController.trimCharonLog() }
         }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification,
                                                           object: nil, queue: .main) { [weak self] _ in
@@ -447,6 +452,8 @@ final class VPNController: ObservableObject {
         retryNote = nil
         note("開始連線（\(reason)）：依序嘗試 \(order.map { "VPN\($0)" }.joined(separator: " → "))")
         opTask = Task {
+            // F3：每次連線嘗試前控制 charon log 大小（規格 §5.3）；舊版輔助程式不認得，結果一律不管
+            await Self.trimCharonLog()
             var ok = false
             for n in order {
                 if self.pendingDown || !self.wantConnected || !self.networkUp { break }
@@ -586,6 +593,12 @@ final class VPNController: ObservableObject {
 
     nonisolated static func runHelper(_ args: [String]) async -> (Int32, String) {
         await run("/usr/bin/sudo", ["-n", helperPath] + args)
+    }
+
+    /// 輔助程式 logtrim：charon log 太大時就地截斷。舊版輔助程式會回 usage 錯誤，
+    /// sudo 失敗也一樣，都安靜略過，不影響連線
+    nonisolated static func trimCharonLog() async {
+        _ = await runHelper(["logtrim"])
     }
 
     nonisolated static func run(_ exe: String, _ args: [String], env: [String: String]? = nil) async -> (Int32, String) {

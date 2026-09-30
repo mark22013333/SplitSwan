@@ -10,6 +10,7 @@
 #   splitswan-helper reload        重新載入設定（App 儲存設定後呼叫）
 #   splitswan-helper reload-settings  重新讀取 strongswan.conf（重送參數、log 設定）
 #   splitswan-helper sas           輸出 swanctl --list-sas 原始結果（唯讀，排查用）
+#   splitswan-helper logtrim       charon log（/var/log/splitswan/charon.log）超過 2 MB 時就地截斷成最後 1 MB
 #
 # 只接受上面這幾種參數，其餘一律拒絕（sudoers 免密碼只放行這支程式）。
 set -uo pipefail
@@ -19,6 +20,11 @@ SS=/opt/homebrew/opt/strongswan
 SWANCTL="$SS/bin/swanctl"
 CHARON="$SS/libexec/ipsec/charon"
 CONNS=(vpn1 vpn2 vpn3)
+# charon 的 filelog（由 App 產生的 strongswan.d/splitswan.conf 指定）。固定路徑，不接受參數
+LOGDIR=/var/log/splitswan
+LOGFILE="$LOGDIR/charon.log"
+LOG_MAX=$((2 * 1024 * 1024))   # 超過這個大小才截斷
+LOG_KEEP=$((1024 * 1024))      # 截斷後保留最後這麼多
 
 charon_running() { pgrep -x charon >/dev/null; }
 
@@ -70,6 +76,43 @@ cmd_status() {
   echo "disconnected"
 }
 
+# filelog 沒有輪替功能，由這裡控制大小（規格 §5.3）。
+# 一定要「就地」截斷：charon 一直開著這個檔案，寫新檔再改名的話它會繼續寫進被取代的舊檔。
+# filelog 設了 append = yes（O_APPEND），charon 每次寫入都接在當下的檔尾，截斷後不會留下空洞。
+cmd_logtrim() {
+  # root 執行：不跟隨 symlink，也不處理被 hard link 到別處的檔案
+  if [ -L "$LOGDIR" ]; then echo "fail logtrim: $LOGDIR 是 symlink"; exit 1; fi
+  if [ ! -d "$LOGDIR" ]; then
+    if [ -e "$LOGDIR" ]; then echo "fail logtrim: $LOGDIR 不是目錄"; exit 1; fi
+    install -d -o root -g wheel -m 755 "$LOGDIR" || { echo "fail logtrim: 無法建立 $LOGDIR"; exit 1; }
+  fi
+  chown root:wheel "$LOGDIR" && chmod 755 "$LOGDIR" || { echo "fail logtrim: 無法設定 $LOGDIR 權限"; exit 1; }
+  if [ -L "$LOGFILE" ]; then echo "fail logtrim: $LOGFILE 是 symlink"; exit 1; fi
+  if [ -e "$LOGFILE" ] && [ ! -f "$LOGFILE" ]; then echo "fail logtrim: $LOGFILE 不是一般檔案"; exit 1; fi
+  if [ ! -e "$LOGFILE" ]; then
+    ( umask 022; : >> "$LOGFILE" ) || { echo "fail logtrim: 無法建立 $LOGFILE"; exit 1; }
+  fi
+  if [ "$(stat -f %l "$LOGFILE")" != "1" ]; then echo "fail logtrim: $LOGFILE 有多個 hard link"; exit 1; fi
+
+  local size; size=$(stat -f %z "$LOGFILE") || { echo "fail logtrim: 無法讀取大小"; exit 1; }
+  if [ "$size" -gt "$LOG_MAX" ]; then
+    # 暫存檔放在 root 擁有的 log 目錄裡，一般使用者碰不到
+    TRIM_TMP=$(mktemp "$LOGDIR/.trim.XXXXXX") || { echo "fail logtrim: 無法建立暫存檔"; exit 1; }
+    # 任何方式結束（含被中斷）都清掉暫存檔
+    trap 'rm -f "$TRIM_TMP"' EXIT
+    trap 'rm -f "$TRIM_TMP"; exit 1' INT TERM HUP
+    # 取最後 LOG_KEEP bytes，丟掉開頭被切斷的半行
+    if tail -c "$LOG_KEEP" "$LOGFILE" | LC_ALL=C tail -n +2 >"$TRIM_TMP"; then
+      # 以截斷方式（O_TRUNC）寫回同一個 inode，不換新檔
+      cat "$TRIM_TMP" >"$LOGFILE" || { echo "fail logtrim: 寫回失敗"; exit 1; }
+    fi
+    rm -f "$TRIM_TMP"
+    trap - EXIT INT TERM HUP
+  fi
+  chown root:wheel "$LOGFILE" && chmod 644 "$LOGFILE" || { echo "fail logtrim: 無法設定 $LOGFILE 權限"; exit 1; }
+  echo "ok logtrim $(stat -f %z "$LOGFILE")"
+}
+
 case "${1:-}" in
   status)
     cmd_status ;;
@@ -114,6 +157,10 @@ case "${1:-}" in
     # 唯讀：輸出 swanctl 原始 SA 清單（含雙方 traffic selector），排查用
     charon_running || { echo "charon 未執行"; exit 0; }
     exec "$SWANCTL" --list-sas ;;
+  logtrim)
+    # 只處理固定路徑，不接受任何參數
+    [ $# -eq 1 ] || { echo "logtrim 不接受參數" >&2; exit 2; }
+    cmd_logtrim ;;
   *)
-    echo "usage: splitswan-helper {status|up [auto|1|2|3]|down|reload|reload-settings|log|sas}" >&2; exit 2 ;;
+    echo "usage: splitswan-helper {status|up [auto|1|2|3]|down|reload|reload-settings|log|sas|logtrim}" >&2; exit 2 ;;
 esac
