@@ -67,6 +67,59 @@ enum ReconnectPolicy {
     }
 }
 
+/// F2 非預期斷線通知的判定（docs/SPEC-1.3.md §4），純邏輯，不碰系統狀態，方便單獨測試。
+/// 每次狀態更新餵一次，回傳這次要不要發通知
+struct DropDetector {
+    enum Action: Equatable { case none, notifyDrop, notifyRestore }
+
+    /// 想連線但沒連上持續多久才算掉線
+    static let grace: TimeInterval = 30
+    /// 設定頁「VPN 中斷時通知」的 UserDefaults key，預設開啟
+    static let enabledKey = "NotifyOnDrop"
+    static var enabled: Bool { UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true }
+
+    private(set) var downSince: Date?        // 第一次觀察到「想連線但沒連上」的時間
+    private(set) var dropNotified = false    // 這次掉線已發過通知
+
+    /// 通知關閉時直接不發，並重置狀態：重新開啟後從頭計時，也不會補發恢復通知。
+    /// paused：沒有網路、或讀不到輔助程式狀態（helperMissing）時，這段時間不算掉線，
+    /// 恢復後重新計時；已發過的掉線通知保留，之後接回仍會發恢復通知
+    mutating func update(now: Date, wantConnected: Bool, isConnected: Bool, enabled: Bool,
+                         paused: Bool = false) -> Action {
+        guard wantConnected, enabled else { reset(); return .none }
+        if isConnected {
+            let notified = dropNotified
+            reset()
+            return notified ? .notifyRestore : .none
+        }
+        if paused { downSince = nil; return .none }
+        if downSince == nil { downSince = now }
+        if !dropNotified, let since = downSince, now.timeIntervalSince(since) >= Self.grace {
+            dropNotified = true
+            return .notifyDrop
+        }
+        return .none
+    }
+
+    mutating func reset() {
+        downSince = nil
+        dropNotified = false
+    }
+
+    /// 睡眠喚醒時呼叫：睡眠期間不算進寬限時間，從喚醒後重新計時（規格 §4.2 喚醒重建不通知）
+    mutating func restartGrace() { downSince = nil }
+
+    // 通知文字
+    static func dropTitle(app: String) -> String { "\(app) 已斷線" }
+    static let dropBody = "VPN 中斷超過 30 秒，正在自動重連"
+    static func restoreTitle(app: String) -> String { "\(app) 已恢復連線" }
+    /// connection 是 status 回報的連線名稱（例：vpn2）；取不到台號就省略
+    static func restoreBody(connection: String?) -> String {
+        guard let c = connection, c.lowercased().hasPrefix("vpn"), c.count > 3 else { return "VPN 已重新連上" }
+        return "\(c.uppercased()) 已重新連上"
+    }
+}
+
 @MainActor
 final class VPNController: ObservableObject {
     @Published private(set) var state: VPNState = .disconnected
@@ -105,6 +158,7 @@ final class VPNController: ObservableObject {
     private var lastUpAt = Date.distantPast           // 最近一次 up 成功的時間（判斷「連上就被踢」）
     private var retryTargets: [Int]?                 // 手動指定單台失敗時，重試同一台；nil 代表自動輪替
     private var retrySoon = false                    // 連線動作執行中網路恢復：失敗後 1 秒就重試
+    private var dropDetector = DropDetector()        // F2 非預期斷線通知的判定
 
     // 網路監聽
     private let pathMonitor = NWPathMonitor()
@@ -112,6 +166,7 @@ final class VPNController: ObservableObject {
     private var pathDebounce: Task<Void, Never>?
 
     func start() {
+        DropNotifier.shared.activate()
         refresh()
         // 輔助程式可能剛更新：讓 charon 重新讀取重送參數（舊版輔助程式不認得這個子命令，失敗無妨）
         Task { _ = await Self.runHelper(["reload-settings"]) }
@@ -159,6 +214,7 @@ final class VPNController: ObservableObject {
         retrySoon = false
         cancelRetry()
         retryNote = nil
+        dropDetector.reset()                   // 手動斷線不算掉線（規格 §4）
         if opTask != nil {
             pendingDown = true
             busyText = "斷線中…"
@@ -230,6 +286,7 @@ final class VPNController: ObservableObject {
         }
         let wasFirst = !firstRefreshDone
         firstRefreshDone = true
+        checkDrop(new.state)
         // 連線穩定超過 60 秒才把退避歸零；連上沒多久就被踢，下次重試仍照退避間隔
         if new.state.isConnected, Date().timeIntervalSince(lastUpAt) > 60 { backoffStep = 0 }
 
@@ -258,10 +315,32 @@ final class VPNController: ObservableObject {
         }
     }
 
+    /// F2：想連線但沒連上超過 30 秒發掉線通知，之後恢復時發恢復通知（規格 §4）。
+    /// App 自己重建通道時的 down 也照算，30 秒內接回就不發
+    private func checkDrop(_ state: VPNState) {
+        let action = dropDetector.update(now: Date(), wantConnected: wantConnected,
+                                         isConnected: state.isConnected, enabled: DropDetector.enabled,
+                                         paused: !networkUp || state == .helperMissing)
+        switch action {
+        case .notifyDrop:
+            note("中斷超過 \(Int(DropDetector.grace)) 秒，發送斷線通知")
+            DropNotifier.shared.send(title: DropDetector.dropTitle(app: AppInfo.name), body: DropDetector.dropBody)
+        case .notifyRestore:
+            var conn: String?
+            if case .connected(let c, _) = state { conn = c }
+            note("已恢復連線，發送恢復通知")
+            DropNotifier.shared.send(title: DropDetector.restoreTitle(app: AppInfo.name),
+                                     body: DropDetector.restoreBody(connection: conn))
+        case .none:
+            break
+        }
+    }
+
     // MARK: 事件
 
     private func handleWake() {
         lastWake = Date()
+        dropDetector.restartGrace()
         guard wantConnected else { return }
         backoffStep = 0
         cancelRetry()
