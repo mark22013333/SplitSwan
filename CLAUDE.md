@@ -51,4 +51,30 @@ SplitSwan.app ──sudo -n──▶ /usr/local/libexec/splitswan-helper (root) 
 
 - `vpn.sh`：命令列版，直接 `sudo swanctl`，不經 App 也不經 helper。
 - `diag.sh`：會**實際連線**、收集路由／DNS／SA 並測試，再自動斷線；輸出 `diag-*.txt` 含內部網段（已 gitignore）。
-- `tools/test-dpd.sh`：需要 root，會暫時封鎖閘道來量測失聯偵測，不要在一般驗證流程中執行。
+- `tools/test-dpd.sh`：需要 root，會暫時封鎖閘道來量測失聯偵測，不要在一般驗證流程中執行（由使用者自己跑 `sudo bash tools/test-dpd.sh`）。
+
+## 公開 repo 的限制
+
+這是 public repo：範例位址一律用 RFC 5737（`203.0.113.x`、`198.51.100.x`），不可寫入任何真實公司名稱、閘道、內網位址或帳號。`secrets.conf`、`company.env` 含密碼與實際位址，不要讀取或提交。
+
+## 發版流程
+
+依序執行，缺一步就不算發版完成：
+
+1. `bash Tests/run-tests.sh` 全綠
+2. 改 `build.sh` 的 `VERSION`、`BUILD_NUM`，同步 `README.md` 的「版本：」
+3. `bash make-dmg.sh` → `dist/SplitSwan-X.Y.Z.dmg`
+4. 在 `dist/` 內產生 `SplitSwan-X.Y.Z.dmg.sha256`，內容只寫檔名不含路徑（格式同 `shasum -a 256 SplitSwan-X.Y.Z.dmg` 的輸出）
+5. commit、push
+6. annotated tag `vX.Y.Z` 並 push
+7. `gh release create vX.Y.Z` 附 dmg 與 .sha256；說明開頭是「## 本版更新」條列，並附 SHA-256。輔助程式有變更時，要提醒使用者到「環境檢查」按系統元件的「更新」
+8. 從 GitHub 下載回來，在同一目錄執行 `shasum -a 256 -c SplitSwan-X.Y.Z.dmg.sha256` 驗證
+
+## 本機環境注意事項
+
+- zsh 開了 `noclobber`：覆寫既有檔案要用 `>|`。BSD grep 不支援 `\s`，改用 `[[:space:]]`。
+- PreToolUse hook 會攔截指令文字裡出現的遞迴刪除、磁碟直寫、強制推送等字串（包括 heredoc 內文與 commit message）；需要寫到這類內容時改用 Write 工具落檔，或用中文描述。
+- 權限設定有 `Read()` deny 涵蓋 `./build`：讀 build 產物一律用絕對路徑。
+- GUI App 讀不到 `~/.zshrc` 的環境變數。狀態列 App 沒有主選單時 ⌘C／⌘V 無效，所以 `main.swift` 補了隱藏主選單，不要移除。
+- SF Symbols 用 `paletteColors` 上色會吃掉內部圖案，`MenuBarIcon` 改用 sourceAtop 合成上色。
+- 截圖驗證 UI 時用 PID 找視窗：`build/` 與 `/Applications` 的同名 App 可能同時在跑。
