@@ -20,10 +20,10 @@ run() {  # 名稱 測試檔 原始檔...
   grep -q "失敗 0" "$dir/log" || FAILED=1
 }
 
-run reconnect Tests/ReconnectTests.swift $S/VPNController.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift $S/LogStore.swift
+run reconnect Tests/ReconnectTests.swift $S/VPNController.swift $S/DropNotifier.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift $S/LogStore.swift
 run export    Tests/ExportTests.swift    $S/ConfigExport.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift
 run security  Tests/SecurityTests.swift  $S/ConfigExport.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift
-run settings  Tests/SettingsFormatTests.swift "$OUT/stub.swift" $S/MainView.swift $S/VPNController.swift $S/ConfigStore.swift \
+run settings  Tests/SettingsFormatTests.swift "$OUT/stub.swift" $S/MainView.swift $S/VPNController.swift $S/DropNotifier.swift $S/ConfigStore.swift \
               $S/CompanyPreset.swift $S/AppInfo.swift $S/EnvChecker.swift $S/MenuBarIcon.swift $S/ConfigExport.swift $S/LogStore.swift
 
 if [ "$FAILED" = 0 ]; then echo "✅ 全部通過"; else echo "❌ 有測試失敗"; exit 1; fi

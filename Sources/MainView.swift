@@ -151,6 +151,8 @@ struct SettingsTab: View {
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var preset: CompanyPreset? = CompanyPresetStore.load()
 
+    @AppStorage(DropDetector.enabledKey) private var notifyDrop = true
+    @State private var notifyDenied = false          // macOS 通知權限被拒絕
     @State private var tsText = ""                  // 通道網段編輯框：一行一個
     @State private var showHelp = false
 
@@ -224,6 +226,13 @@ struct SettingsTab: View {
                         Toggle("登入時自動啟動", isOn: $launchAtLogin)
                             .toggleStyle(.switch)
                             .onChange(of: launchAtLogin) { _, on in setLaunchAtLogin(on) }
+                        Toggle("VPN 中斷時通知", isOn: $notifyDrop)
+                            .toggleStyle(.switch)
+                            .onChange(of: notifyDrop) { _, _ in checkNotifyPermission() }
+                        if notifyDrop && notifyDenied {
+                            Text("macOS 未允許通知，請到「系統設定 → 通知」開啟")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                 }
                 .padding(4)
@@ -245,7 +254,11 @@ struct SettingsTab: View {
             }
         }
         .textFieldStyle(.roundedBorder)
-        .onAppear { loadDraft() }
+        .onAppear { loadDraft(); checkNotifyPermission() }
+    }
+
+    private func checkNotifyPermission() {
+        Task { notifyDenied = await DropNotifier.isDenied() }
     }
 
     /// 「a, b, c」→ 一行一個
