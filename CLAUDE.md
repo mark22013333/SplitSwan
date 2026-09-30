@@ -30,13 +30,16 @@ open build/SplitSwan.app --args -InitialTab settings   # 直接開在指定分�
 SplitSwan.app ──sudo -n──▶ /usr/local/libexec/splitswan-helper (root) ──▶ swanctl ─vici─▶ charon ─IKEv2─▶ FortiGate
 ```
 
-- **`splitswan-helper`**（repo 根目錄的 bash 腳本）：只接受 `status`、`up [auto|1|2|3]`、`down`、`log`、`reload`、`reload-settings`、`sas`，其他一律拒絕。連線名稱固定 `vpn1..3`、child 為 `corp`。`status` 回一行字串，由 `VPNController.swift` 的 `HelperStatus.parse` 解析，**新舊兩種格式都要相容**（已安裝的 helper 可能比 App 舊）。`log` 是長串流，helper 會定期檢查上層程序還在不在。
+- **`splitswan-helper`**（repo 根目錄的 bash 腳本）：只接受 `status`、`up [auto|1|2|3]`、`down`、`log`、`reload`、`reload-settings`、`sas`、`logtrim`，其他一律拒絕。`logtrim` 不接受參數，只處理固定路徑 `/var/log/splitswan/charon.log`（超過 2 MB 就地截斷成最後 1 MB，同 inode；拒絕 symlink 與 hard link），截斷測試是 `bash tools/test-logtrim.sh`。連線名稱固定 `vpn1..3`、child 為 `corp`。`status` 回一行字串，由 `VPNController.swift` 的 `HelperStatus.parse` 解析，**新舊兩種格式都要相容**（已安裝的 helper 可能比 App 舊）。`log` 是長串流，helper 會定期檢查上層程序還在不在。
 - **安裝特權元件**：`EnvChecker.installHelper` 用 `osascript … with administrator privileges` 執行 App 內附的 `install-root.sh`，把 helper 裝成 root:wheel，並寫入只放行這支程式的 `/etc/sudoers.d/splitswan`（先過 `visudo -cf` 語法檢查）。`build.sh` 會把 helper 與 install-root.sh 複製進 `Contents/Resources/`。
 - **改了 `splitswan-helper` 就等於要求使用者重新安裝**：`EnvChecker` 逐 byte 比對已安裝版本與 App 內附版本，不同就顯示「需要更新」。
 - **`VPNController`**：唯一的連線協調器，同時只跑一個操作；負責輪替三台閘道、自動重連與退避、睡眠喚醒、網路變更。`main.swift`（AppDelegate、NSStatusItem 選單）與 `MainView.swift`（SwiftUI 三分頁）共用同一個 `VPNController`／`EnvChecker` 實例，選單透過 Combine 訂閱其 `@Published` 狀態重畫。`LogStore` 負責 `helper log` 串流。
 - **設定寫入不需 root**：`ConfigStore` 直接寫 Homebrew 目錄下的 `/opt/homebrew/etc/swanctl/swanctl.conf`、`conf.d/secrets.conf`（PSK 與 EAP 帳密，600，暫存檔再替換）與 `/opt/homebrew/etc/strongswan.d/splitswan.conf`（charon 重送參數），存檔後呼叫 helper `reload`。IKE/ESP 加密參數在 `ConfigStore.renderConf`。表單值另存 UserDefaults（`VPNSettings`）。
 - **設定來源優先序**：UserDefaults → 解析現有 swanctl.conf → `~/.config/splitswan/company.env`（`CompanyPreset`）→ 環境變數 `SPLITSWAN_*`。公司位址不進 repo（`company.env`、`secrets.conf` 已 gitignore，只放 `config/*.example`）。
 - **`ConfigExport`**：`.splitswan` 加密設定檔（AES-256-GCM＋PBKDF2-SHA256 600,000 次），只含閘道、網段、PSK，不含個人帳密。
+- **F2 斷線通知**：`VPNController.swift` 的 `DropDetector`（純邏輯）在每次 `refresh` 判定「想連線但沒連上 ≥ 30 秒」；沒網路或 `helperMissing` 時暫停計時，睡眠喚醒時重新計時。實際發送在 `DropNotifier.swift`（`UNUserNotificationCenter`，第一次要發時才請求權限）。
+- **F4 閘道排序**：`GatewayHistory.swift` 存每台最近 10 筆 `up N` 結果（UserDefaults JSON），`order` 決定自動輪替順序（冷卻 10 分鐘排最後 → 上次成功 → 成功率／平均耗時 → 無紀錄 → 從未成功）。只有 helper 輸出 `fail vpnN` 才記失敗；連上不到 60 秒被踢、卡在連線中 30 秒會補記失敗。
+- **F3 診斷報告**：`DiagnosticReport.swift` 是組字與遮蔽的純函式（有 `Tests/DiagnosticTests.swift`），`DiagnosticRunner.swift` 限時執行外部指令並寫出報告（600）。charon 的 filelog 設定由 `ConfigStore` 寫進 `strongswan.d/splitswan.conf`，等級固定 1。
 
 ## 輸入驗證（改 ConfigStore／CompanyPreset／ConfigExport 時必守）
 
@@ -78,3 +81,8 @@ SplitSwan.app ──sudo -n──▶ /usr/local/libexec/splitswan-helper (root) 
 - GUI App 讀不到 `~/.zshrc` 的環境變數。狀態列 App 沒有主選單時 ⌘C／⌘V 無效，所以 `main.swift` 補了隱藏主選單，不要移除。
 - SF Symbols 用 `paletteColors` 上色會吃掉內部圖案，`MenuBarIcon` 改用 sourceAtop 合成上色。
 - 截圖驗證 UI 時用 PID 找視窗：`build/` 與 `/Applications` 的同名 App 可能同時在跑。
+- 用 AppleScript（System Events）自動點按鈕時，SwiftUI 按鈕沒有可讀的標籤（name 為 missing value），要用 `position`／`size` 辨認，點之前先截圖確認是哪一顆。
+- **通知只在 App 位於 Applications 資料夾時有效**（ad-hoc 簽章也可以）；從 `build/` 或 `/tmp` 執行會直接回 `Notifications are not allowed`。測通知要用 `build.sh --install`。
+- `build.sh --install` 會結束執行中的 App，但 charon 的通道不會斷；新 App 啟動後依 `WantConnected` 決定要不要自動連線。
+- `Tests/run-tests.sh` 共 5 組（reconnect、export、security、settings、diagnostic），完整跑一次要數分鐘，主要花在 settings 組的編譯；有其他程序同時改 Sources 時會出現「input file was modified during the build」，那不是測試失敗。
+- 狀態列的 `gitstatusd` 會在 `.git/` 留下 0 byte 的殘留 `index.lock`，git 寫入失敗時先用 stat 連續取樣確認 mtime 不動、已是過去式，再清除。

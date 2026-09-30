@@ -3,7 +3,10 @@
 macOS 狀態列的 VPN 工具，用開源的 [strongSwan](https://www.strongswan.org) 連 **FortiGate IPsec VPN**（IKEv2、PSK＋EAP 帳密、Mode Config），可以用來取代 FortiClient。
 
 - **Split tunnel**：只有指定網段走 VPN，Teams、Google Meet、一般上網都走原本的網路
-- **三台閘道自動輪替**：第一台連不上就換下一台
+- **三台閘道自動輪替**：依過去的連線紀錄，先試最近連得上、連得快的那台；連不上就換下一台
+- **自動重連**：睡眠喚醒、切換網路、通道失聯後自動接回；按「斷線」後就不會再自動連線
+- **斷線通知**：非預期中斷超過 30 秒時發 macOS 通知，恢復時再通知一次
+- **診斷報告**：一鍵產生報告檔給管理者排查，不含密碼與 PSK
 - **有圖形介面**：狀態列一鍵連線，主視窗有連線、設定、環境檢查三個分頁，缺的元件可以一鍵安裝
 - **公司設定與程式分開**：閘道與網段放在各自電腦的設定檔，原始碼不含任何公司位址
 
@@ -45,9 +48,12 @@ macOS 狀態列的 VPN 工具，用開源的 [strongSwan](https://www.strongswan
 ### 使用
 
 - 狀態列圖示：空心盾牌＝未連線、實心盾牌＝已連線、循環箭頭＝連線中、驚嘆號盾牌＝環境沒設好（點圖示選「開啟 SplitSwan 視窗」看環境檢查）
-- 點狀態列圖示可以直接連線、斷線，或指定連 VPN1／VPN2／VPN3
+- 點狀態列圖示可以直接連線、斷線，或指定連 VPN1／VPN2／VPN3。每台閘道後面會顯示最近狀態，例如「上次 3.2 秒連上」「最近 3 次失敗」
+- 自動輪替的順序：10 分鐘內失敗過的閘道排最後，上次成功的排第一，其餘依成功率與連線速度。「設定」頁可以「清除閘道連線紀錄」，恢復設定的順序
+- 斷線通知：第一次需要時會詢問是否允許通知，請按「允許」。可以在「設定」頁關閉「VPN 中斷時通知」。手動斷線、睡眠喚醒後 30 秒內自動接回的情況不會通知
 - 關掉視窗 App 會繼續在狀態列執行。要完全結束，從狀態列選「結束 SplitSwan」
 - 連線紀錄：「連線」頁下方可展開，顯示 strongSwan 的協商過程與 App 的動作（連線、重試、重建通道），可拷貝給管理者
+- 診斷報告：「環境檢查」頁按「產生診斷報告」，約數秒後在桌面產生 `SplitSwan-診斷-<時間>.txt` 並在 Finder 中選取，不會中斷連線。報告不含密碼與 PSK，但含閘道位址與通道網段，只傳給管理者
 - 開機自動啟動：「設定」頁打開「登入時自動啟動」
 - 輸入框支援 ⌘C／⌘V／⌘A；設定頁可用 ⌘S 儲存
 - 狀態列圖示有 8 種樣式可選（「設定」頁的「狀態列圖示」），也可以設定已連線時顯示綠色：
@@ -116,16 +122,20 @@ App 取得閘道與網段的順序：
 |------|----------|
 | 圖示一直是驚嘆號盾牌 | 開視窗到「環境檢查」，把紅燈逐項按「安裝」 |
 | 環境檢查顯示「尚未設定閘道或通道網段」 | 「設定」頁按「匯入公司設定檔…」 |
-| 三台閘道都連不上 | 展開「連線」頁下方的「連線紀錄」，再連一次看卡在哪一步；可按「拷貝」把紀錄傳給管理者。最常見的是密碼或 PSK 打錯，或 FortiClient 還連著 |
+| 三台閘道都連不上 | 到「環境檢查」頁按「產生診斷報告」，把桌面上的報告檔傳給管理者；也可以展開「連線」頁下方的「連線紀錄」看卡在哪一步。最常見的是密碼或 PSK 打錯（報告的 charon log 會出現 `AUTHENTICATION_FAILURE`），或 FortiClient 還連著 |
+| 沒有收到斷線通知 | 到「系統設定 → 通知 → SplitSwan」確認允許通知；「設定」頁的「VPN 中斷時通知」要打開 |
 | 連上後某台主機不通 | 見「某台主機連不上怎麼辦」 |
 | 連上後外網全斷 | 通道網段被改成 `0.0.0.0/0` 了，按「從公司設定還原」 |
-| 系統元件一直顯示「需要更新」 | 更新 App 後內附的元件可能跟著更新，按「更新」重新授權一次 |
+| 系統元件顯示「需要更新」 | 更新 App 後內附的元件可能跟著更新，按「更新」重新授權一次 |
+| 診斷報告顯示「找不到 log 檔」 | 系統元件是舊版，到「環境檢查」按「更新」，再重新連線一次，之後的連線過程才會寫進 log |
 | 存檔時顯示格式錯誤 | 訊息會指出是哪個欄位；網段要寫成 `a.b.c.d/遮罩`，用半形數字，不可用 `/0` |
 
 ## 解除安裝
 
 ```bash
 sudo rm /etc/sudoers.d/splitswan /usr/local/libexec/splitswan-helper
+rm -f /opt/homebrew/etc/strongswan.d/splitswan.conf
+sudo rm -r /var/log/splitswan
 rm -r /Applications/SplitSwan.app ~/.config/splitswan
 brew uninstall strongswan
 # 確認 /opt/homebrew/etc/swanctl 是否還在；裡面有密碼檔，不需要的話手動刪除
@@ -148,7 +158,9 @@ bash make-dmg.sh          # 編譯並打包成 dist/SplitSwan-<版本>.dmg
 ```
 
 - 版本號在 `build.sh` 開頭的 `VERSION`、`BUILD_NUM`。
-- 單元測試：`bash Tests/run-tests.sh`（不連 VPN、不需要 sudo、不寫入系統設定）。涵蓋自動重連的純邏輯、加密匯出入、注入攻擊回歸測試、網段格式轉換。
+- 單元測試：`bash Tests/run-tests.sh`（不連 VPN、不需要 sudo、不寫入系統設定）。涵蓋自動重連、斷線通知判定、閘道排序、加密匯出入、注入攻擊回歸測試、網段格式轉換、診斷報告的密碼遮蔽。
+- 輔助程式 `logtrim` 的截斷測試：`bash tools/test-logtrim.sh`（一般權限，在暫存目錄操作副本）。
+- 自動重連的實機測試：`sudo bash tools/test-dpd.sh`（暫時封鎖閘道，量失聯偵測與恢復秒數；斷線通知要在測試期間人工確認），驗收清單與結果見 [`docs/F1-實機驗收.md`](docs/F1-實機驗收.md)。
 - 開發時可以用 `open build/SplitSwan.app --args -InitialTab settings`（或 `environment`），直接開在指定分頁。
 
 ### 改名
@@ -163,6 +175,7 @@ App 顯示名稱與 bundle id 在 [`app.env`](app.env)，改完重新編譯即�
 |--------|----------|
 | 輔助程式 `/usr/local/libexec/splitswan-helper` | `splitswan-helper`、`install-root.sh`、`Sources/VPNController.swift`、`Sources/EnvChecker.swift`、`diag.sh`、`build.sh` |
 | sudoers 規則 `/etc/sudoers.d/splitswan` | `install-root.sh` |
+| charon log `/var/log/splitswan/charon.log` | `splitswan-helper`、`install-root.sh`、`Sources/ConfigStore.swift`、`Sources/DiagnosticRunner.swift` |
 | 公司設定檔 `~/.config/splitswan/company.env` | `Sources/CompanyPreset.swift` |
 | 環境變數前綴 `SPLITSWAN_` | `Sources/CompanyPreset.swift`、`config/company.env.example` |
 
@@ -172,6 +185,8 @@ App 顯示名稱與 bundle id 在 [`app.env`](app.env)，改完重新編譯即�
 SplitSwan.app（狀態列＋主視窗，一般使用者權限）
    │  ├─ 讀 ~/.config/splitswan/company.env（公司設定）
    │  ├─ 直接讀寫 /opt/homebrew/etc/swanctl/{swanctl.conf, conf.d/secrets.conf}
+   │  ├─ 直接寫 /opt/homebrew/etc/strongswan.d/splitswan.conf（重送參數與 filelog）
+   │  ├─ 直接讀 /var/log/splitswan/charon.log（診斷報告用）
    │  └─ sudo -n（sudoers 只對這一支程式免密碼）
    ▼
 /usr/local/libexec/splitswan-helper（root 擁有的輔助程式，只接受固定幾種參數）
@@ -180,8 +195,9 @@ SplitSwan.app（狀態列＋主視窗，一般使用者權限）
 swanctl ──vici──▶ charon（strongSwan daemon，root）──IKEv2──▶ FortiGate
 ```
 
-- App 本身不碰 root 權限，需要 root 的動作都集中在輔助程式裡。它只接受 `status`、`up [auto|1|2|3]`、`down`、`reload`、`log`、`sas`，其他參數一律拒絕。
-- 設定檔放在使用者可寫入的目錄，App 直接寫入，存檔後呼叫 `reload` 讓 charon 重新載入。已經連著的通道不受影響，下次連線才套用。
+- App 本身不碰 root 權限，需要 root 的動作都集中在輔助程式裡。它只接受 `status`、`up [auto|1|2|3]`、`down`、`reload`、`reload-settings`、`log`、`sas`、`logtrim`，其他參數一律拒絕。
+- 設定檔放在使用者可寫入的目錄，App 直接寫入，存檔後呼叫 `reload` 讓 charon 重新載入。已經連著的通道不受影響，下次連線才套用。重送參數與 log 設定改變時另外呼叫 `reload-settings`。
+- charon 的 log 寫到 `/var/log/splitswan/charon.log`（等級 1，不含金鑰）。目錄由 `install-root.sh` 建立並歸 root 所有；檔案沒有輪替功能，改由輔助程式 `logtrim` 在每次連線前與每小時檢查，超過 2 MB 時就地截斷成最後 1 MB。
 - 系統元件的安裝腳本內附在 App 裡（`Contents/Resources/install-root.sh`），由「環境檢查」頁透過 macOS 管理員授權執行。App 會比對已安裝的輔助程式與內附版本，不同就顯示「需要更新」。
 
 ### VPN 參數
@@ -202,7 +218,11 @@ swanctl ──vici──▶ charon（strongSwan daemon，root）──IKEv2─�
 | `app.env` | App 名稱與 bundle id |
 | `Sources/main.swift` | 程式進入點、狀態列選單、視窗管理 |
 | `Sources/MainView.swift` | 主視窗三個分頁（SwiftUI） |
-| `Sources/VPNController.swift` | 呼叫輔助程式、定時更新連線狀態 |
+| `Sources/VPNController.swift` | 呼叫輔助程式、定時更新連線狀態、自動重連、斷線通知判定 |
+| `Sources/DropNotifier.swift` | 發送 macOS 斷線／恢復通知 |
+| `Sources/GatewayHistory.swift` | 閘道連線紀錄與自動輪替排序 |
+| `Sources/DiagnosticReport.swift` | 診斷報告的組字與密碼遮蔽（純函式） |
+| `Sources/DiagnosticRunner.swift` | 收集診斷資料（限時執行外部指令）並寫出報告 |
 | `Sources/ConfigStore.swift` | 產生與讀取 swanctl.conf、secrets.conf；驗證輸入 |
 | `Sources/CompanyPreset.swift` | 讀取與匯入公司設定檔、環境變數 |
 | `Sources/ConfigExport.swift` | 加密設定檔（`.splitswan`）的匯出與匯入 |
@@ -210,10 +230,12 @@ swanctl ──vici──▶ charon（strongSwan daemon，root）──IKEv2─�
 | `Sources/EnvChecker.swift` | 環境檢查與一鍵安裝 |
 | `Sources/AppInfo.swift` | 從 Info.plist 讀 App 名稱 |
 | `tools/make-icon.swift` | 產生 App 圖示 |
+| `tools/test-dpd.sh` | 實機測試自動重連：暫時封鎖閘道，量失聯偵測與恢復秒數（需 sudo） |
+| `tools/test-logtrim.sh` | 測試輔助程式的 `logtrim` 截斷（一般權限，使用副本） |
 | `build.sh` | 編譯、產生圖示、內附系統元件、ad-hoc 簽章 |
 | `make-dmg.sh` | 打包 .dmg |
 | `splitswan-helper` | root 輔助程式 |
-| `install-root.sh` | 安裝輔助程式與 sudoers 規則（App 內附，也可以手動 `sudo bash install-root.sh`） |
+| `install-root.sh` | 安裝輔助程式、sudoers 規則與 log 目錄（App 內附，也可以手動 `sudo bash install-root.sh`） |
 | `vpn.sh` | 命令列版本（每次會要求輸入 sudo 密碼） |
 | `diag.sh` | 連線診斷：自動連線、收集路由／DNS／SA，測試通道網段內的目標與外網，再自動斷線 |
 | `config/company.env.example` | 公司設定檔範本 |
@@ -226,9 +248,11 @@ swanctl ──vici──▶ charon（strongSwan daemon，root）──IKEv2─�
 - **加密只保密，不證明來源**：有人可以自己做一份 `.splitswan`，把閘道換成他的主機，再連同密碼騙你匯入，你的 VPN 帳號密碼就會送過去。所以匯入時 App 會列出閘道與網段要你確認；**只匯入管理者親自給的檔案**，並核對閘道位址。
 - 匯入的內容一律嚴格驗證（閘道最多 3 台、只接受 IP／網域字元、網段逐筆檢查、拒絕 `/0` 與控制字元），`company.env` 一律由驗證後的值重新產生，值用單引號包住，被 shell `source` 時不會執行任何內容。
 - App 的設定頁不會顯示已存的密碼，欄位留空代表沿用原本的值。
+- 診斷報告寫入前會遮蔽密碼與 PSK：先用規則把 `secret`、`password`、`PSK`、`EAP` 等欄位的值換成 `***`，再把目前設定中 6 個字元以上的實際密碼與 PSK 精確取代。報告檔權限 600，但含閘道位址與通道網段，只傳給管理者。
+- charon log 等級固定為 1（基本控制訊息），不含金鑰。log 檔權限 644，本機其他帳號也能讀到連線過程與閘道位址。
 - 輸入會先驗證再寫入：帳號、閘道、網段只接受固定字元，避免換行、大括號等字元破壞設定檔結構；密碼與 PSK 會跳脫雙引號與反斜線。匯入的公司設定檔也用同一套規則驗證。
 - 免密碼 sudo 只放行 `/usr/local/libexec/splitswan-helper`。它是 root 擁有，一般使用者改不了。
-- 已知限制：Homebrew 安裝的 `charon`、`swanctl` 放在一般使用者可寫入的 `/opt/homebrew` 底下，被替換的話仍然能透過輔助程式取得 root。改用每次輸入密碼也有同樣的風險，差別只在於需要使用者當下在場輸入。
+- 已知限制：Homebrew 安裝的 `charon`、`swanctl` 放在一般使用者可寫入的 `/opt/homebrew` 底下，被替換的話仍然能透過輔助程式取得 root。`/opt/homebrew/etc/strongswan.d/` 同樣可由一般使用者寫入，有心人可以改掉 filelog 路徑，讓以 root 執行的 charon 寫入任意檔案。改用每次輸入密碼也有同樣的風險，差別只在於需要使用者當下在場輸入。
 
 ### 已知問題
 
@@ -236,8 +260,7 @@ swanctl ──vici──▶ charon（strongSwan daemon，root）──IKEv2─�
    - 連線本身正常，直接問 DNS 伺服器（`dig @<DNS>`）也正常，但 macOS 系統解析失敗，curl 顯示「Resolving timed out」。
    - 差異在於 strongSwan 把 DNS 加到 Wi-Fi（`en0`）的設定裡，讓系統解析綁在 `en0` 送出；FortiClient 則是綁在自己的 VPN 介面上。綁在 `en0` 為什麼會失敗，還沒查清楚。
    - 已排除的原因：閘道擋外網（同一個閘道用 FortiClient 全流量時外網正常）、MTU（VPN 下不可切割的封包一路通到 1400 bytes）。
-2. **「已連線時間」可能少算**：App 啟動時如果 VPN 已經連著，會從 App 啟動時開始算。
-3. **登入時自動啟動是否會跳視窗**（待確認）：App 用 Apple Event 判斷是不是登入時啟動，這對 `SMAppService` 註冊的登入項目是否有效還沒實測。就算跳出來，關掉視窗即可。
+2. **登入時自動啟動是否會跳視窗**（待確認）：App 用 Apple Event 判斷是不是登入時啟動，這對 `SMAppService` 註冊的登入項目是否有效還沒實測。就算跳出來，關掉視窗即可。
 
 ## 授權
 
