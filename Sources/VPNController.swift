@@ -53,13 +53,7 @@ enum ReconnectPolicy {
         return steps[min(max(n, 0), steps.count - 1)]
     }
 
-    /// 自動輪替的嘗試順序：上次成功的閘道排第一，其餘照設定順序；未設定的閘道略過。
-    /// （F4 會再加上成功率與冷卻規則）
-    static func order(gateways: [String], lastGood: Int?) -> [Int] {
-        let configured = gateways.indices.filter { !gateways[$0].trimmingCharacters(in: .whitespaces).isEmpty }
-        guard let g = lastGood, configured.contains(g) else { return configured.map { $0 + 1 } }
-        return ([g] + configured.filter { $0 != g }).map { $0 + 1 }
-    }
+    // 自動輪替的嘗試順序在 GatewayHistory.order（F4）
 
     /// 是不是 VPN 自己的介面（連線、斷線時會增減，不能當成「換網路」）
     static func isTunnelInterface(_ name: String) -> Bool {
@@ -134,10 +128,22 @@ final class VPNController: ObservableObject {
     @Published private(set) var wantConnected: Bool = UserDefaults.standard.bool(forKey: "WantConnected") {
         didSet { UserDefaults.standard.set(wantConnected, forKey: "WantConnected") }
     }
-    /// 上次成功連上的閘道（0 起算）
-    private var lastGood: Int? {
-        get { UserDefaults.standard.object(forKey: "LastGoodGateway") as? Int }
-        set { UserDefaults.standard.set(newValue, forKey: "LastGoodGateway") }
+    /// F4 閘道連線紀錄。「上次成功的閘道」也由它推得（取代舊的 LastGoodGateway），只有一個來源
+    @Published private(set) var history: GatewayHistory = {
+        let ud = UserDefaults.standard
+        let gateways = ConfigStore.load().gateways
+        let legacy = ud.object(forKey: "LastGoodGateway") as? Int   // 1.3 以前的舊 key
+        let h = GatewayHistory.migrated(GatewayHistory.decode(ud.data(forKey: GatewayHistory.defaultsKey)),
+                                        legacyLastGood: legacy, gateways: gateways, now: Date())
+            .pruned(gateways: gateways)
+        if legacy != nil {
+            // 先存下遷移結果再移除舊 key（初始值不會觸發 didSet）
+            ud.set(h.encoded(), forKey: GatewayHistory.defaultsKey)
+            ud.removeObject(forKey: "LastGoodGateway")
+        }
+        return h
+    }() {
+        didSet { UserDefaults.standard.set(history.encoded(), forKey: GatewayHistory.defaultsKey) }
     }
 
     private var timer: Timer?
@@ -201,7 +207,7 @@ final class VPNController: ObservableObject {
         guard opTask == nil else { return }   // 已經有連線動作在跑（例：自動重連），讓它完成
         retryTargets = (target == "auto") ? nil : Int(target).map { [$0] }
         if target == "auto" {
-            runConnectSequence(ReconnectPolicy.order(gateways: settings.gateways, lastGood: lastGood), reason: "手動")
+            runConnectSequence(autoOrder(), reason: "手動")
         } else if let n = Int(target) {
             runConnectSequence([n], reason: "手動", isSingle: true)
         }
@@ -232,9 +238,18 @@ final class VPNController: ObservableObject {
         }
     }
 
+    /// 設定頁「清除閘道連線紀錄」：之後自動輪替恢復設定順序（上次成功的閘道也由紀錄推得，一併清掉）
+    func clearHistory() {
+        history.removeAll()
+        note("已清除閘道連線紀錄")
+    }
+
     /// 儲存設定後重新載入，已連線中的通道不受影響，下次連線才套用
     func reloadConfig() {
         settings = ConfigStore.load()
+        // 閘道位址改了，該台的舊紀錄就沒有參考價值
+        let kept = history.pruned(gateways: settings.gateways)
+        if kept != history { history = kept; note("閘道位址變更，已清除該台的連線紀錄") }
         Task {
             _ = await Self.runHelper(["reload"])
             _ = await Self.runHelper(["reload-settings"])
@@ -298,6 +313,7 @@ final class VPNController: ObservableObject {
             if old.isConnected, Date().timeIntervalSince(lastUpAt) < 60 {
                 // 連上不到 60 秒就失聯（例：被閘道踢掉）：視為失敗，照退避間隔重試，避免無間斷重連
                 note("連上 \(Int(Date().timeIntervalSince(lastUpAt))) 秒就失聯，改走退避重試")
+                if case .connected(let c, _) = old { recordLateFailure(connection: c, why: "連上不到 60 秒就失聯") }
                 scheduleRetry()
             } else {
                 // App 啟動時、或通道失聯（dpd_action = clear 會移除 SA）→ 重連
@@ -308,6 +324,7 @@ final class VPNController: ObservableObject {
             // 卡在連線中超過 30 秒：視為一次失敗（規格 §3.3）；啟動時看到 connecting 也走這條，不直接 up
             if retryTask == nil, let since = connectingSince, Date().timeIntervalSince(since) > 30 {
                 connectingSince = nil
+                if case .connecting(let c) = new.state { recordLateFailure(connection: c, why: "卡在連線中超過 30 秒") }
                 runDown(reason: "卡在連線中") { [weak self] in self?.scheduleRetry() }
             }
         default:
@@ -395,7 +412,12 @@ final class VPNController: ObservableObject {
 
     /// 重試要連哪些閘道：手動指定單台就重試同一台，否則自動輪替
     private func nextOrder() -> [Int] {
-        retryTargets ?? ReconnectPolicy.order(gateways: settings.gateways, lastGood: lastGood)
+        retryTargets ?? autoOrder()
+    }
+
+    /// 自動輪替：依連線紀錄排序（F4）
+    private func autoOrder() -> [Int] {
+        GatewayHistory.order(gateways: settings.gateways, history: history, now: Date())
     }
 
     /// 主要介面的 IPv4 跟 SA 的本機 IP 不同 → 換了網路，重建通道
@@ -429,8 +451,11 @@ final class VPNController: ObservableObject {
             for n in order {
                 if self.pendingDown || !self.wantConnected || !self.networkUp { break }
                 self.busyText = "連線 VPN\(n)…"
-                let (code, _) = await Self.runHelper(["up", "\(n)"])
-                if code == 0 { ok = true; self.lastGood = n - 1; self.lastUpAt = Date(); self.note("VPN\(n) 已連線"); break }
+                let address = self.settings.gateways.indices.contains(n - 1) ? self.settings.gateways[n - 1] : ""
+                let started = Date()
+                let (code, out) = await Self.runHelper(["up", "\(n)"])
+                self.recordAttempt(n, address: address, success: code == 0, output: out, started: started)
+                if code == 0 { ok = true; self.lastUpAt = Date(); self.note("VPN\(n) 已連線"); break }
                 note("VPN\(n) 連線失敗")
             }
             self.finishOp()
@@ -455,6 +480,24 @@ final class VPNController: ObservableObject {
             self.afterOpRecheck()
             self.refresh()
         }
+    }
+
+    /// F4：記錄一次 up N 的結果。失敗但原因可能不在閘道時不記（判斷規則見 GatewayHistory.shouldRecord）
+    private func recordAttempt(_ n: Int, address: String, success: Bool, output: String, started: Date) {
+        guard GatewayHistory.shouldRecord(gateway: n, success: success, output: output,
+                                          interrupted: pendingDown || !wantConnected || !networkUp) else { return }
+        let secs = (Date().timeIntervalSince(started) * 10).rounded() / 10
+        history.record(GatewayAttempt(gateway: n, address: address, success: success, seconds: secs, time: Date()))
+    }
+
+    /// F4：up 回報成功、之後才失敗的情況（連上不到 60 秒被踢、卡在連線中超過 30 秒），
+    /// 替 status 回報的那台補記一筆失敗，否則它會一直是「上次成功」、不進冷卻。
+    /// 台號取自 status 的連線名稱（vpnN），不用最近一筆成功紀錄推：卡在連線中的可能是命令列或上一個程序發起的
+    private func recordLateFailure(connection: String, why: String) {
+        guard networkUp, let n = GatewayHistory.gateway(fromConnection: connection),
+              settings.gateways.indices.contains(n - 1), !settings.gateways[n - 1].isEmpty else { return }
+        history.record(GatewayAttempt(gateway: n, address: settings.gateways[n - 1], success: false, seconds: nil, time: Date()))
+        note("VPN\(n) \(why)，記為一次失敗")
     }
 
     private func runDown(reason: String, then next: (() -> Void)? = nil) {

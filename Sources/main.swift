@@ -29,6 +29,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         vpn.$wantConnected.receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.renderMenu() }
             .store(in: &bag)
+        vpn.$history.receive(on: RunLoop.main)          // F4 閘道最近狀態
+            .sink { [weak self] _ in self?.renderMenu() }
+            .store(in: &bag)
         NotificationCenter.default.publisher(for: .splitSwanShowWindow)
             .receive(on: RunLoop.main)
             .sink { [weak self] n in
@@ -136,7 +139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(statusLine)
         menu.addItem(.separator())
 
-        let auto = NSMenuItem(title: "連線（自動輪替 VPN1→2→3）", action: #selector(connect(_:)), keyEquivalent: "c")
+        let auto = NSMenuItem(title: "連線（自動輪替）", action: #selector(connect(_:)), keyEquivalent: "c")
         auto.representedObject = "auto"
         connectItems.append(auto)
         menu.addItem(auto)
@@ -181,7 +184,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         connectItems[0].isEnabled = ready && !active
         for i in 0..<3 {
             let item = connectItems[i + 1]
-            item.title = "連線 " + vpn.gatewayTitle(i)
+            // 附上最近狀態，例：「連線 VPN2（203.0.113.2） · 上次 3.2 秒連上」（F4）
+            item.title = "連線 " + vpn.gatewayTitle(i) + (vpn.history.detail(i + 1).map { " · \($0)" } ?? "")
             item.isEnabled = ready && !active && !vpn.settings.gateways[i].isEmpty
         }
         // 斷線可以搶先執行中的連線（規格 §3.3）

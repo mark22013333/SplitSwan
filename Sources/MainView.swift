@@ -81,12 +81,21 @@ struct ConnectionTab: View {
                     .controlSize(.large)
                     .buttonStyle(.borderedProminent)
                     .disabled(vpn.busy || vpn.state == .helperMissing)
-                    HStack(spacing: 8) {
+                    HStack(alignment: .top, spacing: 8) {
                         ForEach(0..<3, id: \.self) { i in
-                            Button("VPN\(i + 1)") { vpn.connect("\(i + 1)") }
-                                .frame(maxWidth: .infinity)
-                                .help(vpn.gatewayTitle(i))
-                                .disabled(vpn.busy || vpn.state == .helperMissing || vpn.settings.gateways[i].isEmpty)
+                            VStack(spacing: 4) {
+                                Button("VPN\(i + 1)") { vpn.connect("\(i + 1)") }
+                                    .frame(maxWidth: .infinity)
+                                    .help(vpn.gatewayTitle(i))
+                                    .disabled(vpn.busy || vpn.state == .helperMissing || vpn.settings.gateways[i].isEmpty)
+                                // 最近狀態（F4），例：「上次 3.2 秒連上」；沒有紀錄就不顯示
+                                if let d = vpn.history.detail(i + 1) {
+                                    Text(d).font(.caption).foregroundStyle(.secondary)
+                                        .lineLimit(1).minimumScaleFactor(0.8)
+                                        .help(vpn.history.statusText(i + 1))
+                                }
+                            }
+                            .frame(maxWidth: .infinity)
                         }
                     }
                 }
@@ -177,6 +186,17 @@ struct SettingsTab: View {
                             FieldRow("VPN\(i + 1)") {
                                 TextField("", text: $draft.gateways[i], prompt: Text("IP 或網域，可留空"))
                             }
+                        }
+                        // F4：自動輪替依過去的連線結果排序；位址改了並儲存時，該台紀錄會自動清除
+                        HStack(spacing: 10) {
+                            Button("清除閘道連線紀錄") {
+                                vpn.clearHistory()
+                                message = ("已清除閘道連線紀錄，自動輪替恢復設定順序", false)
+                            }
+                            .disabled(vpn.history.attempts.isEmpty)
+                            Text("自動輪替會先試最近連得上、連得快的閘道")
+                                .font(.callout).foregroundStyle(.secondary)
+                            Spacer()
                         }
                     }
 
