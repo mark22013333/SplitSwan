@@ -90,10 +90,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         env.check()
         // 環境沒準備好就直接開環境檢查頁
         if vpn.state == .helperMissing { windowModel.tab = .environment }
-        // 開發用：open SplitSwan.app --args -InitialTab settings|environment [-ShowLog YES] 直接開指定分頁（截圖檢查排版用）
+        // 開發用：open SplitSwan.app --args -InitialTab settings|environment|about [-ShowLog YES] 直接開指定分頁（截圖檢查排版用）
         switch UserDefaults.standard.string(forKey: "InitialTab") {
         case "settings": windowModel.tab = .settings
         case "environment": windowModel.tab = .environment
+        case "about": windowModel.tab = .about
         default: break
         }
         if UserDefaults.standard.bool(forKey: "ShowLog") { windowModel.showLog = true }

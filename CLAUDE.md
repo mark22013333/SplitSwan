@@ -13,7 +13,7 @@ bash build.sh                 # 編譯到 build/SplitSwan.app（ad-hoc 簽章）
 bash build.sh --install       # 編譯並裝到 /Applications（先結束執行中的 App）
 bash make-dmg.sh              # 編譯並打包 dist/SplitSwan-<版本>.dmg
 bash Tests/run-tests.sh       # 全部單元測試（不連 VPN、不需 sudo、不寫系統設定）
-open build/SplitSwan.app --args -InitialTab settings   # 直接開在指定分頁（settings / environment）
+open build/SplitSwan.app --args -InitialTab settings   # 直接開在指定分頁（settings / environment / about）
 ```
 
 - **測試沒有 XCTest**：`Tests/run-tests.sh` 把每個測試檔複製成暫存目錄的 `main.swift`，再跟一份**寫死的** Sources 清單一起用 `swiftc` 編成獨立執行檔；輸出含「失敗 0」才算通過。
