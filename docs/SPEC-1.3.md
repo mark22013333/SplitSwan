@@ -260,7 +260,7 @@
 - 需要 Apple Developer Program 帳號（年費制），用 Developer ID Application 憑證簽章。
 - `build.sh` 改動：
   - `codesign --options runtime --timestamp`（開啟 hardened runtime）
-  - 加 entitlement `com.apple.security.automation.apple-events`：App 用 `NSAppleScript` 控制終端機（「開啟連線 log」），在 hardened runtime 下需要它。`Info.plist` 已經有 `NSAppleEventsUsageDescription`（`build.sh` 產生），不用另外加。
+  - 1.5.2 起連線紀錄改在 App 內顯示，不再用 `NSAppleScript` 控制終端機，所以**不需要** `com.apple.security.automation.apple-events` entitlement。
   - 「安裝系統元件」是另外啟動 `osascript` 程序執行，不是 App 本身送 Apple Event，**不需要**這個 entitlement，但要實測確認 hardened runtime 下仍然正常。
 - `make-dmg.sh` 改動：執行 `xcrun notarytool submit … --wait` 之後，再執行 `xcrun stapler staple`。
 - 憑證與 notarytool 的認證資訊**不進 repo**，改用 keychain profile。
@@ -269,7 +269,7 @@
 
 - [ ] 從別台 Mac 下載 dmg 後直接點開，不會出現「無法驗證開發者」
 - [ ] `spctl -a -vv /Applications/SplitSwan.app` 顯示 `source=Notarized Developer ID`
-- [ ] 「開啟連線 log」與「安裝系統元件」兩個功能，在 hardened runtime 下仍然正常
+- [ ] 「連線紀錄」與「安裝系統元件」兩個功能，在 hardened runtime 下仍然正常
 
 ## 9. 不在本版範圍
 

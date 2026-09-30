@@ -4,13 +4,6 @@ import AppKit
 import SwiftUI
 import Combine
 
-enum AppActions {
-    static func openLog() {
-        let script = "tell application \"Terminal\"\nactivate\ndo script \"sudo \(helperPath) log\"\nend tell"
-        var err: NSDictionary?
-        NSAppleScript(source: script)?.executeAndReturnError(&err)
-    }
-}
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -36,6 +29,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         vpn.$wantConnected.receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.renderMenu() }
             .store(in: &bag)
+        NotificationCenter.default.publisher(for: .splitSwanShowWindow)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] n in
+                if let tab = n.object as? MainTab { self?.windowModel.tab = tab }
+                self?.showWindow()
+            }
+            .store(in: &bag)
+        // 連線紀錄在 App 內顯示（連線頁），啟動時就開始收，才看得到之前發生的事
+        LogStore.shared.startStreaming()
         // 設定頁換了圖示樣式 → 立刻更新狀態列
         NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
             .receive(on: RunLoop.main)
@@ -57,6 +59,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        LogStore.shared.stop()
+    }
 
     private func launchedAsLoginItem() -> Bool {
         guard let event = NSAppleEventManager.shared().currentAppleEvent else { return false }
@@ -81,12 +87,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         env.check()
         // 環境沒準備好就直接開環境檢查頁
         if vpn.state == .helperMissing { windowModel.tab = .environment }
-        // 開發用：open SplitSwan.app --args -InitialTab settings|environment 直接開指定分頁（截圖檢查排版用）
+        // 開發用：open SplitSwan.app --args -InitialTab settings|environment [-ShowLog YES] 直接開指定分頁（截圖檢查排版用）
         switch UserDefaults.standard.string(forKey: "InitialTab") {
         case "settings": windowModel.tab = .settings
         case "environment": windowModel.tab = .environment
         default: break
         }
+        if UserDefaults.standard.bool(forKey: "ShowLog") { windowModel.showLog = true }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
     }
@@ -144,7 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "開啟 \(AppInfo.name) 視窗…", action: #selector(showWindow), keyEquivalent: "o"))
-        menu.addItem(NSMenuItem(title: "開啟連線 log（終端機）", action: #selector(openLog), keyEquivalent: "l"))
+        menu.addItem(NSMenuItem(title: "查看連線紀錄…", action: #selector(openLog), keyEquivalent: "l"))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "結束 \(AppInfo.name)", action: #selector(quit), keyEquivalent: "q"))
 
@@ -186,7 +193,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let t = sender.representedObject as? String { vpn.connect(t) }
     }
     @objc private func disconnect() { vpn.disconnect() }
-    @objc private func openLog() { AppActions.openLog() }
+    @objc private func openLog() {
+        windowModel.tab = .connection
+        windowModel.showLog = true
+        showWindow()
+    }
     @objc private func quit() { NSApp.terminate(nil) }
 }
 

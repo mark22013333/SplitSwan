@@ -93,14 +93,28 @@ enum MenuBarIcon {
     static func image(style: MenuBarIconStyle, state: IconState, colored: Bool, pointSize: CGFloat = 15) -> NSImage? {
         let tint: NSColor? = (colored && state == .connected) ? .systemGreen : nil
         if let name = style.symbol(state) {
-            var config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .regular)
-            if let tint { config = config.applying(.init(paletteColors: [tint])) }
+            let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .regular)
             guard let img = NSImage(systemSymbolName: name, accessibilityDescription: "VPN \(state.title)")?
                 .withSymbolConfiguration(config) else { return nil }
-            img.isTemplate = (tint == nil)
-            return img
+            guard let tint else { img.isTemplate = true; return img }
+            // 不用 paletteColors：它會把每一層都塗成同色，盾牌裡的鎖、勾、箭頭就看不見了。
+            // 改成只替圖形的不透明處上色，挖空的部分維持透明
+            return tinted(img, tint)
         }
         return textImage(state: state, height: pointSize * 1.1, tint: tint)
+    }
+
+    /// 把 template 圖的不透明處塗成指定顏色（保留挖空的洞）
+    static func tinted(_ img: NSImage, _ color: NSColor) -> NSImage {
+        let out = NSImage(size: img.size, flipped: false) { rect in
+            img.draw(in: rect)
+            color.set()
+            rect.fill(using: .sourceAtop)
+            return true
+        }
+        out.isTemplate = false
+        out.accessibilityDescription = img.accessibilityDescription
+        return out
     }
 
     /// 「VPN」字樣：未連線是外框字，已連線是實心底反白字，連線中／異常在後面加「…」／「!」

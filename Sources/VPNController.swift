@@ -240,7 +240,7 @@ final class VPNController: ObservableObject {
             guard retryTask == nil, networkUp else { break }
             if old.isConnected, Date().timeIntervalSince(lastUpAt) < 60 {
                 // 連上不到 60 秒就失聯（例：被閘道踢掉）：視為失敗，照退避間隔重試，避免無間斷重連
-                NSLog("[SplitSwan] 連上 %.0f 秒就失聯，改走退避", Date().timeIntervalSince(lastUpAt))
+                note("連上 \(Int(Date().timeIntervalSince(lastUpAt))) 秒就失聯，改走退避重試")
                 scheduleRetry()
             } else {
                 // App 啟動時、或通道失聯（dpd_action = clear 會移除 SA）→ 重連
@@ -344,15 +344,15 @@ final class VPNController: ObservableObject {
         guard networkUp else { retryNote = "沒有網路，恢復後自動重連"; return }
         busy = true
         retryNote = nil
-        NSLog("[SplitSwan] 連線（%@）：順序 %@", reason, order.map(String.init).joined(separator: "→"))
+        note("開始連線（\(reason)）：依序嘗試 \(order.map { "VPN\($0)" }.joined(separator: " → "))")
         opTask = Task {
             var ok = false
             for n in order {
                 if self.pendingDown || !self.wantConnected || !self.networkUp { break }
                 self.busyText = "連線 VPN\(n)…"
                 let (code, _) = await Self.runHelper(["up", "\(n)"])
-                if code == 0 { ok = true; self.lastGood = n - 1; self.lastUpAt = Date(); break }
-                NSLog("[SplitSwan] VPN%d 連線失敗", n)
+                if code == 0 { ok = true; self.lastGood = n - 1; self.lastUpAt = Date(); self.note("VPN\(n) 已連線"); break }
+                note("VPN\(n) 連線失敗")
             }
             self.finishOp()
             if self.pendingDown || !self.wantConnected {
@@ -382,13 +382,19 @@ final class VPNController: ObservableObject {
         guard opTask == nil else { return }
         busy = true
         busyText = "斷線中…"
-        NSLog("[SplitSwan] 斷線（%@）", reason)
+        note("斷線（\(reason)）")
         opTask = Task {
             _ = await Self.runHelper(["down"])
             self.finishOp()
             self.refresh()
             if let next { next() } else { self.afterOpRecheck() }
         }
+    }
+
+    /// 寫進 App 內的連線紀錄，同時留一份在系統 log
+    private func note(_ s: String) {
+        NSLog("[SplitSwan] %@", s)
+        LogStore.shared.app(s)
     }
 
     private func finishOp() {
@@ -416,6 +422,7 @@ final class VPNController: ObservableObject {
         let wait = fixed ?? ReconnectPolicy.backoff(backoffStep)
         if fixed == nil { backoffStep += 1 }
         retryNote = "連線中斷，\(Int(wait)) 秒後重試"
+        note("\(Int(wait)) 秒後重試")
         retryTask = Task {
             try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
             guard !Task.isCancelled else { return }

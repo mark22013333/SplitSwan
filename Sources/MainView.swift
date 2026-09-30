@@ -7,6 +7,7 @@ enum MainTab: Hashable { case connection, settings, environment }
 @MainActor
 final class WindowModel: ObservableObject {
     @Published var tab: MainTab = .connection
+    @Published var showLog = false
 }
 
 struct MainView: View {
@@ -97,9 +98,8 @@ struct ConnectionTab: View {
                     .font(.callout).foregroundStyle(.orange)
                     .multilineTextAlignment(.center)
             }
-            Spacer()
-            Button("開啟連線 log（終端機）") { AppActions.openLog() }
-                .buttonStyle(.link).font(.callout)
+            Spacer(minLength: 8)
+            LogPanel(expanded: $window.showLog)
         }
         .frame(maxWidth: .infinity)
     }
@@ -437,6 +437,74 @@ struct SettingsTab: View {
             message = ("無法設定自動啟動：\(error.localizedDescription)", true)
             launchAtLogin = SMAppService.mainApp.status == .enabled
         }
+    }
+}
+
+/// 連線紀錄：strongSwan 的即時 log＋App 自己的動作，可展開收合、拷貝、清除
+struct LogPanel: View {
+    @Binding var expanded: Bool
+    @ObservedObject var store = LogStore.shared
+    @State private var appOnly = false
+
+    private static let timeFmt: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; return f
+    }()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+                } label: {
+                    Label("連線紀錄（\(store.lines.count)）", systemImage: expanded ? "chevron.down" : "chevron.right")
+                        .font(.callout.weight(.medium))
+                }
+                .buttonStyle(.plain)
+                if !store.streaming {
+                    Text("未連到 strongSwan").font(.caption).foregroundStyle(.orange)
+                }
+                Spacer()
+                if expanded {
+                    Toggle("只看 App 動作", isOn: $appOnly).toggleStyle(.checkbox).font(.caption)
+                    Button("拷貝") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(store.allText, forType: .string)
+                    }
+                    .controlSize(.small)
+                    Button("清除") { store.clear() }.controlSize(.small)
+                }
+            }
+            if expanded {
+                let shown = appOnly ? store.lines.filter(\.fromApp) : store.lines
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 2) {
+                            ForEach(shown) { line in
+                                Text("\(Self.timeFmt.string(from: line.time))  \(line.text)")
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(line.fromApp ? Color.accentColor : Color.primary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .id(line.id)
+                            }
+                            if shown.isEmpty {
+                                Text("還沒有紀錄。連線時這裡會顯示協商過程。")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .textSelection(.enabled)
+                        .padding(8)
+                    }
+                    .frame(height: 220)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .textBackgroundColor)))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.3)))
+                    .onChange(of: store.lines.last?.id) { _, id in
+                        if let id { proxy.scrollTo(id, anchor: .bottom) }   // 新紀錄自動捲到底
+                    }
+                    .onAppear { if let id = shown.last?.id { proxy.scrollTo(id, anchor: .bottom) } }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 

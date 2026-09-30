@@ -90,7 +90,18 @@ case "${1:-}" in
     echo "ok down" ;;
   log)
     ensure_charon
-    exec "$SWANCTL" --log ;;
+    # App 內的連線紀錄會長時間串流。App 結束、當機或被強制結束時都要跟著停，
+    # 所以不用 exec，改成每 2 秒確認呼叫者（sudo 的上層，也就是 App）還在
+    OWNER=$(ps -o ppid= -p "$PPID" 2>/dev/null | tr -d ' ')
+    "$SWANCTL" --log &
+    LOGPID=$!
+    trap 'kill "$LOGPID" 2>/dev/null; exit 0' TERM INT HUP
+    while kill -0 "$LOGPID" 2>/dev/null; do
+      if [ -n "$OWNER" ] && ! kill -0 "$OWNER" 2>/dev/null; then kill "$LOGPID" 2>/dev/null; break; fi
+      sleep 2
+    done
+    wait "$LOGPID" 2>/dev/null
+    exit 0 ;;
   reload)
     # App 儲存設定後呼叫：charon 在跑就重新載入 swanctl.conf 與 secrets.conf
     if charon_running; then "$SWANCTL" --load-all --noprompt >/dev/null 2>&1; fi

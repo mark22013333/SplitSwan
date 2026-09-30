@@ -170,6 +170,8 @@ final class EnvChecker: ObservableObject {
                 lastMessage = out.contains("-128") ? "已取消安裝" : "安裝失敗：\(out)"
             }
             check()
+            // 管理員密碼視窗關掉後，焦點會回到前一個 App，狀態列 App 的視窗會被蓋在後面，看起來像被關掉
+            NotificationCenter.default.post(name: .splitSwanShowWindow, object: MainTab.environment)
         }
     }
 

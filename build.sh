@@ -6,8 +6,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 source ./app.env
 
-VERSION="1.5.1"
-BUILD_NUM="11"
+VERSION="1.5.2"
+BUILD_NUM="12"
 APP="build/${APP_NAME}.app"
 C="$APP/Contents"
 
@@ -50,7 +50,6 @@ cat > "$C/Info.plist" <<PLIST
     <key>CFBundleDevelopmentRegion</key><string>zh_TW</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSUIElement</key><true/>
-    <key>NSAppleEventsUsageDescription</key><string>開啟終端機顯示 VPN 連線 log</string>
     <key>NSHumanReadableCopyright</key><string>strongSwan 狀態列前端</string>
 </dict>
 </plist>
