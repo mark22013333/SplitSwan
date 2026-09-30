@@ -1,8 +1,8 @@
-// 主視窗：連線、設定、環境檢查三個分頁
+// 主視窗：連線、設定、環境檢查、關於四個分頁
 import SwiftUI
 import ServiceManagement
 
-enum MainTab: Hashable { case connection, settings, environment }
+enum MainTab: Hashable { case connection, settings, environment, about }
 
 @MainActor
 final class WindowModel: ObservableObject {
@@ -26,6 +26,9 @@ struct MainView: View {
             EnvironmentTab(env: env, window: window)
                 .tabItem { Label("環境檢查", systemImage: "checklist") }
                 .tag(MainTab.environment)
+            AboutTab()
+                .tabItem { Label("關於", systemImage: "info.circle") }
+                .tag(MainTab.about)
         }
         .padding(16)
         .controlSize(.large)
@@ -697,6 +700,124 @@ struct EnvironmentTab: View {
         case .warn: return .orange
         case .fail: return .red
         case .checking: return .secondary
+        }
+    }
+}
+
+// MARK: - 關於
+
+struct AboutTab: View {
+    private enum UpdateState: Equatable {
+        case idle, checking
+        case done(AboutInfo.Outcome)
+    }
+    @State private var update = UpdateState.idle
+    @State private var copied = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                // 版本
+                HStack(alignment: .center, spacing: 16) {
+                    Image(nsImage: NSApp.applicationIconImage)
+                        .resizable().frame(width: 72, height: 72)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(AppInfo.name).font(.title2.weight(.semibold))
+                        Text(AboutInfo.versionText(version: AppInfo.version, build: AppInfo.build))
+                            .font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 4) {
+                        Button("拷貝版本資訊") { copyVersionInfo() }
+                        Text(copied ? "已拷貝" : " ").font(.caption).foregroundStyle(.green)
+                    }
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.08)))
+
+                SettingsCard("連結") {
+                    linkButton("GitHub 專案頁", systemImage: "chevron.left.forwardslash.chevron.right", url: AppInfo.repoURL)
+                    linkButton("使用說明（README）", systemImage: "book", url: AppInfo.readmeURL)
+                    linkButton("所有版本下載（Releases）", systemImage: "arrow.down.circle", url: AppInfo.releasesURL)
+                }
+
+                SettingsCard("檢查更新") {
+                    HStack(spacing: 10) {
+                        Button(update == .checking ? "檢查中…" : "檢查更新") { checkUpdate() }
+                            .disabled(update == .checking)
+                        if update == .checking { ProgressView().controlSize(.small) }
+                        Spacer()
+                    }
+                    updateResult
+                    Text("只有按下「檢查更新」時才會連到 GitHub；不會自動下載或安裝。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
+                SettingsCard("授權與致謝") {
+                    HStack(spacing: 8) {
+                        Text("\(AppInfo.name) 以 MIT 授權釋出。")
+                        Button("查看授權") { NSWorkspace.shared.open(AppInfo.licenseURL) }
+                            .buttonStyle(.link)
+                        Spacer()
+                    }
+                    Text("使用 strongSwan（GPLv2）作為 VPN 引擎，以獨立程序呼叫，未連結或散布其程式碼，由使用者透過 Homebrew 安裝。")
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("FortiGate、FortiClient 是 Fortinet 的商標，本專案與 Fortinet 無關。")
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.callout)
+            }
+            .padding(4)
+        }
+    }
+
+    @ViewBuilder private var updateResult: some View {
+        if case .done(let outcome) = update {
+            switch outcome {
+            case .newer(let v, let url):
+                HStack(spacing: 10) {
+                    Label("有新版本 \(v)", systemImage: "arrow.up.circle.fill").foregroundStyle(.orange)
+                    Button("前往下載") { NSWorkspace.shared.open(url) }.buttonStyle(.borderedProminent)
+                    Spacer()
+                }
+            case .upToDate(let v):
+                Label("已是最新版本（\(v)）", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+            case .failed(let reason):
+                HStack(spacing: 10) {
+                    Label(reason, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("開啟 Releases 頁") { NSWorkspace.shared.open(AppInfo.releasesURL) }
+                    Spacer()
+                }
+            }
+        }
+    }
+
+    private func linkButton(_ title: String, systemImage: String, url: URL) -> some View {
+        Button { NSWorkspace.shared.open(url) } label: { Label(title, systemImage: systemImage) }
+            .buttonStyle(.link)
+            .help(url.absoluteString)
+    }
+
+    private func copyVersionInfo() {
+        let text = AboutInfo.copyText(app: AppInfo.name, version: AppInfo.version, build: AppInfo.build,
+                                      macOS: AboutInfo.macOSVersion, chip: AboutInfo.chip)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        copied = true
+        Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            copied = false
+        }
+    }
+
+    /// 按下才連網；View 的 Task 跑在主執行緒，回來後直接更新狀態
+    private func checkUpdate() {
+        update = .checking
+        Task { @MainActor in
+            let outcome = await AboutInfo.fetchLatest()
+            update = .done(outcome)
         }
     }
 }

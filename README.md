@@ -7,7 +7,7 @@ macOS 狀態列的 VPN 工具，用開源的 [strongSwan](https://www.strongswan
 - **自動重連**：睡眠喚醒、切換網路、通道失聯後自動接回；按「斷線」後就不會再自動連線
 - **斷線通知**：非預期中斷超過 30 秒時發 macOS 通知，恢復時再通知一次
 - **診斷報告**：一鍵產生報告檔給管理者排查，不含密碼與 PSK
-- **有圖形介面**：狀態列一鍵連線，主視窗有連線、設定、環境檢查三個分頁，缺的元件可以一鍵安裝
+- **有圖形介面**：狀態列一鍵連線，主視窗有連線、設定、環境檢查、關於四個分頁，缺的元件可以一鍵安裝
 - **公司設定與程式分開**：閘道與網段放在各自電腦的設定檔，原始碼不含任何公司位址
 
 > 版本：1.6.0
@@ -55,6 +55,7 @@ macOS 狀態列的 VPN 工具，用開源的 [strongSwan](https://www.strongswan
 - 連線紀錄：「連線」頁下方可展開，顯示 strongSwan 的協商過程與 App 的動作（連線、重試、重建通道），可拷貝給管理者
 - 診斷報告：「環境檢查」頁按「產生診斷報告」，約數秒後在桌面產生 `SplitSwan-診斷-<時間>.txt` 並在 Finder 中選取，不會中斷連線。報告不含密碼與 PSK，但含閘道位址與通道網段，只傳給管理者
 - 開機自動啟動：「設定」頁打開「登入時自動啟動」
+- 版本與更新：「關於」頁顯示目前版本，可以拷貝版本資訊（回報問題時附上），按「檢查更新」會查 GitHub 上的最新版本；只有按下時才連網，不會自動下載或安裝
 - 輸入框支援 ⌘C／⌘V／⌘A；設定頁可用 ⌘S 儲存
 - 狀態列圖示有 8 種樣式可選（「設定」頁的「狀態列圖示」），也可以設定已連線時顯示綠色：
 
@@ -158,10 +159,10 @@ bash make-dmg.sh          # 編譯並打包成 dist/SplitSwan-<版本>.dmg
 ```
 
 - 版本號在 `build.sh` 開頭的 `VERSION`、`BUILD_NUM`。
-- 單元測試：`bash Tests/run-tests.sh`（不連 VPN、不需要 sudo、不寫入系統設定）。涵蓋自動重連、斷線通知判定、閘道排序、加密匯出入、注入攻擊回歸測試、網段格式轉換、診斷報告的密碼遮蔽。
+- 單元測試：`bash Tests/run-tests.sh`（不連 VPN、不需要 sudo、不寫入系統設定）。涵蓋自動重連、斷線通知判定、閘道排序、加密匯出入、注入攻擊回歸測試、網段格式轉換、診斷報告的密碼遮蔽、檢查更新的版本比較。
 - 輔助程式 `logtrim` 的截斷測試：`bash tools/test-logtrim.sh`（一般權限，在暫存目錄操作副本）。
 - 自動重連的實機測試：`sudo bash tools/test-dpd.sh`（暫時封鎖閘道，量失聯偵測與恢復秒數；斷線通知要在測試期間人工確認），驗收清單與結果見 [`docs/F1-實機驗收.md`](docs/F1-實機驗收.md)。
-- 開發時可以用 `open build/SplitSwan.app --args -InitialTab settings`（或 `environment`），直接開在指定分頁。
+- 開發時可以用 `open build/SplitSwan.app --args -InitialTab settings`（或 `environment`、`about`），直接開在指定分頁。
 
 ### 改名
 
@@ -217,7 +218,7 @@ swanctl ──vici──▶ charon（strongSwan daemon，root）──IKEv2─�
 |------|------|
 | `app.env` | App 名稱與 bundle id |
 | `Sources/main.swift` | 程式進入點、狀態列選單、視窗管理 |
-| `Sources/MainView.swift` | 主視窗三個分頁（SwiftUI） |
+| `Sources/MainView.swift` | 主視窗四個分頁（SwiftUI） |
 | `Sources/VPNController.swift` | 呼叫輔助程式、定時更新連線狀態、自動重連、斷線通知判定 |
 | `Sources/DropNotifier.swift` | 發送 macOS 斷線／恢復通知 |
 | `Sources/GatewayHistory.swift` | 閘道連線紀錄與自動輪替排序 |
@@ -228,7 +229,8 @@ swanctl ──vici──▶ charon（strongSwan daemon，root）──IKEv2─�
 | `Sources/ConfigExport.swift` | 加密設定檔（`.splitswan`）的匯出與匯入 |
 | `Sources/MenuBarIcon.swift` | 狀態列圖示的 8 種樣式 |
 | `Sources/EnvChecker.swift` | 環境檢查與一鍵安裝 |
-| `Sources/AppInfo.swift` | 從 Info.plist 讀 App 名稱 |
+| `Sources/AppInfo.swift` | 從 Info.plist 讀 App 名稱與版本；GitHub repo 位址 |
+| `Sources/AboutInfo.swift` | 「關於」頁的版本資訊與檢查更新（版本比較、解析 GitHub 回應） |
 | `tools/make-icon.swift` | 產生 App 圖示 |
 | `tools/test-dpd.sh` | 實機測試自動重連：暫時封鎖閘道，量失聯偵測與恢復秒數（需 sudo） |
 | `tools/test-logtrim.sh` | 測試輔助程式的 `logtrim` 截斷（一般權限，使用副本） |
