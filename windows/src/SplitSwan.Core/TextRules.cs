@@ -7,8 +7,10 @@ namespace SplitSwan.Core;
 internal static class TextRules
 {
     /// <summary>
-    /// 等同 Swift 的 trimmingCharacters(in: .whitespaces)：只去掉 Unicode Zs 類空白與 Tab，
+    /// 等同 Swift 的 trimmingCharacters(in: .whitespaces)：去掉 Unicode Zs 類空白、Tab 與 U+200B（零寬空白），
     /// **不**去掉換行（.NET 的 Trim() 會去掉換行，那會讓「帳號結尾夾換行」被默默接受）。
+    /// Apple 的 CharacterSet.whitespaces 比 Zs＋Tab 多出 U+200B 一個碼位（以 Swift 掃過全部碼位實測，僅此一個）；
+    /// 從網頁或聊天軟體複製的帳號常夾著它，Mac 版會修剪後接受。
     /// </summary>
     public static string TrimWhitespace(string s)
     {
@@ -19,7 +21,7 @@ internal static class TextRules
     }
 
     private static bool IsSwiftWhitespace(char c) =>
-        c == '\t' || CharUnicodeInfo.GetUnicodeCategory(c) == UnicodeCategory.SpaceSeparator;
+        c == '\t' || c == '\u200B' || CharUnicodeInfo.GetUnicodeCategory(c) == UnicodeCategory.SpaceSeparator;
 
     /// <summary>等同 Swift 的 split(separator:)（預設略過空字串）。</summary>
     public static string[] SplitOmitEmpty(string s, params char[] separators) =>

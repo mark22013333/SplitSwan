@@ -29,13 +29,16 @@ internal static class Fixture
 /// </summary>
 internal static class TestEncryptor
 {
-    public static byte[] Encrypt(object payload, string passphrase, int iterations = 100_000)
+    public static byte[] Encrypt(object payload, string passphrase, int iterations = 100_000) =>
+        EncryptRaw(JsonSerializer.SerializeToUtf8Bytes(payload), passphrase, iterations);
+
+    /// <summary>直接加密指定的明文 bytes（用來造重複 key、BOM 這類序列化器不會產生的內容）。</summary>
+    public static byte[] EncryptRaw(byte[] plain, string passphrase, int iterations = 100_000)
     {
         var salt = RandomNumberGenerator.GetBytes(16);
         var saltText = Convert.ToBase64String(salt);
         var key = Rfc2898DeriveBytes.Pbkdf2(Encoding.UTF8.GetBytes(passphrase.Normalize(NormalizationForm.FormC)),
             salt, iterations, HashAlgorithmName.SHA256, 32);
-        var plain = JsonSerializer.SerializeToUtf8Bytes(payload);
         var nonce = RandomNumberGenerator.GetBytes(12);
         var cipher = new byte[plain.Length];
         var tag = new byte[16];

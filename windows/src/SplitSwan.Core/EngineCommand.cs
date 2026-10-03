@@ -15,11 +15,11 @@ public static class EngineCommand
     public static readonly TimeSpan ConnectTimeout = TimeSpan.FromMinutes(5);
     /// <summary>disconnect 的逾時。</summary>
     public static readonly TimeSpan DisconnectTimeout = TimeSpan.FromMinutes(2);
-    /// <summary>brief 的逾時（引擎自己限時約 1.8 秒，這裡多留 powershell 啟動時間）。</summary>
-    public static readonly TimeSpan BriefTimeout = TimeSpan.FromSeconds(10);
-
-    /// <summary>引擎預設使用的 WSL 發行版（App 不寫 Distro，沿用引擎預設值）。</summary>
-    public const string DefaultDistro = "Ubuntu-24.04";
+    /// <summary>
+    /// brief 的逾時：引擎內部查詢限時 6 秒（契約 1），加上 Windows PowerShell 冷啟動約 3 秒以上，
+    /// 留 12 秒讓引擎自己的逾時訊息先出來；仍小於 15 秒的輪詢間隔。
+    /// </summary>
+    public static readonly TimeSpan BriefTimeout = TimeSpan.FromSeconds(12);
 
     public static string ActionName(EngineAction a) => a switch
     {
@@ -40,7 +40,9 @@ public static class EngineCommand
     /// <summary>
     /// powershell.exe 的參數清單：-NoProfile -ExecutionPolicy Bypass -File &lt;script&gt; -Action &lt;a&gt; -ConfDir &lt;dir&gt; [-PauseAtEnd]。
     /// </summary>
-    public static IReadOnlyList<string> Arguments(EngineAction action, string scriptPath, string confDir, bool pauseAtEnd = false)
+    /// <param name="noInstall">加 -NoInstall：WSL／Ubuntu 未安裝時引擎只回報、不在背景開始安裝（契約 1；只對 connect 有效，其他動作忽略）。</param>
+    public static IReadOnlyList<string> Arguments(EngineAction action, string scriptPath, string confDir,
+        bool pauseAtEnd = false, bool noInstall = false)
     {
         ArgumentException.ThrowIfNullOrEmpty(scriptPath);
         ArgumentException.ThrowIfNullOrEmpty(confDir);
@@ -51,6 +53,7 @@ public static class EngineCommand
             "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath,
             "-Action", ActionName(action), "-ConfDir", dir,
         };
+        if (noInstall && action == EngineAction.Connect) list.Add("-NoInstall");
         if (pauseAtEnd) list.Add("-PauseAtEnd");
         return list;
     }
@@ -98,26 +101,33 @@ public static class EngineCommand
     }
 
     /// <summary>
-    /// 引擎在 WSL 或 Ubuntu 尚未安裝時，會開始互動式安裝並回 fail「已開始安裝…」。
-    /// 背景執行時沒有主控台可以建立 Ubuntu 帳號，App 要改請使用者用「首次安裝」。
+    /// 是否需要使用者改用「首次安裝」：WSL 或 Ubuntu 尚未安裝。判斷依據（任一成立）：
+    /// - 錯誤訊息含「已開始安裝」（引擎在背景開始了互動式安裝）或「尚未安裝」（引擎帶 -NoInstall 時的回報）；
+    /// - 任何一行輸出含「開始安裝」（引擎在安裝前會先印這句；逾時被結束、沒有 @@RESULT 時也抓得到）。
+    /// 背景執行時沒有主控台可以建立 Ubuntu 帳號，所以要改用可見視窗。
     /// </summary>
-    public static bool IsInstallStarted(string? error) =>
-        error is not null && error.Contains("已開始安裝", StringComparison.Ordinal);
+    public static bool IsInstallNeeded(string? error, IEnumerable<string>? outputLines = null)
+    {
+        if (error is not null && (error.Contains("已開始安裝", StringComparison.Ordinal)
+                                  || error.Contains("尚未安裝", StringComparison.Ordinal)))
+            return true;
+        return outputLines is not null && outputLines.Any(l => l is not null && l.Contains("開始安裝", StringComparison.Ordinal));
+    }
 
     /// <summary>引擎回報「不是系統管理員」（正常情況下 App 以管理員執行，不會發生）。</summary>
     public static bool IsNotAdministrator(string? error) =>
         error is not null && error.Contains("不是系統管理員", StringComparison.Ordinal);
 
     /// <summary>
-    /// 從 wsl.exe -l -q 的輸出判斷發行版是否已安裝。
-    /// wsl -l 沒吃到 WSL_UTF8 時是 UTF-16，先去掉 NUL、BOM 與替代字元再比對（同引擎的 Invoke-WslQuick）。
+    /// 引擎沒有輸出 @@RESULT 時（powershell 被群組原則擋下、語法錯誤、被結束等）給使用者看的訊息：
+    /// 附上結束碼與 stderr 的前兩行非空白內容，方便判斷原因。
     /// </summary>
-    public static bool ListContainsDistro(string? wslListOutput, string distro)
+    public static string DescribeMissingResult(int? exitCode, IEnumerable<string>? stderrLines)
     {
-        if (string.IsNullOrEmpty(wslListOutput)) return false;
-        var cleaned = new string([.. wslListOutput.Where(c => c is not ('\0' or '\uFEFF' or '\uFFFD'))]);
-        return cleaned.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-            .Select(l => l.Trim().TrimStart('*').Trim())
-            .Any(l => string.Equals(l, distro, StringComparison.OrdinalIgnoreCase));
+        var sb = new StringBuilder("引擎沒有回傳結果");
+        sb.Append(exitCode is null ? "（結束碼未知）" : $"（結束碼 {exitCode}）");
+        var first = (stderrLines ?? []).Where(l => !string.IsNullOrWhiteSpace(l)).Select(l => l.Trim()).Take(2).ToList();
+        if (first.Count > 0) sb.Append('：').Append(string.Join("｜", first));
+        return sb.ToString();
     }
 }

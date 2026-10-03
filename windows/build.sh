@@ -22,6 +22,12 @@ for f in ../tools/windows/splitswan-wsl.ps1 ../tools/windows/splitswan-wsl.sh RE
     [ -s "$f" ] || { echo "錯誤：找不到 $f" >&2; exit 1; }
 done
 
+# 托盤的背景 connect 一律帶 -NoInstall（契約 1）；引擎不支援時每次連線都會失敗，不可打包
+if ! grep -q '\[switch\]\$NoInstall' ../tools/windows/splitswan-wsl.ps1; then
+    echo "錯誤：tools/windows/splitswan-wsl.ps1 沒有 -NoInstall 參數，與托盤 App 不相容" >&2
+    exit 1
+fi
+
 echo "== 1/4 Core 單元測試"
 dotnet test tests/SplitSwan.Core.Tests/SplitSwan.Core.Tests.csproj -c Release --nologo
 

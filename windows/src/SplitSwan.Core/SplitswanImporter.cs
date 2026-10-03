@@ -59,7 +59,7 @@ public static class SplitswanImporter
         uint iterations;
         try
         {
-            using var doc = JsonDocument.Parse(data);
+            using var doc = ParseJson(data);
             var root = doc.RootElement;
             if (root.ValueKind != JsonValueKind.Object) throw new SplitswanImportException(NotEncryptedFile);
             // Swift 先把六個欄位整份解碼（缺欄位或型別不對都算「不是加密設定檔」），再比對 format 與 version
@@ -102,11 +102,11 @@ public static class SplitswanImporter
         // 解得開但內容不是預期的 JSON：Mac 版同樣歸類為「密碼錯誤或檔案損毀」
         try
         {
-            using var doc = JsonDocument.Parse(plain);
+            using var doc = ParseJson(plain);
             var root = doc.RootElement;
             if (root.ValueKind != JsonValueKind.Object) throw new SplitswanImportException(WrongPassphraseOrTampered);
             var name = RequireString(root, "name");
-            if (!root.TryGetProperty("gateways", out var g) || g.ValueKind != JsonValueKind.Array)
+            if (!TryGetFirst(root, "gateways", out var g) || g.ValueKind != JsonValueKind.Array)
                 throw new SplitswanImportException(WrongPassphraseOrTampered);
             var gws = new List<string>();
             foreach (var e in g.EnumerateArray())
@@ -116,7 +116,7 @@ public static class SplitswanImporter
             }
             var ts = RequireString(root, "remoteTS");
             string? psk = null;
-            if (root.TryGetProperty("psk", out var p) && p.ValueKind != JsonValueKind.Null)
+            if (TryGetFirst(root, "psk", out var p) && p.ValueKind != JsonValueKind.Null)
             {
                 if (p.ValueKind != JsonValueKind.String) throw new SplitswanImportException(WrongPassphraseOrTampered);
                 psk = p.GetString();
@@ -163,18 +163,43 @@ public static class SplitswanImporter
         return si.LengthInTextElements <= n ? s : si.SubstringByTextElements(0, n);
     }
 
+    /// <summary>
+    /// 解析 JSON，行為對齊 Swift JSONDecoder：開頭的 UTF-8 BOM（EF BB BF）略過不算錯
+    /// （Windows 記事本另存常會加上；Mac 版照常解得開）。
+    /// </summary>
+    private static JsonDocument ParseJson(ReadOnlyMemory<byte> data)
+    {
+        ReadOnlySpan<byte> bom = [0xEF, 0xBB, 0xBF];
+        if (data.Span.StartsWith(bom)) data = data[bom.Length..];
+        return JsonDocument.Parse(data);
+    }
+
+    /// <summary>
+    /// 取物件的欄位；同一個 key 出現多次時取**第一個**，與 Swift JSONDecoder 相同
+    /// （JsonElement.TryGetProperty 取的是最後一個）。檔頭的 AAD 用的是這裡取到的值，兩版判定才會一致。
+    /// </summary>
+    private static bool TryGetFirst(JsonElement o, string name, out JsonElement value)
+    {
+        foreach (var prop in o.EnumerateObject())
+        {
+            if (prop.NameEquals(name)) { value = prop.Value; return true; }
+        }
+        value = default;
+        return false;
+    }
+
     private static string RequireString(JsonElement o, string name) =>
-        o.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
+        TryGetFirst(o, name, out var v) && v.ValueKind == JsonValueKind.String
             ? v.GetString()!
             : throw new SplitswanImportException(NotEncryptedFile);
 
     private static long RequireInt(JsonElement o, string name) =>
-        o.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var x)
+        TryGetFirst(o, name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var x)
             ? x
             : throw new SplitswanImportException(NotEncryptedFile);
 
     private static uint RequireUInt32(JsonElement o, string name) =>
-        o.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetUInt32(out var x)
+        TryGetFirst(o, name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetUInt32(out var x)
             ? x
             : throw new SplitswanImportException(NotEncryptedFile);
 

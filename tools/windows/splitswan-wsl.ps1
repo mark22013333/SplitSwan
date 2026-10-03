@@ -8,7 +8,10 @@ SplitSwan Windows 實驗版：用 WSL2 裡的 Linux strongSwan 連 FortiGate（s
   .\splitswan-wsl.ps1 -Action brief      ← 給托盤 App 輪詢：不提權、不啟動 WSL、不寫記錄檔
 
 機讀輸出（給托盤 App）：每個 Action 結束時 stdout 最後一行是 @@RESULT=ok 或 @@RESULT=fail:<原因>，
-結束碼 ok=0、fail=1。connect 成功另外輸出 @@GATEWAY=、@@VIP=；brief 輸出 @@STATE=up|down（up 時加 @@GATEWAY、@@VIP）。
+結束碼 ok=0、fail=1。connect 成功另外輸出 @@GATEWAY=、@@VIP=。
+brief 輸出 @@STATE=up|down|unknown：up 時加 @@GATEWAY、@@VIP；unknown＝查詢本身失敗或逾時（約 6 秒），
+不代表斷線，此時 @@RESULT=fail。
+-NoInstall：connect 遇到 WSL 或發行版未安裝時不啟動安裝，直接回 @@RESULT=fail:尚未安裝…（托盤 App 用）。
 
 需要的檔案（放在本腳本旁的 conf\ 資料夾，或用 -ConfDir 指定其他資料夾；從 Mac 版複製過來）：
   conf\swanctl.conf   ← Mac：/opt/homebrew/etc/swanctl/swanctl.conf
@@ -26,7 +29,8 @@ param(
     [string]$DnsServer,   # 內部 DNS，逗號分隔；省略時用 strongSwan 拿到的
     [string]$TestHost,    # 連上後測試的內部主機
     [int]$TestPort = 0,
-    [switch]$PauseAtEnd
+    [switch]$PauseAtEnd,
+    [switch]$NoInstall    # connect 遇到 WSL／發行版未安裝時不啟動安裝，直接回「尚未安裝」（托盤 App 用）
 )
 
 $ErrorActionPreference = 'Stop'
@@ -66,6 +70,7 @@ if (-not $IsBrief -and -not $principal.IsInRole([Security.Principal.WindowsBuilt
         if ($v) { $argList += @("-$name", "`"$v`"") }
     }
     if ($TestPort) { $argList += @('-TestPort', $TestPort) }
+    if ($NoInstall) { $argList += '-NoInstall' }
     try {
         Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList ($argList -join ' ')
     } catch {
@@ -77,12 +82,9 @@ if (-not $IsBrief -and -not $principal.IsInRole([Security.Principal.WindowsBuilt
     exit 1
 }
 
+# 記錄檔在主程式的 try 裡才開始，開不成也會走到 finally 輸出 @@RESULT
 $LogFile = $null
-if (-not $IsBrief) {
-    New-Item -ItemType Directory -Force -Path (Join-Path $DataDir 'logs') | Out-Null
-    $LogFile = Join-Path $DataDir ("logs\{0}-{1:yyyyMMdd-HHmmss}.log" -f $Action, (Get-Date))
-    Start-Transcript -Path $LogFile | Out-Null
-}
+$script:Transcribing = $false
 # 動作沒有完成、但也不是例外時（例如剛開始安裝 WSL），把原因放這裡
 $script:FailReason = $null
 # connect 成功時的閘道與虛擬 IP
@@ -253,12 +255,20 @@ function Invoke-Connect {
     Write-Step "2/6 檢查 WSL 與 $Distro"
     switch (Get-WslState) {
         'nowsl' {
+            if ($NoInstall) {
+                $script:FailReason = "尚未安裝 WSL 與 $Distro，請用托盤選單「首次安裝 WSL／Ubuntu…」"
+                return
+            }
             Write-Warn2 "找不到 Store 版 WSL，開始安裝 WSL 與 $Distro。請照畫面建立 Ubuntu 帳號；要求重開機就重開，完成後再執行一次 connect。"
             & "$env:SystemRoot\System32\wsl.exe" --install -d $Distro --web-download
             $script:FailReason = "已開始安裝 WSL 與 $Distro，完成（必要時重開機）後請再連線一次"
             return
         }
         'nodistro' {
+            if ($NoInstall) {
+                $script:FailReason = "尚未安裝 $Distro，請用托盤選單「首次安裝 WSL／Ubuntu…」"
+                return
+            }
             Write-Warn2 "尚未安裝 $Distro，開始安裝。請照畫面建立 Ubuntu 帳號，完成後再執行一次 connect。"
             # 不自動 --update：WSL 太舊時第 3 步載入核心模組會失敗並提示更新
             # --web-download 從 GitHub 下載、不經 Microsoft Store（內建 Administrator 帳號用 Store 會卡住）
@@ -446,9 +456,10 @@ function Sync-BriefSh {
     }
 }
 
-# 不啟動 VM：發行版沒在跑就直接回 down；在跑才進去讀 SA。全程限時約 1.8 秒
+# 不啟動 VM：發行版沒在跑就直接回 down；在跑才進去讀 SA。全程限時約 6 秒
+# 查詢本身失敗或逾時一律丟例外，由主程式輸出 @@STATE=unknown（不代表斷線）
 function Invoke-Brief {
-    $deadline = (Get-Date).AddMilliseconds(1800)
+    $deadline = (Get-Date).AddMilliseconds(6000)
     if (-not $script:Wsl) { Write-Host '@@STATE=down'; return }
     $r = Invoke-WslQuick @('-l', '--running', '-q') ([int]($deadline - (Get-Date)).TotalMilliseconds)
     if (-not ($r.Lines | Where-Object { $_ -eq $Distro })) { Write-Host '@@STATE=down'; return }
@@ -457,6 +468,7 @@ function Invoke-Brief {
     $r = Invoke-WslQuick @('-d', $Distro, '-u', 'root', '--cd', $DataDir, '--exec', 'bash', 'splitswan-wsl.sh', 'brief') ([int]($deadline - (Get-Date)).TotalMilliseconds)
     $res = Get-Results $r.Lines
     if ($r.Code -ne 0 -or -not $res.STATE) { throw "WSL 內查詢狀態失敗（結束碼 $($r.Code)）" }
+    if ($res.STATE -eq 'unknown') { throw "WSL 內查詢狀態失敗：$($res.ERROR)" }
     Write-Host "@@STATE=$($res.STATE)"
     if ($res.STATE -eq 'up') {
         if ($res.GATEWAY) { Write-Host "@@GATEWAY=$($res.GATEWAY)" }
@@ -466,6 +478,12 @@ function Invoke-Brief {
 
 # ── 主程式 ──────────────────────────────────────────────────────────────
 try {
+    if (-not $IsBrief) {
+        New-Item -ItemType Directory -Force -Path (Join-Path $DataDir 'logs') | Out-Null
+        $LogFile = Join-Path $DataDir ("logs\{0}-{1:yyyyMMdd-HHmmss}.log" -f $Action, (Get-Date))
+        Start-Transcript -Path $LogFile | Out-Null
+        $script:Transcribing = $true
+    }
     $opt = Read-Options
     if (-not $Distro)    { $Distro = if ($opt.Distro) { $opt.Distro } else { 'Ubuntu-24.04' } }
     if (-not $Domain)    { $Domain = $opt.Domain }
@@ -483,14 +501,15 @@ try {
 } catch {
     if (-not $script:FailReason) { $script:FailReason = $_.Exception.Message }
     if ($IsBrief) {
-        Write-Host '@@STATE=down'
+        # 查不到不等於斷線：托盤遇到 unknown 會沿用上一次狀態
+        Write-Host '@@STATE=unknown'
     } else {
         Write-Host "`n失敗：$($_.Exception.Message)" -ForegroundColor Red
         Write-Host "位置：$($_.InvocationInfo.PositionMessage)" -ForegroundColor DarkGray
     }
 } finally {
-    if ($LogFile) {
-        Stop-Transcript | Out-Null
+    if ($script:Transcribing) {
+        try { Stop-Transcript | Out-Null } catch { Write-Host "停止記錄檔時發生錯誤：$($_.Exception.Message)" }
         Write-Host "`n記錄檔：$LogFile（含內部位址，分享前請遮蔽）" -ForegroundColor DarkGray
     }
     # 機讀結果放在記錄檔路徑之後，確保是 stdout 最後一行（PauseAtEnd 的提示只給雙擊 .cmd 的人看）

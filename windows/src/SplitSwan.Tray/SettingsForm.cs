@@ -31,13 +31,19 @@ internal sealed class SettingsForm : Form
         AutoSize = true, MaximumSize = new Size(460, 0), ForeColor = Color.FromArgb(0xC0, 0x1C, 0x28),
     };
     private readonly bool _importOnShow;
+    private readonly Func<bool> _currentAutoReconnect;
+    private readonly Button _importBtn = new() { Text = "匯入 .splitswan…", AutoSize = true };
+    private readonly Button _saveBtn = new() { Text = "儲存", AutoSize = true };
+    private bool _importing;
 
     /// <summary>按下儲存並寫入成功後的設定；取消為 null。</summary>
     public StoredSettings? Saved { get; private set; }
 
-    public SettingsForm(StoredSettings current, bool importOnShow = false)
+    /// <param name="currentAutoReconnect">儲存時取「自動重連」的最新值（視窗開著時可能從托盤切換過）。</param>
+    public SettingsForm(StoredSettings current, Func<bool> currentAutoReconnect, bool importOnShow = false)
     {
         _original = current;
+        _currentAutoReconnect = currentAutoReconnect;
         _importOnShow = importOnShow;
 
         Text = "SplitSwan 設定";
@@ -64,10 +70,9 @@ internal sealed class SettingsForm : Form
             grid.Controls.Add(p);
         }
 
-        var importBtn = new Button { Text = "匯入 .splitswan…", AutoSize = true };
-        importBtn.Click += async (_, _) => await ImportAsync();
+        _importBtn.Click += (_, _) => StartImport();
         grid.Controls.Add(new Label());
-        grid.Controls.Add(importBtn);
+        grid.Controls.Add(_importBtn);
         grid.Controls.Add(new Label());
         grid.Controls.Add(_importNote);
 
@@ -90,9 +95,11 @@ internal sealed class SettingsForm : Form
         };
 
         var buttons = new FlowLayoutPanel { FlowDirection = FlowDirection.RightToLeft, AutoSize = true, Dock = DockStyle.Fill };
-        var save = new Button { Text = "儲存", AutoSize = true };
-        var cancel = new Button { Text = "取消", AutoSize = true, DialogResult = DialogResult.Cancel };
+        var save = _saveBtn;
+        var cancel = new Button { Text = "取消", AutoSize = true };
         save.Click += (_, _) => OnSave();
+        // 非模態視窗（Show）時 Button.DialogResult 不會自動關閉視窗，要自己 Close；Esc 透過 CancelButton 觸發同一個 Click
+        cancel.Click += (_, _) => Close();
         buttons.Controls.AddRange([cancel, save]);
 
         var outer = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Dock = DockStyle.Fill };
@@ -109,7 +116,7 @@ internal sealed class SettingsForm : Form
         CancelButton = cancel;
 
         Fill(current);
-        Shown += async (_, _) => { if (_importOnShow) await ImportAsync(); };
+        Shown += (_, _) => { if (_importOnShow) StartImport(); };
     }
 
     private void Fill(StoredSettings s)
@@ -131,12 +138,35 @@ internal sealed class SettingsForm : Form
         SettingsInput.ParseSubnets(_subnets.Text),
         _domain.Text.Trim(),
         _dns.Text.Trim(),
-        _original.AutoReconnect);
+        _currentAutoReconnect());
+
+    /// <summary>開始匯入（已在匯入中就不重複開始）。</summary>
+    public async void StartImport()
+    {
+        if (_importing || IsDisposed) return;
+        _importing = true;
+        _importBtn.Enabled = _saveBtn.Enabled = false;
+        try
+        {
+            await ImportAsync();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"匯入時發生錯誤：{ex.GetType().Name}：{ex.Message}");
+            if (!IsDisposed) _errors.Text = $"匯入時發生錯誤：{ex.Message}";
+        }
+        finally
+        {
+            _importing = false;
+            if (!IsDisposed) _importBtn.Enabled = _saveBtn.Enabled = true;
+        }
+    }
 
     private async Task ImportAsync()
     {
         var profile = await ImportFlow.RunAsync(this);
-        if (profile is null) return;
+        // 解密期間使用者可能已關閉視窗
+        if (profile is null || IsDisposed) return;
         var merged = SettingsInput.ApplyImport(Collect(), profile);
         Fill(merged);
         var gws = string.Join("、", profile.Gateways);

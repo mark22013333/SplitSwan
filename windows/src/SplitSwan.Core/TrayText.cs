@@ -11,6 +11,8 @@ public enum TrayState
     Connected,
     /// <summary>想連線但沒連上，或上一次動作失敗</summary>
     Error,
+    /// <summary>連續查不到通道狀態（brief 失敗／逾時）；不代表斷線，沿用上次狀態</summary>
+    Unknown,
 }
 
 /// <summary>托盤 App 的文字（tooltip、狀態列、通知），純函式方便測試。</summary>
@@ -28,6 +30,10 @@ public static class TrayText
             ? DropDetector.DropBody(threshold)
             : $"VPN 中斷超過 {(int)threshold.TotalSeconds} 秒，請從托盤選單按「連線」重新連線";
 
+    /// <summary>連續查不到狀態、剛標成「狀態不明」時的通知（每段狀態不明只發一次）。</summary>
+    public const string StateUnknownTitle = "暫時查不到 VPN 狀態";
+    public const string StateUnknownBody = "暫時查不到 VPN 狀態，如果內網連不到，請按「連線」";
+
     /// <summary>狀態列（選單第一行）的文字。</summary>
     public static string StatusLine(TrayState state, string? gateway, string? vip, string? busyText, string? error)
     {
@@ -36,6 +42,7 @@ public static class TrayText
             TrayState.Connected => "已連線" + Detail(gateway, vip),
             TrayState.Busy => string.IsNullOrWhiteSpace(busyText) ? "處理中…" : busyText!,
             TrayState.Error => string.IsNullOrWhiteSpace(error) ? "未連上" : "未連上：" + OneLine(error!),
+            TrayState.Unknown => "狀態不明（暫時查不到 WSL 裡的通道狀態，不代表已斷線）",
             _ => "未連線",
         };
     }

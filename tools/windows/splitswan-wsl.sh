@@ -303,14 +303,20 @@ cmd_disconnect() {
     log "已中斷並清除 SNAT／MSS／FORWARD 規則"
 }
 
-# 每 15 秒輪詢用：只讀不寫，charon 沒在跑或 swanctl 失敗都算 down
+# 每 15 秒輪詢用：只讀不寫。swanctl 查得到結果才判斷 up／down；
+# 查不到時，charon 服務確定沒在跑才算 down，其他情況回 unknown（不代表斷線）
 cmd_brief() {
-    local sas
-    if ! sas=$(swanctl --list-sas 2>/dev/null); then
-        echo "@@STATE=down"
+    local sas unit
+    if sas=$(swanctl --list-sas 2>/dev/null); then
+        parse_brief <<< "$sas"
         return 0
     fi
-    parse_brief <<< "$sas"
+    if unit=$(unit_name) && ! systemctl is-active --quiet "$unit"; then
+        echo "@@STATE=down"
+    else
+        echo "@@STATE=unknown"
+        echo "@@ERROR=swanctl --list-sas 失敗"
+    fi
 }
 
 cmd_status() {

@@ -24,7 +24,8 @@ internal static class Program
             AppLog.Error($"未處理的例外（即將結束）：{(e.ExceptionObject as Exception)?.Message}");
 
         AppLog.Init();
-        AppLog.Info($"SplitSwan {Application.ProductVersion} 啟動");
+        // ProductVersion 可能帶「+git 版本」，記錄只留版本號
+        AppLog.Info($"SplitSwan {Application.ProductVersion.Split('+')[0]} 啟動");
 
         // 上次若在連線中途被結束（當機、重開機），secrets.conf 可能留著：一律先清掉
         if (File.Exists(AppPaths.SecretsConf))

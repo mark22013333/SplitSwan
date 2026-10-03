@@ -29,10 +29,6 @@ internal static class AppPaths
     public static string PowerShellExe { get; } =
         Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
 
-    /// <summary>Store 版 WSL 的位置（引擎同樣先找這裡）。</summary>
-    public static string StoreWslExe { get; } =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WSL", "wsl.exe");
-
     /// <summary>引擎腳本缺了哪些檔；全部都在回傳 null。</summary>
     public static string? MissingEngineFiles()
     {

@@ -6,8 +6,9 @@ using SplitSwan.Core;
 namespace SplitSwan.Tray;
 
 /// <summary>
-/// 托盤圖示：程式繪製（GDI），不放二進位素材。四種狀態用不同顏色與記號區分，
-/// 色盲使用者也能靠記號分辨：已連線＝實心圓＋勾、連線中＝圓環＋點、錯誤＝驚嘆號、未連線＝空心圓。
+/// 托盤圖示：程式繪製（GDI），不放二進位素材。五種狀態用不同顏色與記號區分，
+/// 色盲使用者也能靠記號分辨：已連線＝實心圓＋勾、連線中＝圓環＋點、錯誤＝驚嘆號、未連線＝空心圓、
+/// 狀態不明＝灰色實心圓＋三個點（查不到狀態，不代表斷線）。
 /// </summary>
 internal sealed class TrayIcons : IDisposable
 {
@@ -70,6 +71,16 @@ internal sealed class TrayIcons : IDisposable
                     using var w = new SolidBrush(Color.White);
                     var d = stroke * 1.1f;
                     g.FillEllipse(w, s / 2 - d / 2, s * 0.70f - d / 2, d, d);
+                    break;
+                }
+                case TrayState.Unknown:
+                {
+                    using var fill = new SolidBrush(Color.FromArgb(0x70, 0x70, 0x70));
+                    g.FillEllipse(fill, rect);
+                    using var w = new SolidBrush(Color.White);
+                    var d = Math.Max(2f, s * 0.14f);
+                    foreach (var cx in new[] { 0.30f, 0.50f, 0.70f })
+                        g.FillEllipse(w, s * cx - d / 2, s / 2 - d / 2, d, d);
                     break;
                 }
                 default:

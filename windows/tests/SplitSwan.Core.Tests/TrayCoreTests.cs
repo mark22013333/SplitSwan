@@ -193,6 +193,14 @@ public class TrayTextTests
     }
 
     [Fact]
+    public void StatusLine_Unknown_SaysNotDisconnected()
+    {
+        var s = TrayText.StatusLine(TrayState.Unknown, "vpn1", "198.51.100.7", null, null);
+        Assert.Contains("狀態不明", s);
+        Assert.Contains("不代表已斷線", s);
+    }
+
+    [Fact]
     public void StatusLine_ErrorIsOneLine()
     {
         var s = TrayText.StatusLine(TrayState.Error, null, null, null, "第一行\r\n第二行");
@@ -243,38 +251,72 @@ public class EngineCommandTests
     public void Timeouts()
     {
         Assert.Equal(TimeSpan.FromMinutes(5), EngineCommand.Timeout(EngineAction.Connect));
-        Assert.Equal(TimeSpan.FromSeconds(10), EngineCommand.Timeout(EngineAction.Brief));
+        Assert.Equal(TimeSpan.FromSeconds(12), EngineCommand.Timeout(EngineAction.Brief));
+        // 托盤逾時要比引擎內部的 6 秒長、又要比 15 秒的輪詢間隔短
+        Assert.True(EngineCommand.Timeout(EngineAction.Brief) > TimeSpan.FromSeconds(6));
+        Assert.True(EngineCommand.Timeout(EngineAction.Brief) < TimeSpan.FromSeconds(15));
     }
 
     [Fact]
-    public void IsInstallStarted_MatchesEngineMessages()
+    public void IsInstallNeeded_MatchesEngineMessages()
     {
-        // 引擎 splitswan-wsl.ps1 的兩種安裝訊息
-        Assert.True(EngineCommand.IsInstallStarted("已開始安裝 WSL 與 Ubuntu-24.04，完成（必要時重開機）後請再連線一次"));
-        Assert.True(EngineCommand.IsInstallStarted("已開始安裝 Ubuntu-24.04，完成後請再連線一次"));
-        Assert.False(EngineCommand.IsInstallStarted("WSL 內連線失敗（結束碼 1）"));
-        Assert.False(EngineCommand.IsInstallStarted(null));
+        // 引擎 splitswan-wsl.ps1 的兩種安裝訊息，以及 -NoInstall 時的「尚未安裝」
+        Assert.True(EngineCommand.IsInstallNeeded("已開始安裝 WSL 與 Ubuntu-24.04，完成（必要時重開機）後請再連線一次"));
+        Assert.True(EngineCommand.IsInstallNeeded("已開始安裝 Ubuntu-24.04，完成後請再連線一次"));
+        Assert.True(EngineCommand.IsInstallNeeded("尚未安裝 WSL 或 Ubuntu-24.04，請用首次安裝"));
+        Assert.False(EngineCommand.IsInstallNeeded("WSL 內連線失敗（結束碼 1）"));
+        Assert.False(EngineCommand.IsInstallNeeded(null));
     }
 
     [Fact]
-    public void IsInstallStarted_EngineScriptStillUsesThePhrase()
+    public void IsInstallNeeded_FromOutputLines_WhenNoResult()
+    {
+        // 逾時被結束、沒有 @@RESULT：靠引擎在安裝前印的進度行判斷
+        string[] lines = ["== 2/6 檢查 WSL 與 Ubuntu-24.04", "  !!  尚未安裝 Ubuntu-24.04，開始安裝。請照畫面建立 Ubuntu 帳號"];
+        Assert.True(EngineCommand.IsInstallNeeded("引擎執行 connect 超過 5 分鐘沒有回應，已中止", lines));
+        Assert.False(EngineCommand.IsInstallNeeded("逾時", ["== 4/6 連線 FortiGate"]));
+    }
+
+    [Fact]
+    public void IsInstallNeeded_EngineScriptStillUsesThePhrase()
     {
         // 這個判斷依賴引擎的訊息文字；引擎改字時這裡會先紅
         var ps1 = FindRepoFile(Path.Combine("tools", "windows", "splitswan-wsl.ps1"));
-        if (ps1 is null) return;   // 不在 repo 內執行（例如只複製了測試輸出）時略過
+        if (ps1 is null) Assert.Fail("找不到 tools/windows/splitswan-wsl.ps1：測試要在 repo 內執行（不可用 --artifacts-path 把輸出移出 repo）");
         var text = File.ReadAllText(ps1);
         Assert.Contains("已開始安裝", text);
+        Assert.Contains("開始安裝。", text);
         Assert.Contains("不是系統管理員", text);
     }
 
-    [Theory]
-    [InlineData("Ubuntu-24.04\r\ndocker-desktop\r\n", true)]
-    [InlineData("U\0b\0u\0n\0t\0u\0-\02\04\0.\00\04\0\r\0\n\0", true)]   // UTF-16 沒解碼
-    [InlineData("\uFEFFUbuntu-24.04", true)]
-    [InlineData("Ubuntu\r\n", false)]
-    [InlineData("", false)]
-    public void ListContainsDistro(string output, bool expected) =>
-        Assert.Equal(expected, EngineCommand.ListContainsDistro(output, EngineCommand.DefaultDistro));
+    [Fact]
+    public void EngineScript_SupportsNoInstall()
+    {
+        // 托盤背景 connect 一律帶 -NoInstall；引擎不認得這個參數時 PowerShell 會直接失敗，所以兩邊必須同步
+        var ps1 = FindRepoFile(Path.Combine("tools", "windows", "splitswan-wsl.ps1"));
+        if (ps1 is null) Assert.Fail("找不到 tools/windows/splitswan-wsl.ps1：測試要在 repo 內執行（不可用 --artifacts-path 把輸出移出 repo）");
+        var text = File.ReadAllText(ps1);
+        Assert.Contains("[switch]$NoInstall", text);
+        Assert.Contains("FailReason = \"尚未安裝", text);
+        // 引擎的 -NoInstall 失敗訊息要能被 IsInstallNeeded 認出來
+        Assert.True(EngineCommand.IsInstallNeeded("尚未安裝 WSL 與 Ubuntu-24.04，請用托盤選單「首次安裝 WSL／Ubuntu…」"));
+    }
+
+    [Fact]
+    public void Arguments_NoInstall_OnlyForConnect()
+    {
+        Assert.Contains("-NoInstall", EngineCommand.Arguments(EngineAction.Connect, "x.ps1", @"C:\c", noInstall: true));
+        Assert.DoesNotContain("-NoInstall", EngineCommand.Arguments(EngineAction.Brief, "x.ps1", @"C:\c", noInstall: true));
+        Assert.DoesNotContain("-NoInstall", EngineCommand.Arguments(EngineAction.Connect, "x.ps1", @"C:\c"));
+    }
+
+    [Fact]
+    public void DescribeMissingResult_IncludesExitCodeAndStderr()
+    {
+        var m = EngineCommand.DescribeMissingResult(1, ["", "  無法載入檔案 x.ps1，因為這個系統已停用指令碼執行。 ", "第二行", "第三行"]);
+        Assert.Equal("引擎沒有回傳結果（結束碼 1）：無法載入檔案 x.ps1，因為這個系統已停用指令碼執行。｜第二行", m);
+        Assert.Equal("引擎沒有回傳結果（結束碼未知）", EngineCommand.DescribeMissingResult(null, null));
+    }
 
     private static string? FindRepoFile(string relative)
     {
@@ -369,5 +411,74 @@ public class SettingsInputTests
         var cur = StoredSettings.Empty with { Psk = "keep" };
         var r = SettingsInput.ApplyImport(cur, new ImportedProfile(["198.51.100.1"], ["198.51.100.0/24"], ""));
         Assert.Equal("keep", r.Psk);
+    }
+}
+
+public class BriefTrackerTests
+{
+    private static IReadOnlyDictionary<string, string> Kv(params string[] lines) => EngineOutput.Parse(lines);
+
+    [Fact]
+    public void Classify()
+    {
+        Assert.Equal(BriefKind.Up, BriefTracker.Classify(Kv("@@STATE=up", "@@GATEWAY=vpn1", "@@RESULT=ok")));
+        Assert.Equal(BriefKind.Down, BriefTracker.Classify(Kv("@@STATE=down", "@@RESULT=ok")));
+        Assert.Equal(BriefKind.Unknown, BriefTracker.Classify(Kv("@@STATE=unknown", "@@RESULT=fail:查詢 WSL 逾時")));
+        // 舊版引擎：失敗時輸出 down＋fail → 仍當成查不到
+        Assert.Equal(BriefKind.Unknown, BriefTracker.Classify(Kv("@@STATE=down", "@@RESULT=fail:查詢 WSL 逾時")));
+        Assert.Equal(BriefKind.Unknown, BriefTracker.Classify(Kv("@@RESULT=ok")));
+        Assert.Equal(BriefKind.Unknown, BriefTracker.Classify(Kv()));
+        Assert.Equal(BriefKind.Unknown, BriefTracker.Classify(Kv("@@STATE=up", "@@RESULT=ok"), timedOut: true));
+    }
+
+    [Fact]
+    public void Unknown_NeverBecomesDown_OnlyMarksStateUnknown()
+    {
+        var t = new BriefTracker();
+        Assert.False(t.Observe(BriefKind.Unknown));
+        Assert.False(t.Observe(BriefKind.Unknown));
+        Assert.False(t.IsStateUnknown);
+        Assert.True(t.Observe(BriefKind.Unknown));    // 第 3 次：剛達上限，回 true 一次
+        Assert.True(t.IsStateUnknown);
+        for (int i = 0; i < 20; i++) Assert.False(t.Observe(BriefKind.Unknown));   // 之後不再重複回報
+        Assert.True(t.IsStateUnknown);
+        Assert.Equal(23, t.ConsecutiveUnknown);
+        // Observe 沒有任何回傳 Down 的路徑：查不到多少次都不算斷線
+    }
+
+    [Fact]
+    public void StateUnknownNotice_OncePerEpisode()
+    {
+        // 托盤在 Observe 回 true 時發通知：同一段狀態不明只通知一次，確定結果之後的新一段再通知一次
+        var t = new BriefTracker();
+        var notices = 0;
+        void Feed(BriefKind k) { if (t.Observe(k)) notices++; }
+        for (int i = 0; i < 50; i++) Feed(BriefKind.Unknown);
+        Assert.Equal(1, notices);
+        Feed(BriefKind.Up);
+        for (int i = 0; i < 2; i++) Feed(BriefKind.Unknown);
+        Assert.Equal(1, notices);            // 新一段還沒滿 3 次
+        for (int i = 0; i < 10; i++) Feed(BriefKind.Unknown);
+        Assert.Equal(2, notices);
+        Assert.Contains("請按「連線」", TrayText.StateUnknownBody);
+    }
+
+    [Fact]
+    public void DefiniteResult_ResetsCount()
+    {
+        var t = new BriefTracker();
+        t.Observe(BriefKind.Unknown);
+        t.Observe(BriefKind.Unknown);
+        t.Observe(BriefKind.Unknown);
+        Assert.True(t.IsStateUnknown);
+        Assert.False(t.Observe(BriefKind.Down));
+        Assert.Equal(0, t.ConsecutiveUnknown);
+        Assert.False(t.IsStateUnknown);
+        t.Observe(BriefKind.Unknown);
+        t.Reset();
+        Assert.Equal(0, t.ConsecutiveUnknown);
+        Assert.False(t.Observe(BriefKind.Unknown));
+        Assert.False(t.Observe(BriefKind.Unknown));
+        Assert.True(t.Observe(BriefKind.Unknown));     // Reset 後重新數到 3 才會再回報
     }
 }

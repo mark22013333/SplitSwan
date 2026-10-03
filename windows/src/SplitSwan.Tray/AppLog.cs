@@ -70,7 +70,8 @@ internal static class AppLog
             try { _writer?.WriteLine(line); }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException) { _writer = null; }
         }
-        try { LineAdded?.Invoke(line); } catch (InvalidOperationException) { /* 視窗已關閉 */ }
+        // 這裡常在背景執行緒（引擎輸出回呼）上，例外沒人接會直接結束 App，所以全部攔下
+        try { LineAdded?.Invoke(line); } catch (Exception) { /* 視窗已關閉或更新失敗，不影響記錄 */ }
     }
 
     private static void AddRecent(string line)

@@ -25,10 +25,9 @@ internal sealed class TrayContext : ApplicationContext
 
     public TrayContext(SettingsLoadResult loaded)
     {
-        _vpn = new VpnCoordinator(loaded.Settings, AskInstall);
+        _vpn = new VpnCoordinator(loaded.Settings, AskOpenInstaller);
         _vpn.Changed += Redraw;
-        _vpn.Notify += (title, body, isError) =>
-            _icon?.ShowBalloonTip(8000, title, body, isError ? ToolTipIcon.Warning : ToolTipIcon.Info);
+        _vpn.Notify += (title, body, isError) => Balloon(title, body, isError);
 
         _connect.Click += (_, _) => _vpn.Connect();
         _disconnect.Click += (_, _) => _vpn.Disconnect();
@@ -62,10 +61,10 @@ internal sealed class TrayContext : ApplicationContext
         foreach (var w in loaded.Warnings)
         {
             AppLog.Info("設定檔提示：" + w);
-            _icon.ShowBalloonTip(8000, "SplitSwan 設定", w, ToolTipIcon.Warning);
+            Balloon("SplitSwan 設定", w, true);
         }
         if (SettingsValidator.Validate(loaded.Settings.ToVpnSettings()).Count > 0)
-            _icon.ShowBalloonTip(8000, "SplitSwan", "尚未設定：請在托盤圖示按右鍵 →「設定…」或「匯入 .splitswan…」", ToolTipIcon.Info);
+            Balloon("SplitSwan", "尚未設定：請在托盤圖示按右鍵 →「設定…」或「匯入 .splitswan…」", false);
 
         _vpn.Start();
     }
@@ -95,18 +94,21 @@ internal sealed class TrayContext : ApplicationContext
         _auto.Checked = _vpn.Settings.AutoReconnect;
     }
 
-    private InstallChoice AskInstall(string reason)
+    /// <summary>通知：ShowBalloonTip 遇到空標題或空內文會丟例外，先補上預設文字。</summary>
+    private void Balloon(string title, string body, bool isError)
+    {
+        if (string.IsNullOrWhiteSpace(title)) title = AppPaths.AppName;
+        if (string.IsNullOrWhiteSpace(body)) body = isError ? "發生錯誤，詳細內容請看「顯示引擎輸出」" : "（沒有內容）";
+        _icon?.ShowBalloonTip(8000, title, body, isError ? ToolTipIcon.Warning : ToolTipIcon.Info);
+    }
+
+    private bool AskOpenInstaller(string reason)
     {
         var r = MessageBox.Show(
             $"{reason}。\n\n第一次使用要在可見的視窗安裝 WSL 與 Ubuntu（要建立 Ubuntu 帳號，可能要重開機）。\n\n" +
-            "按「是」開啟首次安裝視窗；按「否」仍在背景嘗試連線；按「取消」不連線。",
-            "SplitSwan － 需要首次安裝", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
-        return r switch
-        {
-            DialogResult.Yes => InstallChoice.OpenInstaller,
-            DialogResult.No => InstallChoice.ContinueHidden,
-            _ => InstallChoice.Cancel,
-        };
+            "要現在開啟首次安裝視窗嗎？",
+            "SplitSwan － 需要首次安裝", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        return r == DialogResult.Yes;
     }
 
     private void FirstInstall()
@@ -129,9 +131,11 @@ internal sealed class TrayContext : ApplicationContext
         if (_settingsForm is { IsDisposed: false })
         {
             _settingsForm.Activate();
+            if (importOnShow) _settingsForm.StartImport();
             return;
         }
-        _settingsForm = new SettingsForm(_vpn.Settings, importOnShow);
+        // 自動重連取最新值：設定視窗開著時也可能從托盤切換
+        _settingsForm = new SettingsForm(_vpn.Settings, () => _vpn.Settings.AutoReconnect, importOnShow);
         _settingsForm.FormClosed += (_, _) =>
         {
             if (_settingsForm?.Saved is { } saved) _vpn.UpdateSettings(saved);
@@ -179,7 +183,8 @@ internal sealed class TrayContext : ApplicationContext
                 "SplitSwan", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
-        if (_vpn.State == TrayState.Connected)
+        // 狀態不明時沿用上次結果：上次是已連線，通道很可能還在，一樣要確認
+        if (_vpn.State == TrayState.Connected || _vpn.IsUp)
         {
             var r = MessageBox.Show("結束 SplitSwan 不會中斷 VPN，通道會繼續保留（跟 Mac 版一樣）。\n要中斷請先按「斷線」。\n\n確定要結束嗎？",
                 "SplitSwan", MessageBoxButtons.OKCancel, MessageBoxIcon.Question);

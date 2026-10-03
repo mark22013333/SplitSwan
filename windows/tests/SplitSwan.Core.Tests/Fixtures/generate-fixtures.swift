@@ -95,4 +95,34 @@ try! ConfigExport.encrypt(p3, passphrase: "correct horse").write(to: URL(fileURL
 // 自我驗證：Swift 能解回去
 print((try? ConfigExport.decrypt(Data(contentsOf: URL(fileURLWithPath: out + "/demo.splitswan")), passphrase: "correct horse")) == p1 ? "demo 回解 OK" : "demo 回解失敗")
 print((try? ConfigExport.decrypt(Data(contentsOf: URL(fileURLWithPath: out + "/nopsk-nfc.splitswan")), passphrase: "cafe\u{301}-pass")) == p2 ? "nopsk NFD 回解 OK" : "nopsk 回解失敗")
+
+// 4. 第二輪相容性（審查 L1～L3）：記錄 Swift 的實際行為，C# 測試照這份期望值比對
+var compat = "["
+func compatRow(_ name: String, _ result: String) {
+    compat += (compat == "[" ? "\n" : ",\n") + "{\"name\":\(esc(name)),\"swift\":\(esc(result))}"
+}
+// L1：CharacterSet.whitespaces 會修剪 U+200B（零寬空白）
+compatRow("trim-zwsp", "\u{200B}a\u{200B}b\u{200B} \u{200B}".trimmingCharacters(in: .whitespaces))
+var zs = VPNSettings(); zs.username = "\u{200B}alice\u{200B}"; zs.gateways = ["\u{200B}203.0.113.10", "", ""]; zs.remoteTS = "\u{200B}192.0.2.0/24\u{200B}"
+do { try ConfigStore.validate(ConfigStore.normalized(zs)); compatRow("validate-zwsp", "ok") } catch { compatRow("validate-zwsp", error.localizedDescription) }
+write("render-zwsp.conf", ConfigStore.renderConf(ConfigStore.normalized(zs)))
+// L2、L3：由 demo.splitswan 衍生的檔案，記錄 Swift 解不解得開
+let demoData = try! Data(contentsOf: URL(fileURLWithPath: out + "/demo.splitswan"))
+let demoText = String(data: demoData, encoding: .utf8)!
+let fmt = "\"format\" : \"splitswan-config\","
+precondition(demoText.contains(fmt))
+let derived: [(String, Data)] = [
+    ("bom.splitswan", Data([0xEF, 0xBB, 0xBF]) + demoData),
+    ("dupkey-first-valid.splitswan", Data(demoText.replacingOccurrences(of: fmt, with: fmt + " \"format\" : \"other\",").utf8)),
+    ("dupkey-first-invalid.splitswan", Data(demoText.replacingOccurrences(of: fmt, with: "\"format\" : \"other\", " + fmt).utf8)),
+]
+for (name, data) in derived {
+    try! data.write(to: URL(fileURLWithPath: out + "/" + name))
+    do { let p = try ConfigExport.decrypt(data, passphrase: "correct horse"); compatRow(name, "ok:" + (p.psk ?? "")) }
+    catch { compatRow(name, error.localizedDescription) }
+}
+// L3 的解密後內容：JSONDecoder 遇重複 key 取第一個
+struct DupProbe: Codable { var name: String }
+compatRow("payload-dupkey", (try? JSONDecoder().decode(DupProbe.self, from: Data(#"{"name":"first","name":"second"}"#.utf8)))?.name ?? "error")
+write("compat-cases.json", compat + "\n]\n")
 print("完成")
