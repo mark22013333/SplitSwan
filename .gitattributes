@@ -1,0 +1,5 @@
+# Windows 實驗版腳本：原樣保存換行與 BOM（PowerShell 5.1 與 cmd 需要 CRLF；bash 需要 LF）
+tools/windows/*.ps1 -text
+tools/windows/*.cmd -text
+tools/windows/*.ini -text
+tools/windows/*.sh text eol=lf
