@@ -221,7 +221,9 @@ function Invoke-Connect {
         }
         'nodistro' {
             Write-Warn2 "尚未安裝 $Distro，開始安裝。請照畫面建立 Ubuntu 帳號，完成後再執行一次 connect。"
-            Invoke-Wsl -Argv @('--update') | Out-Null
+            # 不經過 Invoke-Wsl：管線會吞掉進度條，畫面看起來像卡住
+            Write-Host '  更新 WSL（會顯示下載進度）…'
+            & $script:Wsl --update
             & $script:Wsl --install -d $Distro
             return
         }
