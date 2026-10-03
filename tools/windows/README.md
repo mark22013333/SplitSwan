@@ -32,6 +32,19 @@ Windows ──路由──▶ WSL2 Ubuntu（轉發＋SNAT 成虛擬 IP）──�
 
 每次執行都會跳出 UAC 提權視窗，記錄檔寫在 `%LOCALAPPDATA%\SplitSwan-WSL\logs\`。記錄檔裡有內部位址，分享前請先遮蔽。
 
+## 給開發者：命令列介面（托盤 App 用）
+
+```
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File splitswan-wsl.ps1 -Action <connect|disconnect|status|brief> [-ConfDir <路徑>] [-Distro <名稱>] [-Domain <a,b>] [-DnsServer <a,b>]
+```
+
+- `-ConfDir`：設定檔資料夾（`swanctl.conf`、`secrets.conf`、選用的 `options.ini`），省略時用腳本旁的 `conf\`。相對路徑以目前目錄為準。
+- 每個 Action 結束時，stdout 最後一行一定是 `@@RESULT=ok` 或 `@@RESULT=fail:<原因>`，結束碼 ok=0、fail=1。其他行是給人看的進度。
+- `connect` 成功時，在 `@@RESULT` 前多輸出 `@@GATEWAY=vpnN`、`@@VIP=<虛擬 IP>`。
+- `brief`：輪詢用，**不提權、不寫記錄檔、不啟動 WSL**。發行版沒在跑就直接回 `@@STATE=down`；在跑才進去讀 `swanctl --list-sas`，有 ESTABLISHED 的 IKE_SA 且 child `corp` 為 INSTALLED 才算 `@@STATE=up`（並輸出 `@@GATEWAY`、`@@VIP`）。對 WSL 的查詢限時約 1.8 秒，逾時回 `@@RESULT=fail`。
+- 不是系統管理員時，`connect`／`disconnect`／`status` 會另開 UAC 提權視窗執行，原本的程序回 `@@RESULT=fail`。托盤 App 應以系統管理員身分執行。
+- `setup` 會寫入 WSL 內的 `/etc/strongswan.d/zz-splitswan-swanctl.conf`，讓 `swanctl` 只載入已安裝的外掛（Ubuntu 沒裝 `libstrongswan-extra-plugins` 時，`swanctl` 預設會每次印一串 `failed to load`）。只影響 `swanctl` 指令，不影響 charon。
+
 **睡眠喚醒、換網路或重開機後**：先執行 `disconnect.cmd`，再執行 `connect.cmd`。WSL 的 IP 每次啟動都會變，路由也不會保留（只存在記憶體中）。
 
 ## 已知限制與待驗證

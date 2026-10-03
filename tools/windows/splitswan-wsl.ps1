@@ -5,8 +5,12 @@ SplitSwan Windows 實驗版：用 WSL2 裡的 Linux strongSwan 連 FortiGate（s
   .\splitswan-wsl.ps1 -Action connect
   .\splitswan-wsl.ps1 -Action disconnect
   .\splitswan-wsl.ps1 -Action status
+  .\splitswan-wsl.ps1 -Action brief      ← 給托盤 App 輪詢：不提權、不啟動 WSL、不寫記錄檔
 
-需要的檔案（放在本腳本旁的 conf\ 資料夾，從 Mac 版複製過來）：
+機讀輸出（給托盤 App）：每個 Action 結束時 stdout 最後一行是 @@RESULT=ok 或 @@RESULT=fail:<原因>，
+結束碼 ok=0、fail=1。connect 成功另外輸出 @@GATEWAY=、@@VIP=；brief 輸出 @@STATE=up|down（up 時加 @@GATEWAY、@@VIP）。
+
+需要的檔案（放在本腳本旁的 conf\ 資料夾，或用 -ConfDir 指定其他資料夾；從 Mac 版複製過來）：
   conf\swanctl.conf   ← Mac：/opt/homebrew/etc/swanctl/swanctl.conf
   conf\secrets.conf   ← Mac：/opt/homebrew/etc/swanctl/conf.d/secrets.conf
   conf\options.ini    ← 選用，格式見 options.example.ini
@@ -14,8 +18,9 @@ SplitSwan Windows 實驗版：用 WSL2 裡的 Linux strongSwan 連 FortiGate（s
 限制：只支援 WSL 預設的 NAT 網路模式；睡眠喚醒或換網路後請手動 disconnect 再 connect。
 #>
 param(
-    [ValidateSet('connect', 'disconnect', 'status')]
+    [ValidateSet('connect', 'disconnect', 'status', 'brief')]
     [string]$Action = 'connect',
+    [string]$ConfDir,     # 設定檔資料夾；省略時用本腳本旁的 conf\
     [string]$Distro,
     [string]$Domain,      # 內部網域，逗號分隔，例如 corp.example,ad.corp.example
     [string]$DnsServer,   # 內部 DNS，逗號分隔；省略時用 strongSwan 拿到的
@@ -30,26 +35,58 @@ $OutputEncoding = New-Object Text.UTF8Encoding $false
 $env:WSL_UTF8 = '1'
 
 $NrptComment = 'SplitSwan-WSL'
-$ConfDir = Join-Path $PSScriptRoot 'conf'
+if ($ConfDir) {
+    # 提權重開後工作目錄會變，先轉成絕對路徑；去掉結尾的 \，免得傳參數時跳脫掉結尾的引號
+    if (-not [IO.Path]::IsPathRooted($ConfDir)) { $ConfDir = Join-Path (Get-Location).ProviderPath $ConfDir }
+    if ($ConfDir.Length -gt 3) { $ConfDir = $ConfDir.TrimEnd('\', '/') }
+} else {
+    $ConfDir = Join-Path $PSScriptRoot 'conf'
+}
 $DataDir = Join-Path $env:LOCALAPPDATA 'SplitSwan-WSL'
 $StateFile = Join-Path $DataDir 'state.json'
 
+# 機讀結果行：stdout 最後一行，原因只留一行
+function Write-ResultLine([string]$failReason) {
+    if ($failReason) {
+        Write-Host ('@@RESULT=fail:' + (($failReason -replace '[\r\n]+', ' ').Trim()))
+    } else {
+        Write-Host '@@RESULT=ok'
+    }
+}
+
+# brief 每 15 秒輪詢一次：不提權、不寫記錄檔（其餘 Action 照舊）
+$IsBrief = ($Action -eq 'brief')
+
 # ── 提權：不是系統管理員就用 UAC 重新啟動自己 ─────────────────────────
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+if (-not $IsBrief -and -not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-Action', $Action, '-PauseAtEnd')
-    foreach ($name in 'Distro', 'Domain', 'DnsServer', 'TestHost') {
+    foreach ($name in 'ConfDir', 'Distro', 'Domain', 'DnsServer', 'TestHost') {
         $v = Get-Variable -Name $name -ValueOnly
         if ($v) { $argList += @("-$name", "`"$v`"") }
     }
     if ($TestPort) { $argList += @('-TestPort', $TestPort) }
-    Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList ($argList -join ' ')
-    exit
+    try {
+        Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList ($argList -join ' ')
+    } catch {
+        Write-ResultLine "無法以系統管理員身分重新啟動：$($_.Exception.Message)"
+        exit 1
+    }
+    # 動作在提權後的新視窗裡執行，這個程序本身沒有完成動作
+    Write-ResultLine '目前不是系統管理員，已另開提權視窗執行'
+    exit 1
 }
 
-New-Item -ItemType Directory -Force -Path (Join-Path $DataDir 'logs') | Out-Null
-$LogFile = Join-Path $DataDir ("logs\{0}-{1:yyyyMMdd-HHmmss}.log" -f $Action, (Get-Date))
-Start-Transcript -Path $LogFile | Out-Null
+$LogFile = $null
+if (-not $IsBrief) {
+    New-Item -ItemType Directory -Force -Path (Join-Path $DataDir 'logs') | Out-Null
+    $LogFile = Join-Path $DataDir ("logs\{0}-{1:yyyyMMdd-HHmmss}.log" -f $Action, (Get-Date))
+    Start-Transcript -Path $LogFile | Out-Null
+}
+# 動作沒有完成、但也不是例外時（例如剛開始安裝 WSL），把原因放這裡
+$script:FailReason = $null
+# connect 成功時的閘道與虛擬 IP
+$script:ConnectResult = $null
 
 function Write-Step([string]$msg) { Write-Host "`n== $msg" -ForegroundColor Cyan }
 function Write-Ok([string]$msg)   { Write-Host "  OK  $msg" -ForegroundColor Green }
@@ -70,13 +107,14 @@ function Read-Options {
 }
 
 # 執行 wsl.exe，即時顯示輸出（@@ 開頭的機讀行不顯示），回傳結束碼與所有行
+# stdin 餵空管線：stdin 是主控台時 wsl.exe 會配 pty 並改主控台模式，期間印出的行不回行首（階梯狀）
 function Invoke-Wsl {
     param([string[]]$Argv, [switch]$Quiet)
     $lines = New-Object System.Collections.Generic.List[string]
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        & $script:Wsl @Argv 2>&1 | ForEach-Object {
+        @() | & $script:Wsl @Argv 2>&1 | ForEach-Object {
             $l = ("$_") -replace "`0", ''
             $lines.Add($l)
             if (-not $Quiet -and -not $l.StartsWith('@@')) { Write-Host "  $l" }
@@ -217,6 +255,7 @@ function Invoke-Connect {
         'nowsl' {
             Write-Warn2 "找不到 Store 版 WSL，開始安裝 WSL 與 $Distro。請照畫面建立 Ubuntu 帳號；要求重開機就重開，完成後再執行一次 connect。"
             & "$env:SystemRoot\System32\wsl.exe" --install -d $Distro --web-download
+            $script:FailReason = "已開始安裝 WSL 與 $Distro，完成（必要時重開機）後請再連線一次"
             return
         }
         'nodistro' {
@@ -224,6 +263,7 @@ function Invoke-Connect {
             # 不自動 --update：WSL 太舊時第 3 步載入核心模組會失敗並提示更新
             # --web-download 從 GitHub 下載、不經 Microsoft Store（內建 Administrator 帳號用 Store 會卡住）
             & $script:Wsl --install -d $Distro --web-download
+            $script:FailReason = "已開始安裝 $Distro，完成後請再連線一次"
             return
         }
         'wsl1' {
@@ -324,6 +364,7 @@ function Invoke-ConnectSteps($state) {
         Test-NetConnection -ComputerName $TestHost -Port $port | Format-List ComputerName, RemoteAddress, TcpTestSucceeded, InterfaceAlias
     }
 
+    $script:ConnectResult = $res
     Write-Host "`n已連線。斷線請執行 disconnect.cmd。" -ForegroundColor Green
 }
 
@@ -364,6 +405,65 @@ function Invoke-Status {
     }
 }
 
+# ── 輪詢狀態（brief）──────────────────────────────────────────────────
+# 限時執行 wsl.exe，不經主控台、不顯示；逾時就結束它並丟出例外
+function Invoke-WslQuick([string[]]$Argv, [int]$TimeoutMs) {
+    if ($TimeoutMs -lt 100) { throw '查詢 WSL 逾時' }
+    $psi = New-Object Diagnostics.ProcessStartInfo
+    $psi.FileName = $script:Wsl
+    # PowerShell 5.1 的 ProcessStartInfo 沒有 ArgumentList，自己組字串（參數不含引號）
+    $psi.Arguments = (@($Argv | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }) -join ' ')
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = [Text.Encoding]::UTF8
+    $psi.StandardErrorEncoding = [Text.Encoding]::UTF8
+    $p = [Diagnostics.Process]::Start($psi)
+    $p.StandardInput.Close()
+    $out = $p.StandardOutput.ReadToEndAsync()
+    $null = $p.StandardError.ReadToEndAsync()
+    if (-not $p.WaitForExit($TimeoutMs)) {
+        try { $p.Kill() } catch { }
+        throw '查詢 WSL 逾時'
+    }
+    $p.WaitForExit()
+    # wsl -l 沒吃到 WSL_UTF8 時是 UTF-16：去掉 NUL、BOM 與解碼失敗的替代字元，名稱仍比對得到
+    $lines = @(($out.Result -replace "[`0\uFEFF\uFFFD]", '') -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    return [pscustomobject]@{ Code = $p.ExitCode; Lines = $lines }
+}
+
+# brief 用的 Linux 端腳本：內容沒變就不重寫
+function Sync-BriefSh {
+    $src = Join-Path $PSScriptRoot 'splitswan-wsl.sh'
+    if (-not (Test-Path $src)) { throw "找不到 $src" }
+    $dst = Join-Path $DataDir 'splitswan-wsl.sh'
+    $text = [IO.File]::ReadAllText($src) -replace "`r", ''
+    if (-not (Test-Path $dst) -or [IO.File]::ReadAllText($dst) -ne $text) {
+        New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
+        [IO.File]::WriteAllText($dst, $text, (New-Object Text.UTF8Encoding $false))
+    }
+}
+
+# 不啟動 VM：發行版沒在跑就直接回 down；在跑才進去讀 SA。全程限時約 1.8 秒
+function Invoke-Brief {
+    $deadline = (Get-Date).AddMilliseconds(1800)
+    if (-not $script:Wsl) { Write-Host '@@STATE=down'; return }
+    $r = Invoke-WslQuick @('-l', '--running', '-q') ([int]($deadline - (Get-Date)).TotalMilliseconds)
+    if (-not ($r.Lines | Where-Object { $_ -eq $Distro })) { Write-Host '@@STATE=down'; return }
+    Sync-BriefSh
+    # --cd 直接吃 Windows 路徑，省掉一次 wslpath
+    $r = Invoke-WslQuick @('-d', $Distro, '-u', 'root', '--cd', $DataDir, '--exec', 'bash', 'splitswan-wsl.sh', 'brief') ([int]($deadline - (Get-Date)).TotalMilliseconds)
+    $res = Get-Results $r.Lines
+    if ($r.Code -ne 0 -or -not $res.STATE) { throw "WSL 內查詢狀態失敗（結束碼 $($r.Code)）" }
+    Write-Host "@@STATE=$($res.STATE)"
+    if ($res.STATE -eq 'up') {
+        if ($res.GATEWAY) { Write-Host "@@GATEWAY=$($res.GATEWAY)" }
+        if ($res.VIP) { Write-Host "@@VIP=$($res.VIP)" }
+    }
+}
+
 # ── 主程式 ──────────────────────────────────────────────────────────────
 try {
     $opt = Read-Options
@@ -378,12 +478,27 @@ try {
         'connect'    { Invoke-Connect }
         'disconnect' { Invoke-Disconnect }
         'status'     { Invoke-Status }
+        'brief'      { Invoke-Brief }
     }
 } catch {
-    Write-Host "`n失敗：$($_.Exception.Message)" -ForegroundColor Red
-    Write-Host "位置：$($_.InvocationInfo.PositionMessage)" -ForegroundColor DarkGray
+    if (-not $script:FailReason) { $script:FailReason = $_.Exception.Message }
+    if ($IsBrief) {
+        Write-Host '@@STATE=down'
+    } else {
+        Write-Host "`n失敗：$($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "位置：$($_.InvocationInfo.PositionMessage)" -ForegroundColor DarkGray
+    }
 } finally {
-    Stop-Transcript | Out-Null
-    Write-Host "`n記錄檔：$LogFile（含內部位址，分享前請遮蔽）" -ForegroundColor DarkGray
+    if ($LogFile) {
+        Stop-Transcript | Out-Null
+        Write-Host "`n記錄檔：$LogFile（含內部位址，分享前請遮蔽）" -ForegroundColor DarkGray
+    }
+    # 機讀結果放在記錄檔路徑之後，確保是 stdout 最後一行（PauseAtEnd 的提示只給雙擊 .cmd 的人看）
+    if (-not $script:FailReason -and $script:ConnectResult) {
+        Write-Host "@@GATEWAY=$($script:ConnectResult.GATEWAY)"
+        Write-Host "@@VIP=$($script:ConnectResult.VIP)"
+    }
+    Write-ResultLine $script:FailReason
     if ($PauseAtEnd) { Read-Host '按 Enter 關閉' | Out-Null }
 }
+if ($script:FailReason) { exit 1 } else { exit 0 }

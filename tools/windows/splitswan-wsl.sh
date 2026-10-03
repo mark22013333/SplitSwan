@@ -7,16 +7,30 @@
 #   splitswan-wsl.sh connect <設定目錄>     安裝設定、依序嘗試 vpn1..N、開啟轉發與 SNAT
 #   splitswan-wsl.sh disconnect            中斷所有 SA、清掉 SNAT／MSS 規則
 #   splitswan-wsl.sh status                顯示 SA 與規則
+#   splitswan-wsl.sh brief                 只讀 SA 狀態，輸出 @@STATE／@@GATEWAY／@@VIP（不改任何狀態）
 #
 # 給 PowerShell 解析的結果一律以「@@KEY=值」單獨一行輸出。
 
 set -u
+# stderr 併入 stdout：PowerShell 只收一條管線，錯誤訊息和一般輸出的先後順序不會亂，
+# PowerShell 5.1 也不會把 stderr 每一行包成 NativeCommandError
+exec 2>&1
 
 SWANCTL_DIR=/etc/swanctl
 CHAIN=SPLITSWAN
 # eap-mschapv2 在 extauth、openssl（ecp384、MD4）在 standard，兩者平常只靠 Recommends 帶進來，明列以免漏裝
 PACKAGES=(strongswan-swanctl charon-systemd libcharon-extauth-plugins libstrongswan-standard-plugins
           libcharon-extra-plugins iptables)
+# swanctl 沒設定 swanctl.load 時，會載入編譯期的預設清單（strongSwan configure.ac 標 s 的外掛，順序照原檔）。
+# Ubuntu 把外掛拆成多個套件，沒裝的 libstrongswan-extra-plugins 那幾個每次都會印「failed to load」。
+# setup 只保留實際裝了 .so 的，寫進 swanctl.load；charon 走 load_modular，不受這個設定影響。
+SWANCTL_PLUGINS=(test-vectors unbound ldap pkcs11 aesni aes des blowfish rc2 sha2 sha3 sha1 md4 md5 mgf1
+                 rdrand random nonce x509 revocation constraints acert pubkey pkcs1 pkcs7 pkcs12 pgp dnskey
+                 sshkey pem padlock openssl wolfssl gcrypt botan pkcs8 af-alg fips-prf gmp curve25519 agent
+                 keychain chapoly xcbc cmac hmac kdf ctr ccm gcm ntru drbg newhope bliss curl files winhttp
+                 soup mysql sqlite openxpki)
+PLUGIN_DIR=/usr/lib/ipsec/plugins
+SWANCTL_LOAD_CONF=/etc/strongswan.d/zz-splitswan-swanctl.conf
 
 log()  { printf '[WSL] %s\n' "$*"; }
 fail() { printf '[WSL] 錯誤：%s\n' "$*" >&2; exit 1; }
@@ -66,6 +80,60 @@ parse_vip() {
     sed -nE 's/^[[:space:]]*local[[:space:]].*\[([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\][[:space:]]*$/\1/p' | head -n 1
 }
 
+# 把 swanctl.load 設成「預設清單中實際裝了的外掛」；找不到任何外掛就不寫，維持 swanctl 預設行為
+write_swanctl_load() {
+    local p load=()
+    for p in "${SWANCTL_PLUGINS[@]}"; do
+        [ -f "$PLUGIN_DIR/libstrongswan-$p.so" ] && load+=("$p")
+    done
+    if [ "${#load[@]}" -eq 0 ]; then
+        log "警告：$PLUGIN_DIR 裡找不到外掛，不設定 swanctl.load"
+        return 0
+    fi
+    local content
+    content=$(printf '# 由 SplitSwan 產生：只載入已安裝的外掛，避免 swanctl 每次印 failed to load\nswanctl {\n    load = %s\n}\n' "${load[*]}")
+    if [ "$(cat "$SWANCTL_LOAD_CONF" 2>/dev/null)" != "$content" ]; then
+        printf '%s\n' "$content" > "$SWANCTL_LOAD_CONF"
+        log "已設定 swanctl 只載入已安裝的外掛（${SWANCTL_LOAD_CONF}）"
+    fi
+}
+
+# 從 swanctl --list-sas 的輸出判斷狀態：第一個 ESTABLISHED 且 child corp 為 INSTALLED 的 IKE_SA 算連上
+#   vpn1: #1, ESTABLISHED, IKEv2, ...           ← IKE_SA（行首不縮排）
+#     local  'x' @ 192.0.2.5[4500] [198.51.100.7]  ← 行尾中括號內的 IPv4 是虛擬 IP（[4500] 是埠號，不含點）
+#     corp: #1, reqid 1, INSTALLED, ...          ← CHILD_SA
+parse_brief() {
+    awk '
+        function flush() {
+            if (!found && name != "" && est && child) {
+                found = 1
+                print "@@STATE=up"
+                print "@@GATEWAY=" name
+                if (vip != "") print "@@VIP=" vip
+            }
+        }
+        /^[A-Za-z0-9_.-]+: #[0-9]+, / {
+            flush()
+            name = $1; sub(/:$/, "", name)
+            est = ($3 == "ESTABLISHED,")
+            child = 0; vip = ""
+            next
+        }
+        /^  local[[:space:]]/ && vip == "" {
+            if (match($0, /\[[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\]/)) vip = substr($0, RSTART + 1, RLENGTH - 2)
+            next
+        }
+        /^  corp: #[0-9]+, / {
+            if ($0 ~ /, INSTALLED,/) child = 1
+            next
+        }
+        END {
+            flush()
+            if (!found) print "@@STATE=down"
+        }
+    '
+}
+
 cmd_setup() {
     local need_restart=0
 
@@ -110,6 +178,7 @@ cmd_setup() {
     fi
 
     unit_name >/dev/null || fail "找不到 strongSwan 的 systemd 服務"
+    write_swanctl_load
     echo "@@SETUP=ok"
 }
 
@@ -234,6 +303,16 @@ cmd_disconnect() {
     log "已中斷並清除 SNAT／MSS／FORWARD 規則"
 }
 
+# 每 15 秒輪詢用：只讀不寫，charon 沒在跑或 swanctl 失敗都算 down
+cmd_brief() {
+    local sas
+    if ! sas=$(swanctl --list-sas 2>/dev/null); then
+        echo "@@STATE=down"
+        return 0
+    fi
+    parse_brief <<< "$sas"
+}
+
 cmd_status() {
     swanctl --list-sas 2>&1 || true
     echo "--- SNAT ---"
@@ -250,5 +329,6 @@ case "${1:-}" in
     connect)    shift; cmd_connect "${1:-}" ;;
     disconnect) cmd_disconnect ;;
     status)     cmd_status ;;
+    brief)      cmd_brief ;;
     *)          fail "未知指令：${1:-（空）}" ;;
 esac
