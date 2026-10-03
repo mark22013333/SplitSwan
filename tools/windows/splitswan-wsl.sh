@@ -105,7 +105,7 @@ cmd_setup() {
     if modprobe -a xfrm_user esp4 xt_nat nft_compat 2>&1 | sed 's/^/[WSL]   /'; [ "${PIPESTATUS[0]}" -eq 0 ]; then
         log "核心模組 xfrm_user esp4 xt_nat nft_compat 已載入"
     else
-        log "警告：核心模組載入失敗，請在 Windows 執行 wsl --update 後重試；仍失敗就要改用 kernel-libipsec"
+        log "警告：核心模組載入失敗，請在 Windows 執行 wsl --update --web-download 後重試；仍失敗就要改用 kernel-libipsec"
         echo "@@MODULES=fail"
     fi
 

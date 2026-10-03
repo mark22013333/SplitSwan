@@ -11,7 +11,7 @@ Windows ──路由──▶ WSL2 Ubuntu（轉發＋SNAT 成虛擬 IP）──�
 ## 準備
 
 1. Windows 11（或 Windows 10 22H2）、BIOS 已開啟虛擬化，**目前登入的帳號本身**要有系統管理員權限。如果是標準使用者，在 UAC 輸入別人的管理員帳密，WSL 會裝到那個管理員帳號底下。
-   已經裝過 WSL 的話，先在 PowerShell 執行 `wsl --update`：需要 WSL 2.3.11 以上才有 IPsec 核心模組。
+   需要 WSL 2.3.11 以上才有 IPsec 核心模組，`wsl --version` 可以查版本。要更新時請用 `wsl --update --web-download`；用內建 Administrator 帳號時，不加 `--web-download` 會經過 Microsoft Store 而卡住。
 2. 把整個 `tools\windows` 資料夾放到 Windows 上**自己的使用者目錄底下**（例如 `%UserProfile%\SplitSwan`；放在 `C:\` 底下的共用位置，其他本機使用者也讀得到密碼檔），在裡面建立 `conf` 資料夾，從 Mac 複製兩個檔案進去：
 
    | Windows | 來源（Mac） |

@@ -216,15 +216,14 @@ function Invoke-Connect {
     switch (Get-WslState) {
         'nowsl' {
             Write-Warn2 "找不到 Store 版 WSL，開始安裝 WSL 與 $Distro。請照畫面建立 Ubuntu 帳號；要求重開機就重開，完成後再執行一次 connect。"
-            & "$env:SystemRoot\System32\wsl.exe" --install -d $Distro
+            & "$env:SystemRoot\System32\wsl.exe" --install -d $Distro --web-download
             return
         }
         'nodistro' {
             Write-Warn2 "尚未安裝 $Distro，開始安裝。請照畫面建立 Ubuntu 帳號，完成後再執行一次 connect。"
-            # 不經過 Invoke-Wsl：管線會吞掉進度條，畫面看起來像卡住
-            Write-Host '  更新 WSL（會顯示下載進度）…'
-            & $script:Wsl --update
-            & $script:Wsl --install -d $Distro
+            # 不自動 --update：WSL 太舊時第 3 步載入核心模組會失敗並提示更新
+            # --web-download 從 GitHub 下載、不經 Microsoft Store（內建 Administrator 帳號用 Store 會卡住）
+            & $script:Wsl --install -d $Distro --web-download
             return
         }
         'wsl1' {
@@ -243,7 +242,7 @@ function Invoke-Connect {
         # WSL 常回 degraded（非 0），只用來等開機完成，結果不判斷
         Invoke-Wsl -Argv @('-d', $Distro, '-u', 'root', '--exec', 'systemctl', 'is-system-running', '--wait') -Quiet | Out-Null
         $r = Invoke-Sh @('setup')
-        if ($r.Code -eq 10) { throw 'WSL 重啟後 systemd 仍未啟用。請在 Windows 執行 wsl --update 後重試' }
+        if ($r.Code -eq 10) { throw 'WSL 重啟後 systemd 仍未啟用。請在 Windows 執行 wsl --update --web-download 後重試' }
     }
     if ($r.Code -ne 0) { throw "WSL setup 失敗（結束碼 $($r.Code)）" }
     if ((Get-Results $r.Lines).MODULES -eq 'fail') { Write-Warn2 '核心模組載入失敗，連線可能在建立 CHILD SA 時失敗（見上方訊息）' }
