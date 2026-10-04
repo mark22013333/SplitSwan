@@ -27,6 +27,12 @@ public sealed record StoredSettings(
     /// </summary>
     public string Distro { get; init; } = WslDistros.SplitSwan;
 
+    /// <summary>
+    /// 狀態面板顯示完整網段清單（chips）；關閉時只顯示網段摘要一行（第四階段）。
+    /// 舊版 settings.json 沒有這欄時為關閉。
+    /// </summary>
+    public bool ShowSubnetList { get; init; }
+
     /// <summary>全新安裝的預設值：全部空白、自動重連關閉。</summary>
     public static StoredSettings Empty { get; } = new("", "", "", ["", "", ""], [], "", "", false);
 
@@ -64,6 +70,7 @@ public static class SettingsDocument
             ["iconStyle"] = s.IconStyle.ToString(),
             ["iconGreenWhenConnected"] = s.GreenWhenConnected,
             ["distro"] = s.Distro,
+            ["showSubnetList"] = s.ShowSubnetList,
         };
         return o.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
@@ -102,6 +109,8 @@ public static class SettingsDocument
             IconStyle = TrayIconCatalog.Parse(o["iconStyle"] is JsonValue sv && sv.TryGetValue<string>(out var st) ? st : null),
             GreenWhenConnected = ReadBool(o, "iconGreenWhenConnected"),
             Distro = ReadDistro(o, warnings),
+            // 第四階段新增：舊檔沒有這欄（或不是布林）→ 關閉
+            ShowSubnetList = ReadBool(o, "showSubnetList"),
         };
         return new(s, warnings);
     }

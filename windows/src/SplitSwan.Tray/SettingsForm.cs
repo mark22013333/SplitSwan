@@ -6,7 +6,7 @@ namespace SplitSwan.Tray;
 
 /// <summary>
 /// 設定視窗（視覺稿 C 的設定頁）：閘道清單（狀態點、位址、成功率條與 x/n）、帳號、密碼、PSK、內網網段（多行）、
-/// 選用的內部網域／內部 DNS、托盤圖示樣式（四種狀態預覽、已連線顯示綠色）、自動重連。
+/// 「在狀態面板顯示完整網段清單」開關、選用的內部網域／內部 DNS、托盤圖示樣式（四種狀態預覽、已連線顯示綠色）、自動重連。
 /// 按「儲存」時用 SettingsValidator 與 DnsOptions 驗證，錯誤逐條列在紅色卡片；通過才寫入 settings.json。
 /// 匯入 .splitswan 只把值填進表單，使用者看過閘道並按「儲存」才寫入。
 /// </summary>
@@ -42,6 +42,9 @@ internal sealed class SettingsForm : ThemedForm
     private bool _iconStyleEdited;
     private bool _iconGreenEdited;
     private bool _autoEdited;
+    // 同圖示選項：沒動過開關，儲存時取托盤當下的值（PanelSettings.MergeSubnetListChoice）
+    private bool _subnetListEdited;
+    private readonly ToggleSwitch _subnetList = new("在狀態面板顯示完整網段清單");
     /// <summary>程式同步開關時不算「使用者動過」。</summary>
     private bool _syncingAuto;
     private readonly ThemedComboBox _iconStyle = new() { Width = 180 };
@@ -137,6 +140,7 @@ internal sealed class SettingsForm : ThemedForm
         _show.Margin = new Padding(0, 22, 0, 0);
         Pair(Field("預設共享金鑰（PSK）", _psk), pskRow);
         Span(Field("內網網段（一行一筆）", _subnets, "格式 a.b.c.d/n（單一主機寫 /32），例：192.0.2.0/24", ContentWidth, mono: true, height: 76), 10);
+        Span(BuildSubnetListPanel(), 6);
         Pair(Field("內部網域（選填）", _domain, "逗號分隔，填了才設定 DNS 分流，例：corp.example"),
              Field("內部 DNS（選填）", _dns, "逗號分隔的 IPv4；不填用閘道給的，例：192.0.2.53"));
 
@@ -175,6 +179,7 @@ internal sealed class SettingsForm : ThemedForm
         Fill(current);
         _iconStyle.SelectedIndex = (int)current.IconStyle;
         _iconGreen.Checked = current.GreenWhenConnected;
+        _subnetList.Checked = current.ShowSubnetList;
         _auto.Checked = currentAutoReconnect();
         // 選「表單沒動過就取托盤當下的值」而不是「托盤切換時同步更新已開的表單」：
         // 後者要讓托盤反向操作表單，使用者正在表單裡選的值可能被托盤蓋掉；前者只在儲存時合併，兩邊互不干擾。
@@ -182,6 +187,7 @@ internal sealed class SettingsForm : ThemedForm
         _iconStyle.SelectedIndexChanged += (_, _) => { _iconStyleEdited = true; UpdatePreviews(); };
         _iconGreen.CheckedChanged += (_, _) => { _iconGreenEdited = true; UpdatePreviews(); };
         _auto.CheckedChanged += (_, _) => { if (!_syncingAuto) _autoEdited = true; };
+        _subnetList.CheckedChanged += (_, _) => _subnetListEdited = true;
         // 視窗開著時可能從托盤切換過自動重連：重新取得焦點時，若使用者沒動過開關，就同步顯示托盤的值
         Activated += (_, _) => SyncAutoFromTray();
         foreach (var t in _gw) t.TextChanged += (_, _) => UpdateGatewayRows();
@@ -304,6 +310,16 @@ internal sealed class SettingsForm : ThemedForm
         return panel;
     }
 
+    private Control BuildSubnetListPanel()
+    {
+        _subnetList.AccessibleName = "在狀態面板顯示完整網段清單";
+        var panel = UiLayout.Table(1);
+        panel.Controls.Add(_subnetList, 0, 0);
+        panel.Controls.Add(new ThemedLabel("關閉時狀態面板只顯示網段摘要一行（例：15 個網段走 VPN）。",
+            TextRole.Muted, Theme.Ui(8.25f)) { MaximumSize = new Size(ContentWidth, 0), Margin = new Padding(44, 0, 0, 0) }, 0, 1);
+        return panel;
+    }
+
     private Control BuildAutoPanel()
     {
         var panel = UiLayout.Table(1);
@@ -368,6 +384,7 @@ internal sealed class SettingsForm : ThemedForm
     {
         IconStyle = SelectedIconStyle,
         GreenWhenConnected = _iconGreen.Checked,
+        ShowSubnetList = _subnetList.Checked,
     };
 
     /// <summary>開始匯入（已在匯入中就不重複開始）。</summary>
@@ -432,7 +449,9 @@ internal sealed class SettingsForm : ThemedForm
 
     private void OnSave()
     {
-        var s = SettingsInput.MergeIconChoice(Collect(), _latestSettings(), _iconStyleEdited, _iconGreenEdited);
+        var latest = _latestSettings();
+        var s = PanelSettings.MergeSubnetListChoice(
+            SettingsInput.MergeIconChoice(Collect(), latest, _iconStyleEdited, _iconGreenEdited), latest, _subnetListEdited);
         var errors = SettingsValidator.Validate(s.ToVpnSettings()).Concat(DnsOptions.Validate(s.Domain, s.DnsServer)).ToList();
         if (errors.Count > 0)
         {

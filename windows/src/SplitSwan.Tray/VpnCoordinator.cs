@@ -62,6 +62,10 @@ internal sealed class VpnCoordinator : IDisposable
     /// <summary>啟動後是否已拿到確定的 up／down；拿到之前不論想不想連都持續輪詢（契約 1：unknown 不算結果）。</summary>
     private bool _initialStateKnown;
     private bool _disposed;
+    // 以下三個只給狀態面板顯示，不參與任何連線判斷
+    private DateTimeOffset? _lastSureBriefAt;
+    private long? _bytesIn;
+    private long? _bytesOut;
 
     /// <summary>狀態改變（重畫圖示與選單）。</summary>
     public event Action? Changed;
@@ -109,6 +113,14 @@ internal sealed class VpnCoordinator : IDisposable
     /// 實際連線時間只會更長。
     /// </summary>
     public (DateTimeOffset Since, bool Approximate)? ConnectedSince => _isUp ? (_lastUpAt, _upSinceObserved) : null;
+    /// <summary>最後一次 brief 拿到確定結果（up／down）的時間；還沒有為 null。只給狀態面板顯示。</summary>
+    public DateTimeOffset? LastSureBriefAt => _lastSureBriefAt;
+    /// <summary>最近一次 brief 查不到狀態（unknown／失敗／逾時）。只給狀態面板顯示，不影響 State。</summary>
+    public bool BriefUnknownNow => _brief.ConsecutiveUnknown > 0;
+    /// <summary>最後一次確定為 up 時的通道收到位元組數（@@BYTESIN）；舊版引擎或取不到為 null。</summary>
+    public long? BytesIn => _bytesIn;
+    /// <summary>最後一次確定為 up 時的通道送出位元組數（@@BYTESOUT）；舊版引擎或取不到為 null。</summary>
+    public long? BytesOut => _bytesOut;
 
     public TrayState State =>
         _busy ? TrayState.Busy
@@ -543,6 +555,12 @@ internal sealed class VpnCoordinator : IDisposable
     {
         var kind = BriefTracker.Classify(r.Values, r.TimedOut);
         var now = DateTimeOffset.Now;
+        // 狀態面板用的唯讀資訊（更新時間、流量）；不參與下面任何判斷
+        if (kind != BriefKind.Unknown)
+        {
+            _lastSureBriefAt = now;
+            (_bytesIn, _bytesOut) = kind == BriefKind.Up ? TrafficBytes.From(r.Values) : ((long?)null, (long?)null);
+        }
 
         // 輪詢途中開始了引擎動作：結果只更新顯示，不餵 DropDetector、不排重連（動作結束後會再輪詢一次）
         if (_busy)

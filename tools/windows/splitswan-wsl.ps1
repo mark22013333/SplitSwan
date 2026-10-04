@@ -10,7 +10,7 @@ SplitSwan Windows 實驗版：用 WSL2 裡的 Linux strongSwan 連 FortiGate（s
 
 機讀輸出（給托盤 App）：每個 Action 結束時 stdout 最後一行是 @@RESULT=ok 或 @@RESULT=fail:<原因>，
 結束碼 ok=0、fail=1。connect 成功另外輸出 @@GATEWAY=、@@VIP=。
-brief 輸出 @@STATE=up|down|unknown：up 時加 @@GATEWAY、@@VIP；unknown＝查詢本身失敗或逾時（約 6 秒），
+brief 輸出 @@STATE=up|down|unknown：up 時加 @@GATEWAY、@@VIP，取得到通道流量時再加 @@BYTESIN、@@BYTESOUT（位元組數）；unknown＝查詢本身失敗或逾時（約 6 秒），
 不代表斷線，此時 @@RESULT=fail。
 -NoInstall：connect 遇到 WSL 或發行版未安裝時不啟動安裝，直接回 @@RESULT=fail:尚未安裝…（托盤 App 用）。
 -Distro <名稱>：WSL 發行版名稱（首字須為英數字，其餘只接受英數字與 . _ -，最多 64 字元），省略時用 options.ini 的 Distro，再沒有就是 Ubuntu-24.04。
@@ -546,6 +546,9 @@ function Invoke-Brief {
     if ($res.STATE -eq 'up') {
         if ($res.GATEWAY) { Write-Host "@@GATEWAY=$($res.GATEWAY)" }
         if ($res.VIP) { Write-Host "@@VIP=$($res.VIP)" }
+        # 通道流量：只接受純數字，取不到就不輸出（舊版 sh 沒有這兩行）
+        if ($res.BYTESIN -match '^[0-9]+$') { Write-Host "@@BYTESIN=$($res.BYTESIN)" }
+        if ($res.BYTESOUT -match '^[0-9]+$') { Write-Host "@@BYTESOUT=$($res.BYTESOUT)" }
     }
 }
 

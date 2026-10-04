@@ -8,8 +8,9 @@ namespace SplitSwan.Tray;
 /// <summary>
 /// 狀態面板（視覺稿 C）：左鍵托盤圖示彈出，再點一次或失去焦點就關。
 /// 無邊框、最上層、不出現在工作列與 Alt+Tab；Windows 11 圓角。位置由 Core 的 FlyoutPlacement 計算。
-/// 內容：狀態大字＋狀態點、虛擬 IP／已連線時間／建立耗時、走 VPN 的網段與「其他所有流量走本機網路」、
-/// 按鈕（設定／改連到…／連線或斷線）。已連線時間每秒更新，只在面板開著時計時。
+/// 內容：狀態大字＋狀態點、虛擬 IP／已連線時間／建立耗時、通道流量（已連線且引擎有回報時）、狀態更新時間、
+/// 網段摘要一行（設定勾選「顯示完整網段清單」時再加上網段 chips）與「其他所有流量走本機網路」、
+/// 按鈕（設定／改連到…／連線或斷線）。已連線時間與狀態更新時間每秒更新，只在面板開著時計時。
 /// </summary>
 internal sealed class StatusFlyout : ThemedForm
 {
@@ -25,6 +26,10 @@ internal sealed class StatusFlyout : ThemedForm
     private readonly ThemedLabel _vipValue = new("", TextRole.HeroInk, Theme.Mono(9f));
     private readonly ThemedLabel _sinceValue = new("", TextRole.HeroInk, Theme.Mono(9f));
     private readonly ThemedLabel _buildValue = new("", TextRole.HeroInk, Theme.Mono(9f));
+    private readonly ThemedLabel _traffic = new("", TextRole.HeroInk, Theme.Mono(9f));
+    private readonly ThemedLabel _fresh = new("", TextRole.HeroMuted, Theme.Ui(8.25f));
+    private readonly ThemedLabel _summary = new("", TextRole.Ink);
+    private readonly ThemedLabel _vpnLaneLabel = LaneLabel("走 VPN");
     private readonly ChipFlow _vpnLane = new();
     private readonly ChipFlow _localLane = new();
     private readonly ThemedButton _settings = new("設定");
@@ -73,17 +78,31 @@ internal sealed class StatusFlyout : ThemedForm
         AddFact(1, "已連線", _sinceValue);
         AddFact(2, "建立耗時", _buildValue);
         heroStack.Controls.Add(_facts, 0, 2);
+        _traffic.MaximumSize = new Size(PanelWidth - 32, 0);
+        _traffic.Margin = new Padding(0, 8, 0, 0);
+        _traffic.AccessibleName = "通道流量";
+        heroStack.Controls.Add(_traffic, 0, 3);
+        _fresh.MaximumSize = new Size(PanelWidth - 32, 0);
+        _fresh.Margin = new Padding(0, 6, 0, 0);
+        _fresh.AccessibleName = "狀態更新時間";
+        heroStack.Controls.Add(_fresh, 0, 4);
 
         // ── 內容：分流說明與按鈕
         var body = UiLayout.Table(1);
         body.Padding = new Padding(16, 14, 16, 14);
-        var lanes = UiLayout.Table(2, 2);
+        // 每個控制項都指定 (欄, 列)：隱藏的網段 chips 列不會讓後面的控制項往前遞補
+        var lanes = UiLayout.Table(2, 3);
         lanes.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 82));
         lanes.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, PanelWidth - 32 - 82));
-        lanes.Controls.Add(LaneLabel("走 VPN"), 0, 0);
-        lanes.Controls.Add(_vpnLane, 1, 0);
-        lanes.Controls.Add(LaneLabel("走本機網路"), 0, 1);
-        lanes.Controls.Add(_localLane, 1, 1);
+        _summary.MaximumSize = new Size(PanelWidth - 32, 0);
+        _summary.Margin = new Padding(0, 0, 0, 8);
+        _summary.AccessibleName = "走 VPN 的網段";
+        lanes.Controls.Add(_summary, 0, 0);
+        lanes.SetColumnSpan(_summary, 2);
+        lanes.Controls.Add(_vpnLaneLabel, 0, 1);
+        lanes.Controls.Add(_vpnLane, 1, 1);
+        lanes.Controls.Add(LaneLabel("走本機網路"), 0, 2);
+        lanes.Controls.Add(_localLane, 1, 2);
         _vpnLane.MaximumSize = new Size(PanelWidth - 32 - 82, 0);
         _localLane.SetChips(["其他所有流量"], ChipKind.Local, mono: false);
         body.Controls.Add(lanes, 0, 0);
@@ -290,14 +309,25 @@ internal sealed class StatusFlyout : ThemedForm
         _vipValue.Text = _vpn.Vip ?? "—";
         var gw = _vpn.ConnectedGateway;
         _buildValue.Text = gw is { } n ? StatusPanelModel.FormatSeconds(StatusPanelModel.LastSuccessSeconds(_vpn.History.Records(n))) : "—";
+        // 通道流量只在已連線且引擎有回報時顯示（舊版引擎沒有 @@BYTESIN／@@BYTESOUT）
+        var traffic = m.ShowFacts ? StatusPanelText.TrafficLine(_vpn.BytesIn, _vpn.BytesOut) : null;
+        _traffic.Text = traffic ?? "";
+        _traffic.Visible = traffic is not null;
         UpdateElapsed();
 
-        var lanes = StatusPanelModel.VpnLanes(_vpn.Settings.RemoteSubnets);
-        if (_lanesShown is null || !_lanesShown.SequenceEqual(lanes))
+        _summary.Text = StatusPanelText.SubnetSummary(_vpn.Settings.RemoteSubnets);
+        // 完整網段清單預設收起（網段多時面板會被 chips 撐得很高），設定頁勾選才顯示
+        var showList = _vpn.Settings.ShowSubnetList;
+        _vpnLaneLabel.Visible = _vpnLane.Visible = showList;
+        if (showList)
         {
-            _vpnLane.SetChips(lanes, ChipKind.Soft, mono: true, emptyText: "尚未設定內網網段");
-            _lanesShown = lanes;
-            Theme.Apply(_vpnLane);
+            var lanes = StatusPanelModel.VpnLanes(_vpn.Settings.RemoteSubnets);
+            if (_lanesShown is null || !_lanesShown.SequenceEqual(lanes))
+            {
+                _vpnLane.SetChips(lanes, ChipKind.Soft, mono: true, emptyText: "尚未設定內網網段");
+                _lanesShown = lanes;
+                Theme.Apply(_vpnLane);
+            }
         }
 
         _primary.Text = m.PrimaryText;
@@ -312,10 +342,13 @@ internal sealed class StatusFlyout : ThemedForm
     /// <summary>動作進行中的文字：StatusLine 在 Busy 時就是 busyText（TrayText.StatusLine）。</summary>
     private string? BusyText(TrayState state) => state == TrayState.Busy ? _vpn.StatusLine : null;
 
+    /// <summary>每秒更新（只在面板開著時）：已連線時間與狀態更新時間。</summary>
     private void UpdateElapsed()
     {
+        var now = DateTimeOffset.Now;
+        _fresh.Text = StatusPanelText.Freshness(_vpn.LastSureBriefAt, now, _vpn.BriefUnknownNow);
         if (_vpn.ConnectedSince is not { } c) { _sinceValue.Text = "—"; return; }
-        var text = StatusPanelModel.FormatElapsed(DateTimeOffset.Now - c.Since);
+        var text = StatusPanelModel.FormatElapsed(now - c.Since);
         _sinceValue.Text = c.Approximate ? "≥ " + text : text;
     }
 

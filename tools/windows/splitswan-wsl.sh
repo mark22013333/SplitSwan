@@ -125,6 +125,9 @@ write_swanctl_load() {
 #   vpn1: #1, ESTABLISHED, IKEv2, ...           ← IKE_SA（行首不縮排）
 #     local  'x' @ 192.0.2.5[4500] [198.51.100.7]  ← 行尾中括號內的 IPv4 是虛擬 IP（[4500] 是埠號，不含點）
 #     corp: #1, reqid 1, INSTALLED, ...          ← CHILD_SA
+#       in  c79c7313,    386 bytes,  8 packets   ← 通道流量（只取判定為 up 那個 IKE_SA 下、INSTALLED 的 corp）
+#       out 0cff9ed8,   1280 bytes, 20 packets
+# 取不到流量就不輸出 @@BYTESIN／@@BYTESOUT（不以 0 冒充）
 parse_brief() {
     awk '
         function flush() {
@@ -133,13 +136,23 @@ parse_brief() {
                 print "@@STATE=up"
                 print "@@GATEWAY=" name
                 if (vip != "") print "@@VIP=" vip
+                if (bin != "") print "@@BYTESIN=" bin
+                if (bout != "") print "@@BYTESOUT=" bout
             }
+        }
+        function bytes_of(line) {
+            if (match(line, /,[[:space:]]*[0-9]+ bytes,/)) {
+                line = substr(line, RSTART + 1, RLENGTH - 1)
+                gsub(/[^0-9]/, "", line)
+                return line
+            }
+            return ""
         }
         /^[A-Za-z0-9_.-]+: #[0-9]+, / {
             flush()
             name = $1; sub(/:$/, "", name)
             est = ($3 == "ESTABLISHED,")
-            child = 0; vip = ""
+            child = 0; vip = ""; incorp = 0; bin = ""; bout = ""
             next
         }
         /^  local[[:space:]]/ && vip == "" {
@@ -147,7 +160,21 @@ parse_brief() {
             next
         }
         /^  corp: #[0-9]+, / {
+            # 同一個 IKE_SA 可能因 rekey 有多個 corp；只取第一個 INSTALLED 的流量
+            incorp = ($0 ~ /, INSTALLED,/ && !child)
             if ($0 ~ /, INSTALLED,/) child = 1
+            next
+        }
+        /^  [A-Za-z0-9_.-]+: #[0-9]+, / {
+            incorp = 0
+            next
+        }
+        incorp && /^    in[[:space:]]/ && bin == "" {
+            bin = bytes_of($0)
+            next
+        }
+        incorp && /^    out[[:space:]]/ && bout == "" {
+            bout = bytes_of($0)
             next
         }
         END {
