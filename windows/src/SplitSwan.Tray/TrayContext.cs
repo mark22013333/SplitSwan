@@ -19,13 +19,17 @@ internal sealed class TrayContext : ApplicationContext
     private readonly ToolStripMenuItem _showLog = new("顯示引擎輸出");
     private readonly ToolStripMenuItem _openLogDir = new("開啟記錄資料夾");
     private readonly ToolStripMenuItem _auto = new("自動重連") { CheckOnClick = false };
-    private readonly ToolStripMenuItem _exit = new("結束（不中斷 VPN）");
+    private readonly ToolStripMenuItem _exit = new("斷線並結束");
+    private bool _exiting;
+    private readonly UiWatchdog _watchdog;
     private LogForm? _logForm;
     private SettingsForm? _settingsForm;
 
     public TrayContext(SettingsLoadResult loaded)
     {
         _vpn = new VpnCoordinator(loaded.Settings, AskOpenInstaller);
+        // VpnCoordinator 已確認 SynchronizationContext.Current 存在（UI 執行緒）
+        _watchdog = new UiWatchdog(SynchronizationContext.Current!);
         _vpn.Changed += Redraw;
         _vpn.Notify += (title, body, isError) => Balloon(title, body, isError);
 
@@ -175,30 +179,60 @@ internal sealed class TrayContext : ApplicationContext
         _vpn.UpdateSettings(s);
     }
 
-    private void Exit()
+    /// <summary>
+    /// 結束：先斷線（清 WSL 內的 SA、Windows 路由、NRPT、保活程序）再關閉 App，
+    /// 不把通道留在背景——App 關掉後托盤沒有圖示，使用者無從得知通道還在。
+    /// </summary>
+    private async void Exit()
     {
+        if (_exiting) return;
         if (_vpn.IsBusy)
         {
             MessageBox.Show("目前有連線／斷線動作在進行中，請等它完成再結束（中途結束可能留下一半的設定）。",
                 "SplitSwan", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
-        // 狀態不明時沿用上次結果：上次是已連線，通道很可能還在，一樣要確認
-        if (_vpn.State == TrayState.Connected || _vpn.IsUp)
+        _exiting = true;
+        try
         {
-            var r = MessageBox.Show("結束 SplitSwan 不會中斷 VPN，通道會繼續保留（跟 Mac 版一樣）。\n要中斷請先按「斷線」。\n\n確定要結束嗎？",
-                "SplitSwan", MessageBoxButtons.OKCancel, MessageBoxIcon.Question);
-            if (r != DialogResult.OK) return;
+            if (_vpn.NeedsDisconnectOnExit)
+            {
+                _menu.Enabled = false;
+                var (ok, error) = await _vpn.DisconnectForExitAsync();
+                if (!ok)
+                {
+                    var r = MessageBox.Show(
+                        $"斷線失敗：{error}\n\nVPN 通道與 Windows 路由可能還在。仍要結束 SplitSwan 嗎？\n" +
+                        "（選「否」可回到 App，從「顯示引擎輸出」查看原因後再按「斷線」）",
+                        "SplitSwan", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                    if (r != DialogResult.Yes)
+                    {
+                        _menu.Enabled = true;
+                        _exiting = false;
+                        return;
+                    }
+                    AppLog.Info("斷線失敗，使用者仍選擇結束");
+                }
+            }
+            AppLog.Info("結束 App");
+            ConfWriter.DeleteSecrets();
+            ExitThread();
         }
-        AppLog.Info("結束 App（VPN 通道保持原狀）");
-        ConfWriter.DeleteSecrets();
-        ExitThread();
+        catch (Exception ex)
+        {
+            // async void 的例外沒人接會直接結束 App，這裡攔下讓使用者知道
+            AppLog.Error($"結束時發生錯誤：{ex.GetType().Name}：{ex.Message}");
+            _menu.Enabled = true;
+            _exiting = false;
+            Balloon("結束失敗", ex.Message, true);
+        }
     }
 
     protected override void Dispose(bool disposing)
     {
         if (disposing)
         {
+            _watchdog.Dispose();
             _icon.Visible = false;
             _icon.Dispose();
             _vpn.Dispose();

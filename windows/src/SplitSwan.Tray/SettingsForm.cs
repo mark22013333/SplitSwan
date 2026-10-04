@@ -60,27 +60,27 @@ internal sealed class SettingsForm : Form
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
+        // 每個控制項都指定 (欄, 列)：TableLayoutPanel 自動排列時會跳過 Visible=false 的控制項，
+        // 隱藏的 _importNote 會讓後面全部往前遞補一格（標籤跑到右欄、輸入框錯一列）。
+        var row = 0;
         void Row(string label, Control c, string? hint = null)
         {
-            grid.Controls.Add(new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left | AnchorStyles.Top, Padding = new Padding(0, 5, 8, 0) });
-            if (hint is null) { grid.Controls.Add(c); return; }
+            grid.Controls.Add(new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left | AnchorStyles.Top, Padding = new Padding(0, 5, 8, 0) }, 0, row);
+            if (hint is null) { grid.Controls.Add(c, 1, row++); return; }
             var p = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Margin = Padding.Empty };
             p.Controls.Add(c);
             p.Controls.Add(new Label { Text = hint, AutoSize = true, MaximumSize = new Size(320, 0), ForeColor = SystemColors.GrayText });
-            grid.Controls.Add(p);
+            grid.Controls.Add(p, 1, row++);
         }
 
         _importBtn.Click += (_, _) => StartImport();
-        grid.Controls.Add(new Label());
-        grid.Controls.Add(_importBtn);
-        grid.Controls.Add(new Label());
-        grid.Controls.Add(_importNote);
+        grid.Controls.Add(_importBtn, 1, row++);
+        grid.Controls.Add(_importNote, 1, row++);
 
         Row("帳號", _user);
         Row("密碼", _password);
         Row("預設共享金鑰（PSK）", _psk);
-        grid.Controls.Add(new Label());
-        grid.Controls.Add(_show);
+        grid.Controls.Add(_show, 1, row++);
         Row("閘道 1", _gw[0], "IP 或主機名稱，例：203.0.113.10");
         Row("閘道 2（選填）", _gw[1]);
         Row("閘道 3（選填）", _gw[2]);
@@ -167,8 +167,10 @@ internal sealed class SettingsForm : Form
         var profile = await ImportFlow.RunAsync(this);
         // 解密期間使用者可能已關閉視窗
         if (profile is null || IsDisposed) return;
+        UiWatchdog.Mark("匯入：填入表單");
         var merged = SettingsInput.ApplyImport(Collect(), profile);
         Fill(merged);
+        UiWatchdog.Mark("匯入：表單已填入，顯示提示");
         var gws = string.Join("、", profile.Gateways);
         _importNote.Text =
             $"已從設定檔填入閘道（{gws}）、{profile.RemoteSubnets.Count} 筆網段" +
@@ -176,6 +178,7 @@ internal sealed class SettingsForm : Form
             "。請確認閘道是公司提供的位址，再按「儲存」；不確定就按「取消」。";
         _importNote.Visible = true;
         _errors.Text = "";
+        UiWatchdog.Mark("匯入：完成");
     }
 
     private void OnSave()

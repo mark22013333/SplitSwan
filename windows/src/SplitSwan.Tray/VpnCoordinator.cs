@@ -168,6 +168,47 @@ internal sealed class VpnCoordinator : IDisposable
     }
 
     /// <summary>
+    /// 結束 App 前要不要先斷線：只有確定沒有通道（最後一次 brief 確定 down、也不想連線）時才略過。
+    /// 狀態不明、上次是已連線、或正想連線，都當成可能有通道。
+    /// </summary>
+    public bool NeedsDisconnectOnExit => State != TrayState.Disconnected;
+
+    /// <summary>
+    /// 結束 App 前斷線：停止輪詢與重連，跑引擎 disconnect（清 WSL 內的 SA、Windows 路由、NRPT、保活程序）。
+    /// 回傳 (成功, 失敗原因)。呼叫端必須先確認 !IsBusy。
+    /// </summary>
+    public async Task<(bool Ok, string? Error)> DisconnectForExitAsync()
+    {
+        _wantConnected = false;
+        _rebuildOnRetry = false;
+        _pendingDown = false;
+        CancelRetry();
+        _drop.Reset();
+        _pollTimer.Stop();
+        await EnterBusyAsync("結束前斷線中…");
+        try
+        {
+            AppLog.Info("結束前斷線");
+            EngineResult r;
+            try { r = await EngineRunner.RunAsync(EngineAction.Disconnect); }
+            catch (Exception ex) { r = EngineResult.Failed($"執行連線引擎時發生錯誤：{ex.GetType().Name}：{ex.Message}"); }
+            if (r.Ok)
+            {
+                _isUp = false;
+                _gateway = _vip = null;
+                AppLog.Info("已斷線");
+                return (true, null);
+            }
+            AppLog.Error("結束前斷線失敗：" + (r.Error ?? "原因不明"));
+            return (false, r.Error ?? "原因不明");
+        }
+        finally
+        {
+            LeaveBusy();
+        }
+    }
+
+    /// <summary>
     /// 選單「首次安裝 WSL／Ubuntu」：在可見的 PowerShell 視窗跑 connect（wsl --install 要主控台建立 Ubuntu 帳號）。
     /// 回傳 null＝已開始；否則是不能開始的原因（給 UI 顯示）。
     /// </summary>

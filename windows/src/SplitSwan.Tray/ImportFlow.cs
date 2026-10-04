@@ -28,6 +28,7 @@ internal static class ImportFlow
             if (dlg.ShowDialog(owner) != DialogResult.OK) return null;
             path = dlg.FileName;
         }
+        UiWatchdog.Mark("匯入：已選檔");
 
         byte[] bytes;
         try
@@ -53,12 +54,16 @@ internal static class ImportFlow
 
         while (true)
         {
+            UiWatchdog.Mark("匯入：開啟密碼視窗");
             var pass = PassphraseForm.Ask(owner, Path.GetFileName(path));
+            UiWatchdog.Mark(pass is null ? "匯入：密碼視窗已關閉（取消）" : "匯入：密碼視窗已關閉（確定）");
             if (pass is null) return null;
             try
             {
                 // PBKDF2 60 萬次約需半秒，放到背景避免畫面凍結
+                UiWatchdog.Mark("匯入：開始解密");
                 var profile = await Task.Run(() => SplitswanImporter.Decrypt(bytes, pass));
+                UiWatchdog.Mark("匯入：解密完成，回到 UI 執行緒");
                 AppLog.Info($"已解開設定檔 {Path.GetFileName(path)}：{profile.Gateways.Count} 台閘道、{profile.RemoteSubnets.Count} 筆網段（尚未儲存）");
                 return profile;
             }
