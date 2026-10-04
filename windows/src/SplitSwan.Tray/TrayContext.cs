@@ -197,8 +197,11 @@ internal sealed class TrayContext : ApplicationContext
         {
             var n = i + 1;
             var item = _connectGw[i];
-            item.Visible = GatewayRecorder.IsConfigured(n, s.Gateways);
-            if (!item.Visible) continue;
+            // 不可讀回 item.Visible：它的 getter 是「父層可見 && Available」（dotnet/winforms ToolStripItem.cs），
+            // 選單沒開時一律 false，之前因此每次都 continue、文字從沒設上，選單打開時只剩三列空白
+            var configured = GatewayRecorder.IsConfigured(n, s.Gateways);
+            item.Available = configured;
+            if (!configured) continue;
             // 例：「連線 VPN2（203.0.113.2） · 上次 3.2 秒連上」（同 Mac 版選單）
             item.Text = GatewayRecorder.MenuTitle(n, s.Gateways, _vpn.History);
             item.Checked = state == TrayState.Connected && connected == n;

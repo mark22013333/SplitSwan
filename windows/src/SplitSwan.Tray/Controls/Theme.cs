@@ -196,6 +196,69 @@ internal static class Theme
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException) { }
     }
 
+    // MARK: 原生控制項的深色（uxtheme SetWindowTheme）
+
+    /// <summary>
+    /// 未公開但廣泛使用的做法：把原生控制項換成 aero.msstyles 裡的 DarkMode_* 視覺樣式類別，
+    /// 捲軸、下拉按鈕等 BackColor 管不到的部分才會變深色。淺色時換回 "Explorer"。
+    /// 依據：dotnet/winforms release/10.0 自己的深色模式就是這樣做——Control.cs:161-164 定義
+    /// DarkModeIdentifier＝"DarkMode"、ExplorerThemeIdentifier＝"Explorer"、ComboBoxButtonThemeIdentifier＝"CFD"，
+    /// Control.cs:7414 對一般控制項套 "DarkMode_Explorer"，ComboBox.cs:2351／2357 對下拉框套 "DarkMode_CFD"、
+    /// 對其下拉清單（COMBOBOXINFO.hwndList）套 "DarkMode_Explorer"。Notepad++ 的 NppDarkMode.cpp 也對
+    /// 有捲軸的 Edit／ListBox 套 "DarkMode_Explorer"。我們不用 Application.SetColorMode（它會改掉全部標準控制項），
+    /// 所以自己對需要的控制項呼叫。失敗（舊版 Windows、找不到 uxtheme）就忽略，維持原樣。
+    /// </summary>
+    [DllImport("uxtheme.dll", CharSet = CharSet.Unicode, PreserveSig = true)]
+    private static extern int SetWindowTheme(IntPtr hwnd, string? pszSubAppName, string? pszSubIdList);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect { public int Left, Top, Right, Bottom; }
+
+    /// <summary>COMBOBOXINFO（learn.microsoft.com/windows/win32/api/winuser/ns-winuser-comboboxinfo）。</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ComboBoxInfo
+    {
+        public int CbSize;
+        public NativeRect RcItem;
+        public NativeRect RcButton;
+        public int StateButton;
+        public IntPtr HwndCombo;
+        public IntPtr HwndItem;
+        public IntPtr HwndList;
+    }
+
+    [DllImport("user32.dll", PreserveSig = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetComboBoxInfo(IntPtr hwndCombo, ref ComboBoxInfo info);
+
+    /// <summary>捲軸跟著深淺色（多行 TextBox、ListBox、RichTextBox 用）。<paramref name="alwaysDark"/>：底色固定深色的控制項。</summary>
+    public static void ApplyNativeScrollbars(Control c, bool alwaysDark = false)
+    {
+        if (!c.IsHandleCreated) return;
+        TrySetWindowTheme(c.Handle, alwaysDark || Palette.IsDark ? "DarkMode_Explorer" : "Explorer");
+    }
+
+    /// <summary>下拉框本體（DarkMode_CFD）與它的下拉清單捲軸（DarkMode_Explorer）跟著深淺色。</summary>
+    public static void ApplyNativeCombo(ComboBox c)
+    {
+        if (!c.IsHandleCreated) return;
+        var dark = Palette.IsDark;
+        TrySetWindowTheme(c.Handle, dark ? "DarkMode_CFD" : "Explorer");
+        try
+        {
+            var info = new ComboBoxInfo { CbSize = Marshal.SizeOf<ComboBoxInfo>() };
+            if (GetComboBoxInfo(c.Handle, ref info) && info.HwndList != IntPtr.Zero)
+                TrySetWindowTheme(info.HwndList, dark ? "DarkMode_Explorer" : "Explorer");
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException) { }
+    }
+
+    private static void TrySetWindowTheme(IntPtr hwnd, string subAppName)
+    {
+        try { _ = SetWindowTheme(hwnd, subAppName, null); }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException) { }
+    }
+
     /// <summary>Windows 11 的圓角視窗（無邊框的狀態面板用）；Windows 10 不支援就維持直角。</summary>
     public static void ApplyRoundCorners(Form f)
     {
@@ -257,7 +320,23 @@ internal static class Theme
         g.DrawPath(pen, path);
     }
 
-    /// <summary>文字繪製的共用旗標：單行、不加前後空白、超出以省略號結尾。</summary>
+    /// <summary>文字繪製（DrawText）的共用旗標：單行、不加前後空白、超出以省略號結尾。不可拿來量測，量測用 <see cref="MeasureFlags"/>。</summary>
     public const TextFormatFlags TextFlags =
         TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
+
+    /// <summary>
+    /// 文字量測（MeasureText）的旗標：同 <see cref="TextFlags"/> 但不含任何 Ellipsis／WordBreak。
+    /// 原因：WinForms 的 TextExtensions.MeasureText 會把小於 1px 的寬度（含 Size.Empty）改成約 1px，
+    /// 再以 DT_CALCRECT 呼叫 DrawTextEx；帶 DT_END_ELLIPSIS 時回傳的是「截斷成省略號之後」的寬度，
+    /// 於是每個元件只量到「…」加一兩個字（真機上 chips 全變成「10....」、開關標籤只剩「顯...」）。
+    /// </summary>
+    public const TextFormatFlags MeasureFlags =
+        TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
+
+    /// <summary>量測時不限制寬高（int.MaxValue 時 WinForms 也會清掉 WordBreak／VCENTER）。</summary>
+    private static readonly Size Unbounded = new(int.MaxValue, int.MaxValue);
+
+    /// <summary>單行文字的完整尺寸（不截斷）。所有自繪元件的量測一律走這裡。</summary>
+    public static Size Measure(string? text, Font font) =>
+        TextRenderer.MeasureText(text, font, Unbounded, MeasureFlags);
 }

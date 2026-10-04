@@ -229,7 +229,7 @@ internal sealed class Chip : PaintedControl
 
     public override Size GetPreferredSize(Size proposedSize)
     {
-        var t = TextRenderer.MeasureText(Text, Font, Size.Empty, Theme.TextFlags);
+        var t = Theme.Measure(Text, Font);
         return new Size(t.Width + Px(_kind == ChipKind.Outline ? 16 : 14), t.Height + Px(4));
     }
 
@@ -344,7 +344,14 @@ internal sealed class InputFrame : Panel, IThemed
         Controls.Add(box);
         box.GotFocus += (_, _) => Invalidate();
         box.LostFocus += (_, _) => Invalidate();
+        // 多行框的捲軸是原生的，BackColor 管不到：建立 handle 時與主題切換時（ApplyTheme）換成深／淺色樣式
+        box.HandleCreated += (_, _) => ApplyNativeScrollbars();
         ApplyTheme();
+    }
+
+    private void ApplyNativeScrollbars()
+    {
+        if (Box.Multiline) Theme.ApplyNativeScrollbars(Box);
     }
 
     public TextBox Box { get; }
@@ -363,6 +370,7 @@ internal sealed class InputFrame : Panel, IThemed
         BackColor = Theme.Raised;
         Box.BackColor = Theme.Raised;
         Box.ForeColor = Theme.Ink;
+        ApplyNativeScrollbars();
         Invalidate();
     }
 
@@ -422,7 +430,7 @@ internal sealed class ToggleSwitch : CheckBox, IThemed
 
     public override Size GetPreferredSize(Size proposedSize)
     {
-        var t = TextRenderer.MeasureText(Text, Font, Size.Empty, Theme.TextFlags);
+        var t = Theme.Measure(Text, Font);
         return new Size(Px(34) + Px(10) + t.Width + Px(4), Math.Max(Px(22), t.Height + Px(4)));
     }
 
@@ -462,7 +470,10 @@ internal sealed class ThemedComboBox : ComboBox, IThemed
     {
         DropDownStyle = ComboBoxStyle.DropDownList;
         DrawMode = DrawMode.OwnerDrawFixed;
-        FlatStyle = FlatStyle.Flat;
+        // 不用 FlatStyle.Flat：WinForms 的 FlatComboAdapter 會用 SystemBrushes.Control 畫下拉按鈕、
+        // SystemColors.Window 畫外框（dotnet/winforms release/10.0 ComboBox.FlatComboAdapter.cs:144、171），
+        // 不看 BackColor，深色模式下就是一塊白。改用原生樣式，深色時由 DarkMode_CFD 畫（見 Theme.ApplyNativeCombo）。
+        FlatStyle = FlatStyle.Standard;
         Font = Theme.Ui(9f);
         ApplyTheme();
     }
@@ -471,7 +482,14 @@ internal sealed class ThemedComboBox : ComboBox, IThemed
     {
         BackColor = Theme.Raised;
         ForeColor = Theme.Ink;
+        Theme.ApplyNativeCombo(this);
         Invalidate();
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        Theme.ApplyNativeCombo(this);
     }
 
     protected override void OnDrawItem(DrawItemEventArgs e)
@@ -510,6 +528,13 @@ internal sealed class TerminalBox : RichTextBox, IThemed
 
     /// <summary>輸出區兩種主題都是深色底，不跟著換。</summary>
     public void ApplyTheme() { }
+
+    /// <summary>底色固定深色，捲軸也一律用深色樣式。</summary>
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        Theme.ApplyNativeScrollbars(this, alwaysDark: true);
+    }
 
     public void AppendLine(string line)
     {

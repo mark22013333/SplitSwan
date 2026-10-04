@@ -154,6 +154,9 @@ internal sealed class SettingsForm : ThemedForm
         buttons.Controls.AddRange([_saveBtn, _cancelBtn, _importBtn]);
         buttons.Anchor = AnchorStyles.Right;
         Span(buttons, 14);
+        // 要 Dock 才會套用 Form.Padding(16)：沒 Dock 的子控制項停在 Location (0,0)，Padding 只影響停駐版面與
+        // AutoSize 的右下延伸，結果「閘道」那列緊貼標題列（左緣也貼邊）。同 WizardForm／LogForm 的做法。
+        grid.Dock = DockStyle.Fill;
         Controls.Add(grid);
 
         _importBtn.Click += (_, _) => StartImport();

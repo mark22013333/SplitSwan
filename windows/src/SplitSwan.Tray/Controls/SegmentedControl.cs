@@ -62,11 +62,11 @@ internal sealed class SegmentedControl : Control, IThemed
     private int Px(int logical) => LogicalToDeviceUnits(logical);
 
     private int[] SegmentWidths() =>
-        [.. _items.Select(t => TextRenderer.MeasureText(t, Font, Size.Empty, Theme.TextFlags).Width + Px(20))];
+        [.. _items.Select(t => Theme.Measure(t, Font).Width + Px(20))];
 
     public override Size GetPreferredSize(Size proposedSize)
     {
-        var h = TextRenderer.MeasureText("全", Font, Size.Empty, Theme.TextFlags).Height + Px(10);
+        var h = Theme.Measure("全", Font).Height + Px(10);
         return new Size(SegmentWidths().Sum() + Px(4), Math.Max(Px(26), h) + Px(4));
     }
 

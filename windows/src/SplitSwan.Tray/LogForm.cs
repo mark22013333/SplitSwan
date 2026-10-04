@@ -195,14 +195,15 @@ internal sealed class LogForm : ThemedForm
         {
             BackColor = Theme.Surface;
             ForeColor = Theme.Ink;
+            Theme.ApplyNativeScrollbars(this);   // 原生捲軸（含水平捲軸）跟著深淺色
             Invalidate();
         }
 
         /// <summary>等級欄的字型：直接繪製用，依清單目前的 DeviceDpi 縮放（Theme.AtDpi 依 DPI 快取）。</summary>
         private Font LevelFont => Theme.AtDpi(Theme.Ui(8.25f), DeviceDpi);
 
-        private int TimeWidth => TextRenderer.MeasureText("00:00:00", Font, Size.Empty, Theme.TextFlags).Width + LogicalToDeviceUnits(14);
-        private int LevelWidth => TextRenderer.MeasureText("錯誤", LevelFont, Size.Empty, Theme.TextFlags).Width + LogicalToDeviceUnits(16);
+        private int TimeWidth => Theme.Measure("00:00:00", Font).Width + LogicalToDeviceUnits(14);
+        private int LevelWidth => Theme.Measure("錯誤", LevelFont).Width + LogicalToDeviceUnits(16);
 
         public void SetEntries(IReadOnlyList<LogEntry> entries)
         {
@@ -236,7 +237,7 @@ internal sealed class LogForm : ThemedForm
         private void Measure(LogEntry e)
         {
             var w = LogicalToDeviceUnits(10) + TimeWidth + LevelWidth
-                    + TextRenderer.MeasureText(OneLine(e.Text), Font, Size.Empty, Theme.TextFlags).Width + LogicalToDeviceUnits(16);
+                    + Theme.Measure(OneLine(e.Text), Font).Width + LogicalToDeviceUnits(16);
             if (w > _extent) { _extent = w; HorizontalExtent = w; }
         }
 
@@ -279,6 +280,7 @@ internal sealed class LogForm : ThemedForm
         {
             base.OnHandleCreated(e);
             ItemHeight = Font.Height + LogicalToDeviceUnits(6);
+            Theme.ApplyNativeScrollbars(this);
         }
 
         protected override void OnFontChanged(EventArgs e)

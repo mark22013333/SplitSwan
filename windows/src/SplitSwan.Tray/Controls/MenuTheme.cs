@@ -122,8 +122,8 @@ internal sealed class MenuHeaderItem : ToolStripItem
 
     public override Size GetPreferredSize(Size constrainingSize)
     {
-        var t = TextRenderer.MeasureText(_title, TitleFont, Size.Empty, Theme.TextFlags);
-        var d = string.IsNullOrEmpty(_detail) ? Size.Empty : TextRenderer.MeasureText(_detail, DetailFont, Size.Empty, Theme.TextFlags);
+        var t = Theme.Measure(_title, TitleFont);
+        var d = string.IsNullOrEmpty(_detail) ? Size.Empty : Theme.Measure(_detail, DetailFont);
         var w = Math.Max(t.Width + Px(26), d.Width) + Px(20);
         return new Size(Math.Min(w, Px(420)), t.Height + (d.Height > 0 ? d.Height + Px(2) : 0) + Px(16));
     }
@@ -132,7 +132,7 @@ internal sealed class MenuHeaderItem : ToolStripItem
     {
         var g = e.Graphics;
         var pad = Px(10);
-        var t = TextRenderer.MeasureText(_title, TitleFont, Size.Empty, Theme.TextFlags);
+        var t = Theme.Measure(_title, TitleFont);
         var y = Px(8);
         var titleRect = new Rectangle(pad, y, Width - pad * 2 - Px(16), t.Height);
         TextRenderer.DrawText(g, _title, TitleFont, titleRect, Theme.Ink, Theme.TextFlags);
@@ -143,7 +143,7 @@ internal sealed class MenuHeaderItem : ToolStripItem
             g.FillEllipse(b, Width - pad - d, y + (t.Height - d) / 2f, d, d);
         if (!string.IsNullOrEmpty(_detail))
         {
-            var dr = new Rectangle(pad, y + t.Height + Px(2), Width - pad * 2, TextRenderer.MeasureText(_detail, DetailFont, Size.Empty, Theme.TextFlags).Height);
+            var dr = new Rectangle(pad, y + t.Height + Px(2), Width - pad * 2, Theme.Measure(_detail, DetailFont).Height);
             TextRenderer.DrawText(g, _detail, DetailFont, dr, Theme.Muted, Theme.TextFlags);
         }
     }

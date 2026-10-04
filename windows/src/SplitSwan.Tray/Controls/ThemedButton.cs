@@ -52,7 +52,7 @@ internal class ThemedButton : Button, IThemed
 
     public override Size GetPreferredSize(Size proposedSize)
     {
-        var text = TextRenderer.MeasureText(Text, Font, Size.Empty, Theme.TextFlags);
+        var text = Theme.Measure(Text, Font);
         var arrow = DropDownArrow ? Px(14) : 0;
         return new Size(text.Width + Px(28) + arrow, Math.Max(Px(30), text.Height + Px(12)));
     }
