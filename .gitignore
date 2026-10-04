@@ -15,3 +15,11 @@ dist/
 
 # 公司設定檔（含公司位址）
 company.env
+
+# Windows 實驗版的設定（含 PSK 與帳密）
+tools/windows/conf/
+
+# Windows 版建置產物
+windows/**/bin/
+windows/**/obj/
+windows/out/

@@ -1,0 +1,6 @@
+[
+{"name":"three","user":"alice@example.com","gateways":["203.0.113.10","203.0.113.20","198.51.100.30"],"ts":"203.0.113.0/24, 198.51.100.5/32,192.0.2.0/24","psk":"p\"s\\k 密鑰 !@#","pwd":"pa\"ss\\wo\"rd","macValid":true},
+{"name":"one","user":"bob","gateways":["vpn.example.com","",""],"ts":"198.51.100.0/25","psk":"fake-psk","pwd":"secret","macValid":true},
+{"name":"gap","user":"c.d_e-f","gateways":["","203.0.113.20","203.0.113.30"],"ts":" 192.0.2.0/24 ,198.51.100.0/24 ","psk":"k","pwd":"p","macValid":true},
+{"name":"padded","user":" carol ","gateways":[" 203.0.113.10 ","\t203.0.113.20",""],"ts":"  192.0.2.128/25  ","psk":"k2","pwd":"p2","macValid":true}
+]

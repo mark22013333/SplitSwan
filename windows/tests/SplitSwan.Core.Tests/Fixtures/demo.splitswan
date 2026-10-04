@@ -1,0 +1,8 @@
+{
+  "format" : "splitswan-config",
+  "iterations" : 600000,
+  "kdf" : "PBKDF2-HMAC-SHA256",
+  "salt" : "K9riMWDaY3ZXChrv58PynA==",
+  "sealed" : "jeEyO6O4QMddS778\/\/xYLygSkk5cNylXTDqRoxo0Pkrlkka2BlPvW\/LvyPhj0IYeS5kLHUhZNWCFrEBYYdi0z2sp1bo8RFXA+Xv8t4RtDfPCbkxq04owubuvl5P4\/lxTWfrb2zq+9UKKTwgfoNg2I4p5dludhfbNglaHd3oBiefRmAjem8H5Yb5AdT7Erc5BSDeR4vyZFdWmwNeSS9j6qX4=",
+  "version" : 1
+}

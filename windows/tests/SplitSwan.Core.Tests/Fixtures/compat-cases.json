@@ -1,0 +1,8 @@
+[
+{"name":"trim-zwsp","swift":"a​b"},
+{"name":"validate-zwsp","swift":"ok"},
+{"name":"bom.splitswan","swift":"ok:p\"s\\k 密鑰 !@#"},
+{"name":"dupkey-first-valid.splitswan","swift":"ok:p\"s\\k 密鑰 !@#"},
+{"name":"dupkey-first-invalid.splitswan","swift":"這不是 SplitSwan 的加密設定檔"},
+{"name":"payload-dupkey","swift":"first"}
+]

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="0.1.0.0" name="SplitSwan.Tray.app"/>
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
+    <security>
+      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
+        <!-- 連線引擎要改 Windows 路由與 NRPT，需要系統管理員；App 以管理員執行，引擎就不會另開 UAC 視窗 -->
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+  <!--
+    DPI 感知：PerMonitorV2，由 SplitSwan.Tray.csproj 的 <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode> 設定，
+    ApplicationConfiguration.Initialize() 產生的程式碼會呼叫 Application.SetHighDpiMode(HighDpiMode.PerMonitorV2)。
+    這裡刻意不寫 <dpiAware>／<dpiAwareness>：.NET WinForms 規定只能擇一設定（manifest 與 SetHighDpiMode 並存時
+    以 manifest 為準且編譯器發出 WFAC010），統一由 csproj 管理才不會兩邊不一致。
+  -->
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10／11 -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+    </application>
+  </compatibility>
+</assembly>

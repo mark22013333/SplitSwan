@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <!-- 讓 macOS 上也能編譯與發佈 Windows 版 -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <RootNamespace>SplitSwan.Tray</RootNamespace>
+    <AssemblyName>SplitSwan</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- exe 的圖示（檔案總管、工作列、UAC 視窗）：與 Mac 版同圖，由 windows/tools/make-ico.sh 產生 -->
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <Version>0.1.0</Version>
+    <AssemblyVersion>0.1.0.0</AssemblyVersion>
+    <FileVersion>0.1.0.0</FileVersion>
+    <Product>SplitSwan</Product>
+    <Description>SplitSwan Windows 托盤 App（WSL2 strongSwan split tunnel）</Description>
+    <SatelliteResourceLanguages>zh-Hant</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 同一個圖示也嵌成資源，給各視窗的 Form.Icon 用（AppIcon.cs） -->
+    <EmbeddedResource Include="app.ico" LogicalName="SplitSwan.app.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SplitSwan.Core\SplitSwan.Core.csproj" />
+  </ItemGroup>
+
+</Project>
