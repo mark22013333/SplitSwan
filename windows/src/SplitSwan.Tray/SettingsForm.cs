@@ -62,6 +62,20 @@ internal sealed class SettingsForm : ThemedForm
         (TrayState.Busy, TrayIconState.Connecting),
         (TrayState.Error, TrayIconState.Error),
     ];
+    // 捷徑（桌面、開始選單）：狀態以檔案系統為準，開關切換時立即建立／移除，不經「儲存」、不寫 settings.json
+    private static readonly ShortcutLocation[] ShortcutLocations = [ShortcutLocation.Desktop, ShortcutLocation.StartMenu];
+    private readonly ToggleSwitch[] _shortcut = [.. ShortcutLocations.Select(l => new ToggleSwitch(ShortcutRules.Title(l)))];
+    private readonly ThemedLabel[] _shortcutNote = [.. ShortcutLocations.Select(_ => new ThemedLabel("", TextRole.Warn, Theme.Ui(8.25f)))];
+    private readonly ThemedButton[] _shortcutUpdate = [.. ShortcutLocations.Select(_ => new ThemedButton("更新"))];
+    private readonly FlowLayoutPanel[] _shortcutNoteRow = [.. ShortcutLocations.Select(_ => UiLayout.Flow())];
+    /// <summary>程式同步開關（重新讀取實際狀態）時不觸發建立／移除。</summary>
+    private bool _syncingShortcuts;
+    /// <summary>錯誤卡片目前顯示的是捷徑的錯誤（捷徑操作成功時才清掉，不清掉儲存的驗證錯誤）。</summary>
+    private bool _shortcutErrorShown;
+    /// <summary>捷徑提示的 tooltip（舊位置的完整路徑）。</summary>
+    private readonly ToolTip _shortcutTips = new();
+    /// <summary>提示裡的路徑最多幾個字元（超過就省略中段；提示寬度約 386 邏輯像素、8.25pt 字）。</summary>
+    private const int ShortcutPathChars = 56;
     private readonly ThemedButton _importBtn = new("匯入 .splitswan…");
     private readonly ThemedButton _saveBtn = new("儲存", primary: true);
     private readonly ThemedButton _cancelBtn = new("取消");
@@ -148,6 +162,9 @@ internal sealed class SettingsForm : ThemedForm
         Span(BuildIconPanel(), 4);
         Span(BuildAutoPanel(), 10);
 
+        Span(new ThemedLabel("捷徑", TextRole.Ink, Theme.Ui(9f, FontStyle.Bold)), 14);
+        Span(BuildShortcutPanel(), 4);
+
         Span(new ThemedLabel("新設定在下次連線時生效；已建立的通道不受影響。密碼與 PSK 以 Windows 帳號加密（DPAPI）儲存。",
             TextRole.Muted) { MaximumSize = new Size(ContentWidth, 0) }, 12);
         _errorCard.Controls.Add(_errors);
@@ -190,6 +207,15 @@ internal sealed class SettingsForm : ThemedForm
         _subnetList.CheckedChanged += (_, _) => _subnetListEdited = true;
         // 視窗開著時可能從托盤切換過自動重連：重新取得焦點時，若使用者沒動過開關，就同步顯示托盤的值
         Activated += (_, _) => SyncAutoFromTray();
+        // 捷徑可能在視窗外被刪掉或搬動：打開時與每次重新取得焦點時重新讀取
+        Activated += (_, _) => RefreshShortcuts();
+        for (int i = 0; i < ShortcutLocations.Length; i++)
+        {
+            var idx = i;
+            _shortcut[i].CheckedChanged += (_, _) => { if (!_syncingShortcuts) OnShortcutToggled(idx); };
+            _shortcutUpdate[i].Click += (_, _) => OnShortcutUpdate(idx);
+        }
+        RefreshShortcuts();
         foreach (var t in _gw) t.TextChanged += (_, _) => UpdateGatewayRows();
         UpdatePreviews();
         UpdateGatewayRows();
@@ -320,6 +346,114 @@ internal sealed class SettingsForm : ThemedForm
         return panel;
     }
 
+    private Control BuildShortcutPanel()
+    {
+        // 每個控制項都指定 (欄, 列)：提示列隱藏時，TableLayoutPanel 自動排列會跳過它、讓後面的列往前遞補
+        var panel = UiLayout.Table(1, 5);
+        for (int i = 0; i < ShortcutLocations.Length; i++)
+        {
+            _shortcut[i].AccessibleName = ShortcutRules.Title(ShortcutLocations[i]);
+            panel.Controls.Add(_shortcut[i], 0, i * 2);
+            _shortcutNote[i].Anchor = AnchorStyles.Left;
+            _shortcutNote[i].Margin = new Padding(0, 0, 8, 0);
+            _shortcutNote[i].MaximumSize = new Size(ContentWidth - 44 - 90, 0);
+            _shortcutUpdate[i].Anchor = AnchorStyles.Left;
+            _shortcutUpdate[i].Margin = Padding.Empty;
+            _shortcutUpdate[i].AccessibleName = $"更新{ShortcutRules.Title(ShortcutLocations[i])}為目前位置";
+            _shortcutNoteRow[i].Controls.Add(_shortcutNote[i]);
+            _shortcutNoteRow[i].Controls.Add(_shortcutUpdate[i]);
+            _shortcutNoteRow[i].Margin = new Padding(44, 0, 0, 4);
+            _shortcutNoteRow[i].Visible = false;
+            panel.Controls.Add(_shortcutNoteRow[i], 0, i * 2 + 1);
+        }
+        panel.Controls.Add(new ThemedLabel("開關切換後立即建立或移除，不必按「儲存」。從捷徑啟動一樣會跳出 UAC（App 需要系統管理員權限）。",
+            TextRole.Muted, Theme.Ui(8.25f)) { MaximumSize = new Size(ContentWidth, 0), Margin = new Padding(0, 2, 0, 0) }, 0, 4);
+        return panel;
+    }
+
+    /// <summary>重新讀取兩個捷徑的實際狀態，同步開關與提示（不觸發建立／移除）。</summary>
+    private void RefreshShortcuts()
+    {
+        if (IsDisposed) return;
+        for (int i = 0; i < ShortcutLocations.Length; i++) ShowShortcutState(i);
+    }
+
+    private void ShowShortcutState(int i)
+    {
+        var loc = ShortcutLocations[i];
+        ShortcutState state;
+        string? target;
+        try
+        {
+            (state, target) = Shortcuts.Inspect(loc);
+        }
+        catch (Exception ex)
+        {
+            // Inspect 本身已把讀取失敗當成「不是我們的」；這裡只剩找不到資料夾等狀況
+            AppLog.Error($"{ShortcutRules.Title(loc)}：讀取狀態失敗：{ex.GetType().Name}：{ex.Message}");
+            SetShortcutSwitch(i, false);
+            SetShortcutNote(i, ex.Message, update: false);
+            return;
+        }
+        SetShortcutSwitch(i, ShortcutRules.IsOn(state));
+        switch (state)
+        {
+            case ShortcutState.Stale:
+                // 路徑另起一行並省略中段（長路徑沒有空白可斷行，整段會被截掉）；完整路徑放 tooltip
+                SetShortcutNote(i, "捷徑指向舊位置：\n" + ShortcutRules.CompactPath(target, ShortcutPathChars), update: true,
+                    tooltip: target);
+                break;
+            case ShortcutState.Foreign:
+                SetShortcutNote(i, $"{ShortcutRules.RefuseMessage}：已有同名的 {ShortcutRules.FileName}，但不是 SplitSwan 建立的（沒有 SplitSwan 標記），不會變更或刪除。", update: false);
+                break;
+            default:
+                SetShortcutNote(i, "", update: false);
+                break;
+        }
+    }
+
+    private void SetShortcutSwitch(int i, bool on)
+    {
+        if (_shortcut[i].Checked == on) return;
+        _syncingShortcuts = true;
+        try { _shortcut[i].Checked = on; }
+        finally { _syncingShortcuts = false; }
+    }
+
+    private void SetShortcutNote(int i, string text, bool update, string? tooltip = null)
+    {
+        _shortcutNote[i].Text = text;
+        _shortcutTips.SetToolTip(_shortcutNote[i], tooltip);
+        _shortcutUpdate[i].Visible = update;
+        _shortcutNoteRow[i].Visible = text.Length > 0;
+    }
+
+    private void OnShortcutToggled(int i) => RunShortcutAction(i, () => Shortcuts.Apply(ShortcutLocations[i], _shortcut[i].Checked));
+
+    private void OnShortcutUpdate(int i) => RunShortcutAction(i, () => Shortcuts.UpdateStale(ShortcutLocations[i]));
+
+    /// <summary>執行建立／移除／更新；失敗時用錯誤卡片顯示，最後一律重新讀取實際狀態（失敗時開關回到實際狀態）。</summary>
+    private void RunShortcutAction(int i, Func<ShortcutAction> action)
+    {
+        var loc = ShortcutLocations[i];
+        try
+        {
+            action();
+            if (_shortcutErrorShown) { ShowErrors([]); _shortcutErrorShown = false; }
+            // Refuse（同名但不是我們的）：ShowShortcutState 會依重新讀取的狀態顯示「已有同名捷徑，未變更」
+            ShowShortcutState(i);
+            return;
+        }
+        catch (Exception ex)
+        {
+            // 任何例外都攔下來（含 COM 轉型失敗、參數錯誤），寫記錄後重新讀取，讓開關回到實際狀態
+            AppLog.Error($"{ShortcutRules.Title(loc)}操作失敗：{ex.GetType().Name}：{ex.Message}");
+            ShowErrors([$"{ShortcutRules.Title(loc)}：{ex.Message}"]);
+            _shortcutErrorShown = true;
+        }
+        ShowShortcutState(i);
+    }
+
     private Control BuildAutoPanel()
     {
         var panel = UiLayout.Table(1);
@@ -351,6 +485,7 @@ internal sealed class SettingsForm : ThemedForm
     {
         if (disposing)
         {
+            _shortcutTips.Dispose();
             foreach (var p in _previews)
             {
                 p.Image?.Dispose();
@@ -432,6 +567,7 @@ internal sealed class SettingsForm : ThemedForm
     /// <param name="validation">驗證錯誤：加上「請修正以下問題」並逐條加「・」。</param>
     private void ShowErrors(IReadOnlyList<string> errors, bool validation = false)
     {
+        _shortcutErrorShown = false;   // 捷徑的錯誤由 RunShortcutAction 在呼叫後自己標記
         if (errors.Count == 0)
         {
             _errors.Text = "";

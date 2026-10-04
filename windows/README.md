@@ -54,6 +54,22 @@ Windows ──路由──▶ WSL2 發行版 SplitSwan（Ubuntu 24.04＋strongSw
 
 沒有設定檔時，也可以在「設定…」手動填：帳號、密碼、PSK、閘道 1–3、內網網段（一行一筆，`192.0.2.0/24` 這種格式，單一主機寫 `/32`）。格式不對時按儲存會逐條列出問題。
 
+## 捷徑
+
+SplitSwan 是解壓縮即用的單一 exe，沒有安裝程式，所以預設沒有捷徑。可以從兩個地方建立：
+
+- **首次設定精靈的完成畫面**：「建立桌面捷徑」「加到開始選單」兩個勾選（預設都勾），按「完成」建立，結果顯示在輸出區；再按一次「完成」關閉精靈。
+- **設定視窗的「捷徑」區塊**：「桌面捷徑」「開始選單」兩個開關。打開就立即建立、關掉就立即移除，**不必按「儲存」**，也不寫進 `settings.json`（以檔案是否存在為準，打開設定視窗或切回視窗時會重新讀取）。
+
+細節：
+
+- 捷徑檔名是 `SplitSwan.lnk`，放在目前使用者的桌面與開始選單「程式集」（`%AppData%\Microsoft\Windows\Start Menu\Programs`）；目標是目前執行的 `SplitSwan.exe`，工作目錄是 exe 所在資料夾，圖示用 exe 本身。
+- **從捷徑啟動一樣會跳出 UAC**（SplitSwan 需要系統管理員權限），按「是」即可。
+- 把 SplitSwan 解壓到新資料夾後，舊捷徑會顯示「捷徑指向舊位置」（滑鼠停在提示上可看完整路徑），按「更新」改成目前的位置。只認目標檔名是 `SplitSwan.exe` 的舊捷徑；如果你把 exe 改了名，搬家後的舊捷徑會被當成「不是 SplitSwan 建立的」，請手動刪除。
+- SplitSwan 建立的捷徑，描述（滑鼠停在捷徑上的提示）固定是「SplitSwan VPN」，這也是辨認「這是 SplitSwan 建立的」標記。
+- 已經有同名、但不是 SplitSwan 建立的 `SplitSwan.lnk`（沒有這個標記，**包括你自己做、指向 SplitSwan.exe 的捷徑**）時，SplitSwan 不會覆寫也不會刪除它，開關顯示為關，並提示「已有同名捷徑，未變更」。要改由 SplitSwan 管理，請先自己刪掉那個捷徑。
+- 捷徑建立在**執行 SplitSwan 的那個 Windows 帳號**底下：照「需要準備」的說明用本身是管理員的帳號登入時，就是你自己的桌面與開始選單。
+
 ## 日常使用
 
 **左鍵點托盤圖示**會彈出狀態面板（再點一次、按 Esc 或點別的地方就關）：
@@ -132,6 +148,7 @@ Windows ──路由──▶ WSL2 發行版 SplitSwan（Ubuntu 24.04＋strongSw
 - 只支援 WSL 預設的 NAT 網路模式（`.wslconfig` 設成 `networkingMode=mirrored` 時會拒絕連線）。
 - 內網網段不能跟 WSL 的 NAT 網段（通常在 172.16–31.x）重疊。
 - 不會開機自動啟動、沒有自動更新、不能匯出 `.splitswan`、不支援 IPv6。
+- 桌面／開始選單捷徑（COM 建立 `.lnk`）尚未在 Windows 真機上驗證。
 - 公司端點防護或 Hyper-V 防火牆可能擋 WSL 轉發，只能實測。
 - SplitSwan.exe 的圖示與 Mac 版相同（`windows/tools/make-ico.sh` 由 Mac 版的 `tools/make-icon.swift` 產生）。
 - 連線引擎使用的發行版：新安裝是精靈匯入的 `SplitSwan`，舊版使用者沿用 `Ubuntu-24.04`。

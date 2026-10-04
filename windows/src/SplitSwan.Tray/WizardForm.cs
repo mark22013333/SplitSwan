@@ -34,6 +34,11 @@ internal sealed class WizardForm : ThemedForm
     private readonly ThemedButton _close = new("關閉");
     private readonly ThemedButton _cancelDownload = new("取消下載") { Visible = false };
 
+    // 完成畫面的捷徑選項（預設勾選）；按「完成」時建立，結果寫在輸出區
+    private ToggleSwitch? _wizDesktop;
+    private ToggleSwitch? _wizStartMenu;
+    private bool _shortcutsApplied;
+
     private CancellationTokenSource? _cts;
     private bool _running;
     private bool _started;
@@ -251,6 +256,7 @@ internal sealed class WizardForm : ThemedForm
     {
         foreach (Control c in _actions.Controls.Cast<Control>().ToList()) c.Dispose();
         _actions.Controls.Clear();
+        _wizDesktop = _wizStartMenu = null;   // 捷徑選項也放在 _actions 裡，已一起釋放
     }
 
     private void AddAction(string text, Action onClick)
@@ -271,7 +277,13 @@ internal sealed class WizardForm : ThemedForm
     private void OnNext()
     {
         if (!_started) { Begin(); return; }
-        if (_state.Completed && _state.Current == WizardStep.TestConnection) { Close(); return; }
+        if (_state.Completed && _state.Current == WizardStep.TestConnection)
+        {
+            // 第一次按「完成」：建立勾選的捷徑並把結果留在輸出區；再按一次才關閉
+            if (!_shortcutsApplied && _wizDesktop is not null && _wizStartMenu is not null) { ApplyWizardShortcuts(); return; }
+            Close();
+            return;
+        }
         if (_state.GoNext()) { WizardStore.Save(_state); _ = RunAsync(force: false); }
     }
 
@@ -519,8 +531,51 @@ internal sealed class WizardForm : ThemedForm
         Out("");
         Out("══ 全部完成！之後從工作列右下角的 SplitSwan 圖示按右鍵就能連線／斷線。");
         AppLog.Info("首次設定精靈：全部完成");
+        ShowShortcutChoices();
         Render();
         Finished?.Invoke();
+    }
+
+    /// <summary>完成畫面：「建立桌面捷徑」「加到開始選單」兩個勾選（預設勾選）。</summary>
+    private void ShowShortcutChoices()
+    {
+        _shortcutsApplied = false;
+        _wizDesktop = new ToggleSwitch("建立桌面捷徑") { Checked = true, Margin = new Padding(0, 2, 16, 2) };
+        _wizStartMenu = new ToggleSwitch("加到開始選單") { Checked = true, Margin = new Padding(0, 2, 0, 2) };
+        // 明確指定欄列（TableLayoutPanel 自動排列會跳過隱藏的控制項）
+        var t = UiLayout.Table(2, 1);
+        t.Controls.Add(_wizDesktop, 0, 0);
+        t.Controls.Add(_wizStartMenu, 1, 0);
+        _actions.Controls.Add(t);
+        Out("勾選要建立的捷徑後按「完成」（之後也可以在「設定」的「捷徑」區塊開關；從捷徑啟動一樣會跳出 UAC）。");
+    }
+
+    /// <summary>建立勾選的捷徑，每一項的結果寫在輸出區。失敗不影響精靈已完成的狀態。</summary>
+    private void ApplyWizardShortcuts()
+    {
+        var picks = new List<ShortcutLocation>();
+        if (_wizDesktop?.Checked == true) picks.Add(ShortcutLocation.Desktop);
+        if (_wizStartMenu?.Checked == true) picks.Add(ShortcutLocation.StartMenu);
+        _shortcutsApplied = true;
+        ClearActions();
+        Out("");
+        Out("══ 建立捷徑");
+        if (picks.Count == 0) Out("沒有勾選，未建立捷徑。");
+        foreach (var loc in picks)
+        {
+            try
+            {
+                Out(ShortcutRules.ResultLine(loc, Shortcuts.Apply(loc, wantOn: true)));
+            }
+            catch (Exception ex)
+            {
+                // 任何例外都只算這一項失敗（寫記錄與輸出區），不影響另一項與精靈已完成的狀態
+                AppLog.Error($"精靈建立{ShortcutRules.Title(loc)}失敗：{ex.GetType().Name}：{ex.Message}");
+                Out(ShortcutRules.ResultLine(loc, ShortcutAction.Create, ex.Message));
+            }
+        }
+        Out("按「完成」關閉精靈。");
+        Render();
     }
 
     protected override void Dispose(bool disposing)
