@@ -11,6 +11,8 @@ macOS 狀態列的 VPN 工具，用開源的 [strongSwan](https://www.strongswan
 - **公司設定與程式分開**：閘道與網段放在各自電腦的設定檔，原始碼不含任何公司位址
 
 > 版本：1.6.0
+>
+> **Windows 版（beta）**：托盤 App，透過 WSL2 裡的 strongSwan 連線，功能與介面另有說明，見 [windows/README.md](windows/README.md)；下載請到 Releases 找 `SplitSwan-Windows-x.y.z.zip`。
 
 ## 跟 FortiClient 有什麼不同
 
