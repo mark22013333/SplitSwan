@@ -52,6 +52,8 @@ internal sealed class VpnCoordinator : IDisposable
     private bool _rebuildOnRetry;
     private int _backoffStep;
     private DateTimeOffset _lastUpAt = DateTimeOffset.MinValue;
+    /// <summary>_lastUpAt 是輪詢「看到」通道時才記的（不是本 App 連上的時間），已連線時間只是下限。只給狀態面板顯示用。</summary>
+    private bool _upSinceObserved;
     private DateTimeOffset _lastPollTick = DateTimeOffset.Now;
     private DateTimeOffset _lastResumeHandled = DateTimeOffset.MinValue;
     private DateTimeOffset _ignoreAddressUntil = DateTimeOffset.MinValue;
@@ -102,6 +104,11 @@ internal sealed class VpnCoordinator : IDisposable
     public GatewayHistory History => _history;
     /// <summary>已連線的閘道編號（1 起算）；沒連線或不知道是哪台時為 null。</summary>
     public int? ConnectedGateway => _isUp ? GatewayHistory.GatewayFromConnection(_gateway) : null;
+    /// <summary>
+    /// 狀態面板的「已連線」起算時間；沒連線為 null。Approximate＝通道是輪詢時才看到的（例如 App 啟動前就連著），
+    /// 實際連線時間只會更長。
+    /// </summary>
+    public (DateTimeOffset Since, bool Approximate)? ConnectedSince => _isUp ? (_lastUpAt, _upSinceObserved) : null;
 
     public TrayState State =>
         _busy ? TrayState.Busy
@@ -401,6 +408,7 @@ internal sealed class VpnCoordinator : IDisposable
             _gateway = r.Values.GetValueOrDefault("GATEWAY");
             _vip = r.Values.GetValueOrDefault("VIP");
             _lastUpAt = DateTimeOffset.Now;
+            _upSinceObserved = false;
             _lastError = null;
             _rebuildOnRetry = false;
             AppLog.Info($"已連線：{_gateway ?? "?"}，虛擬 IP {_vip ?? "?"}");
@@ -582,7 +590,7 @@ internal sealed class VpnCoordinator : IDisposable
         {
             _gateway = gateway;
             _vip = r.Values.GetValueOrDefault("VIP");
-            if (!wasUp) _lastUpAt = now;
+            if (!wasUp) { _lastUpAt = now; _upSinceObserved = true; }
             if (now - _lastUpAt >= StableAfter) _backoffStep = 0;   // 連線穩定 60 秒才把退避歸零（同 Mac 版）
             _lastError = null;
             _retryNote = null;

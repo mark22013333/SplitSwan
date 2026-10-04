@@ -9,6 +9,12 @@
       </requestedPrivileges>
     </security>
   </trustInfo>
+  <!--
+    DPI 感知：PerMonitorV2，由 SplitSwan.Tray.csproj 的 <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode> 設定，
+    ApplicationConfiguration.Initialize() 產生的程式碼會呼叫 Application.SetHighDpiMode(HighDpiMode.PerMonitorV2)。
+    這裡刻意不寫 <dpiAware>／<dpiAwareness>：.NET WinForms 規定只能擇一設定（manifest 與 SetHighDpiMode 並存時
+    以 manifest 為準且編譯器發出 WFAC010），統一由 csproj 管理才不會兩邊不一致。
+  -->
   <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
     <application>
       <!-- Windows 10／11 -->

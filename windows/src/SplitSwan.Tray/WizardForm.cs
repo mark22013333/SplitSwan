@@ -1,41 +1,38 @@
 using System.Diagnostics;
 using System.Drawing;
 using SplitSwan.Core;
+using SplitSwan.Tray.Controls;
 
 namespace SplitSwan.Tray;
 
 /// <summary>
-/// 首次設定精靈（契約 6）。左側步驟清單（✔／▶／○／✖），右側說明、進度條、唯讀輸出區與按鈕。
+/// 首次設定精靈（契約 6；介面為視覺稿 C）：頁首「3 / 6　步驟名稱」大標與進度條，「完成／接下來」兩列 chips，
+/// 說明、錯誤卡片、動作按鈕、深色等寬的輸出區與下方按鈕。
 /// 步驟規則在 Core 的 SetupWizardState，各步驟的動作在 WizardSteps；這裡只處理畫面與流程控制：
 /// - 按「開始」後自動一路執行；遇到失敗、要重開機、要使用者填設定時停下來。
 /// - 已完成的步驟偵測到就自動略過；狀態每一步都存 wizard.json，重開機後從中斷處繼續。
 /// </summary>
-internal sealed class WizardForm : Form
+internal sealed class WizardForm : ThemedForm
 {
     private readonly VpnCoordinator _vpn;
     private readonly Func<bool, Task<StoredSettings?>> _openSettings;
     private readonly SetupWizardState _state;
-    private readonly ListBox _steps = new()
-    {
-        Dock = DockStyle.Fill, IntegralHeight = false, SelectionMode = SelectionMode.None,
-        Font = new Font("Microsoft JhengHei UI", 10f), BorderStyle = BorderStyle.None,
-    };
-    private readonly Label _title = new() { AutoSize = true, Font = new Font("Microsoft JhengHei UI", 12f, FontStyle.Bold) };
-    private readonly Label _desc = new() { AutoSize = true, MaximumSize = new Size(560, 0) };
-    private readonly Label _error = new() { AutoSize = true, MaximumSize = new Size(560, 0), ForeColor = Color.FromArgb(0xC0, 0x1C, 0x28) };
-    private readonly ProgressBar _progress = new() { Width = 560, Height = 16, Visible = false };
-    private readonly Label _progressText = new() { AutoSize = true, ForeColor = SystemColors.GrayText };
-    private readonly TextBox _output = new()
-    {
-        Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false, Dock = DockStyle.Fill,
-        Font = new Font("Consolas", 9f), BackColor = SystemColors.Window,
-    };
-    private readonly FlowLayoutPanel _actions = new() { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Margin = new Padding(0, 4, 0, 4) };
-    private readonly Button _back = new() { Text = "上一步", AutoSize = true };
-    private readonly Button _retry = new() { Text = "重試", AutoSize = true };
-    private readonly Button _next = new() { Text = "開始", AutoSize = true };
-    private readonly Button _close = new() { Text = "關閉", AutoSize = true };
-    private readonly Button _cancelDownload = new() { Text = "取消下載", AutoSize = true, Visible = false };
+    private readonly StatusDot _stepDot = new(10);
+    private readonly ThemedLabel _title = new("", TextRole.Ink, Theme.Ui(11.5f, FontStyle.Bold));
+    private readonly ThemedLabel _progressText = new("", TextRole.Muted, Theme.Mono(8.25f));
+    private readonly ProgressStrip _progress = new();
+    private readonly ChipFlow _doneLane = new();
+    private readonly ChipFlow _nextLane = new();
+    private readonly ThemedLabel _desc = new("", TextRole.Muted) { MaximumSize = new Size(640, 0) };
+    private readonly CardPanel _errorCard = new() { Tone = StatusTone.Bad, Visible = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
+    private readonly ThemedLabel _error = new("", TextRole.Bad) { MaximumSize = new Size(620, 0) };
+    private readonly TerminalBox _output = new(MaxOutputChars) { Dock = DockStyle.Fill };
+    private readonly FlowLayoutPanel _actions = UiLayout.Flow();
+    private readonly ThemedButton _back = new("上一步");
+    private readonly ThemedButton _retry = new("重試");
+    private readonly ThemedButton _next = new("開始", primary: true);
+    private readonly ThemedButton _close = new("關閉");
+    private readonly ThemedButton _cancelDownload = new("取消下載") { Visible = false };
 
     private CancellationTokenSource? _cts;
     private bool _running;
@@ -61,41 +58,79 @@ internal sealed class WizardForm : Form
         _state.PrepareForOpen();
         WizardStore.Save(_state);
 
-        Text = "SplitSwan － 首次設定精靈";
-        AppIcon.Apply(this);
+        Text = "SplitSwan 首次設定";
         StartPosition = FormStartPosition.CenterScreen;
-        Size = new Size(900, 620);
-        MinimumSize = new Size(760, 520);
-        Font = new Font("Microsoft JhengHei UI", 9f);
+        Size = new Size(780, 620);
+        MinimumSize = new Size(640, 500);
         ShowInTaskbar = true;
+        Padding = new Padding(16, 14, 16, 12);
 
-        var split = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = new Padding(10) };
-        split.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 200));
-        split.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        // 列：頁首、進度條、完成／接下來、說明、錯誤、動作按鈕、輸出區（填滿）、下方按鈕
+        var main = UiLayout.Table(1, 8);
+        main.Dock = DockStyle.Fill;
+        main.AutoSize = false;
+        main.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        for (int i = 0; i < 6; i++) main.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        main.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        main.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        var right = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 8, Padding = new Padding(10, 0, 0, 0) };
-        right.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 標題
-        right.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 說明
-        right.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 錯誤
-        right.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 動作按鈕（重開機、設定…）
-        right.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 進度條
-        right.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 進度文字
-        right.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); // 輸出區
-        right.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 下方按鈕
-        right.Controls.Add(_title, 0, 0);
-        right.Controls.Add(_desc, 0, 1);
-        right.Controls.Add(_error, 0, 2);
-        right.Controls.Add(_actions, 0, 3);
-        right.Controls.Add(_progress, 0, 4);
-        right.Controls.Add(_progressText, 0, 5);
-        right.Controls.Add(_output, 0, 6);
-        var buttons = new FlowLayoutPanel { FlowDirection = FlowDirection.RightToLeft, AutoSize = true, Dock = DockStyle.Fill };
+        var head = UiLayout.Table(3, 1);
+        head.Dock = DockStyle.Fill;
+        head.AutoSize = true;
+        head.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        head.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        head.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _stepDot.Anchor = AnchorStyles.Left;
+        _stepDot.Margin = new Padding(0, 0, 8, 0);
+        _title.Anchor = AnchorStyles.Left;
+        _title.Margin = Padding.Empty;
+        _progressText.Anchor = AnchorStyles.Right;
+        _progressText.Margin = Padding.Empty;
+        head.Controls.Add(_stepDot, 0, 0);
+        head.Controls.Add(_title, 1, 0);
+        head.Controls.Add(_progressText, 2, 0);
+        main.Controls.Add(head, 0, 0);
+
+        _progress.Dock = DockStyle.Fill;
+        _progress.Height = 6;
+        _progress.Margin = new Padding(0, 10, 0, 10);
+        main.Controls.Add(_progress, 0, 1);
+
+        var lanes = UiLayout.Table(2, 2);
+        lanes.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 64));
+        lanes.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        lanes.Controls.Add(new ThemedLabel("完成", TextRole.Muted) { Margin = new Padding(0, 2, 6, 4) }, 0, 0);
+        lanes.Controls.Add(_doneLane, 1, 0);
+        lanes.Controls.Add(new ThemedLabel("接下來", TextRole.Muted) { Margin = new Padding(0, 2, 6, 4) }, 0, 1);
+        lanes.Controls.Add(_nextLane, 1, 1);
+        _doneLane.MaximumSize = _nextLane.MaximumSize = new Size(640, 0);
+        main.Controls.Add(lanes, 0, 2);
+
+        _desc.Margin = new Padding(0, 6, 0, 0);
+        main.Controls.Add(_desc, 0, 3);
+        _errorCard.Controls.Add(_error);
+        _errorCard.Margin = new Padding(0, 8, 0, 0);
+        main.Controls.Add(_errorCard, 0, 4);
+        _actions.Margin = new Padding(0, 6, 0, 6);
+        main.Controls.Add(_actions, 0, 5);
+
+        // 輸出區：兩種主題都是深色底（視覺稿 .term）
+        var term = new Panel
+        {
+            Dock = DockStyle.Fill,
+            Padding = new Padding(10, 8, 6, 6),
+            Margin = new Padding(0, 4, 0, 0),
+            BackColor = Theme.C(Theme.Palette.TermBg),
+        };
+        term.Controls.Add(_output);
+        main.Controls.Add(term, 0, 6);
+
+        var buttons = UiLayout.Flow(FlowDirection.RightToLeft);
+        buttons.Dock = DockStyle.Fill;
+        buttons.Margin = new Padding(0, 10, 0, 0);
         buttons.Controls.AddRange([_close, _next, _retry, _back, _cancelDownload]);
-        right.Controls.Add(buttons, 0, 7);
-
-        split.Controls.Add(_steps, 0, 0);
-        split.Controls.Add(right, 1, 0);
-        Controls.Add(split);
+        main.Controls.Add(buttons, 0, 7);
+        Controls.Add(main);
 
         _back.Click += (_, _) => OnBack();
         _retry.Click += (_, _) => OnRetry();
@@ -108,6 +143,7 @@ internal sealed class WizardForm : Form
         Render();
         if (!autoStart)
             Out("按「開始」後會依序檢查並安裝；已完成的步驟會自動略過。每一步執行的指令與輸出都會顯示在這裡。");
+        FinishLayout();
     }
 
     // MARK: 畫面
@@ -115,24 +151,41 @@ internal sealed class WizardForm : Form
     private void Render()
     {
         if (IsDisposed) return;
-        _steps.BeginUpdate();
-        _steps.Items.Clear();
-        foreach (var s in SetupWizardState.Steps)
-            _steps.Items.Add($"{_state.Mark(s)} {(int)s + 1}. {SetupWizardState.Title(s)}");
-        _steps.EndUpdate();
-
         var cur = _state.Current;
-        _title.Text = $"步驟 {(int)cur + 1}／6：{SetupWizardState.Title(cur)}";
-        _desc.Text = Describe(cur);
-        _error.Text = _state.ErrorOf(cur) is { } e ? "✖ " + e : "";
+        _title.Text = WizardOverview.Heading(cur);
         var status = _state.StatusOf(cur);
+        _stepDot.Tone = status switch
+        {
+            WizardStepStatus.Done or WizardStepStatus.Skipped => StatusTone.Ok,
+            WizardStepStatus.Failed => StatusTone.Bad,
+            WizardStepStatus.Running => StatusTone.Warn,
+            _ => _running ? StatusTone.Warn : StatusTone.Idle,
+        };
+        var (done, next) = WizardOverview.Lanes(_state);
+        _doneLane.SetChips(done.Select(SetupWizardState.Title), ChipKind.Soft, mono: false, emptyText: "（還沒有）");
+        _nextLane.SetChips(next.Select(SetupWizardState.Title), ChipKind.Local, mono: false, emptyText: "（沒有了）");
+        _desc.Text = Describe(cur);
+        SetError(_state.ErrorOf(cur) is { } e ? "✖ " + e : "");
         _back.Enabled = !_running && _started && _state.CanGoBack;
         _retry.Enabled = !_running && _started && status != WizardStepStatus.NotStarted;
         _retry.Text = status == WizardStepStatus.Failed ? "重試" : "重新執行";
         _next.Enabled = !_running && (!_started || _state.CanGoNext || (_state.Completed && cur == WizardStep.TestConnection));
         _next.Text = !_started ? "開始" : _state.Completed && cur == WizardStep.TestConnection ? "完成" : "下一步";
         _close.Enabled = !_running || _cancelDownload.Visible;
-        if (!_running) { _progress.Visible = false; _progressText.Text = ""; }
+        if (!_running)
+        {
+            // 沒在執行：進度條顯示整體進度（已完成步數）
+            _progress.Indeterminate = false;
+            _progress.Value = WizardOverview.Progress(_state);
+            _progressText.Text = $"已完成 {SetupWizardState.Steps.Count(_state.IsFinished)} / {SetupWizardState.Steps.Count}";
+        }
+    }
+
+    private void SetError(string text)
+    {
+        _error.Text = text;
+        _errorCard.Visible = text.Length > 0;
+        _errorCard.AccessibleName = text.Length > 0 ? "錯誤：" + text : null;
     }
 
     private static string Describe(WizardStep s) => s switch
@@ -158,8 +211,7 @@ internal sealed class WizardForm : Form
             try { BeginInvoke(() => Out(line)); } catch (InvalidOperationException) { }
             return;
         }
-        if (_output.TextLength > MaxOutputChars) _output.Text = _output.Text[^(MaxOutputChars / 2)..];
-        _output.AppendText(line + Environment.NewLine);   // AppendText 會自動捲到最後
+        _output.AppendLine(line);   // 太長時從頭砍一半；AppendText 會自動捲到最後
     }
 
     private void OnProgress(long done, long? total)
@@ -170,16 +222,14 @@ internal sealed class WizardForm : Form
             try { BeginInvoke(() => OnProgress(done, total)); } catch (InvalidOperationException) { }
             return;
         }
-        _progress.Visible = true;
         if (total is { } t && t > 0)
         {
-            _progress.Style = ProgressBarStyle.Continuous;
-            _progress.Maximum = 1000;
-            _progress.Value = (int)Math.Clamp(done * 1000 / t, 0, 1000);
+            _progress.Indeterminate = false;
+            _progress.Value = Math.Clamp((double)done / t, 0, 1);
         }
         else
         {
-            _progress.Style = ProgressBarStyle.Marquee;
+            _progress.Indeterminate = true;
         }
         _progressText.Text = "下載中：" + UbuntuWslImages.FormatProgress(done, total);
     }
@@ -199,13 +249,13 @@ internal sealed class WizardForm : Form
 
     private void ClearActions()
     {
-        foreach (Control c in _actions.Controls) c.Dispose();
+        foreach (Control c in _actions.Controls.Cast<Control>().ToList()) c.Dispose();
         _actions.Controls.Clear();
     }
 
     private void AddAction(string text, Action onClick)
     {
-        var b = new Button { Text = text, AutoSize = true };
+        var b = new ThemedButton(text) { Margin = new Padding(0, 0, 6, 0) };
         b.Click += (_, _) => onClick();
         _actions.Controls.Add(b);
     }
@@ -350,8 +400,8 @@ internal sealed class WizardForm : Form
         Out("");
         Out($"══ 步驟 {(int)step + 1}：{SetupWizardState.Title(step)}");
         UiWatchdog.Mark("精靈：開始 " + SetupWizardState.Title(step));
-        _progress.Style = ProgressBarStyle.Marquee;
-        _progress.Visible = true;
+        _progress.Indeterminate = true;
+        _progressText.Text = "執行中…";
         _close.Enabled = false;
         var ctx = new WizardContext { Output = Out, Progress = OnProgress, Downloading = OnDownloading, Vpn = _vpn, State = _state };
         try
@@ -372,7 +422,7 @@ internal sealed class WizardForm : Form
             if (!IsDisposed && !Disposing)
             {
                 _cancelDownload.Visible = false;
-                _progress.Visible = false;
+                _progress.Indeterminate = false;
                 _progressText.Text = "";
             }
             UiWatchdog.Mark("精靈：結束 " + SetupWizardState.Title(step));
@@ -383,7 +433,7 @@ internal sealed class WizardForm : Form
     {
         ClearActions();
         var why = WizardStore.RegisterRunOnce();
-        _error.Text = "";
+        SetError("");
         _desc.Text = Describe(WizardStep.InstallWsl);
         Out(why is null
             ? "需要重新開機：重開後登入時會嘗試自動開啟 SplitSwan 並繼續（可能跳出 UAC；若沒有自動開啟，請手動開 SplitSwan，會從這一步繼續）。"

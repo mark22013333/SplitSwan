@@ -1,5 +1,6 @@
 using Microsoft.Win32;
 using SplitSwan.Core;
+using SplitSwan.Tray.Controls;
 
 namespace SplitSwan.Tray;
 
@@ -10,8 +11,8 @@ internal sealed class TrayContext : ApplicationContext
     private readonly TrayIcons _icons = new();
     private readonly VpnCoordinator _vpn;
     private readonly ContextMenuStrip _menu = new();
-    private readonly ToolStripMenuItem _status = new() { Enabled = false };
-    private readonly ToolStripMenuItem _detail = new() { Enabled = false, Visible = false };
+    /// <summary>選單最上方的狀態列（狀態＋閘道，下一行虛擬 IP 或說明）。</summary>
+    private readonly MenuHeaderItem _header = new();
     private readonly ToolStripMenuItem _connect = new("連線（自動選擇）");
     /// <summary>「連線 VPN1／2／3」：只顯示有設定的；已連線的那台打勾。</summary>
     private readonly ToolStripMenuItem[] _connectGw = [new(), new(), new()];
@@ -34,6 +35,8 @@ internal sealed class TrayContext : ApplicationContext
     private LogForm? _logForm;
     private SettingsForm? _settingsForm;
     private WizardForm? _wizardForm;
+    /// <summary>左鍵托盤圖示的狀態面板（第一次點才建立，之後重複使用）。</summary>
+    private StatusFlyout? _flyout;
 
     /// <param name="wizardRequested">命令列帶 --wizard（重開機後由 RunOnce 開啟）：直接開精靈並自動繼續。</param>
     public TrayContext(SettingsLoadResult loaded, bool wizardRequested = false)
@@ -78,7 +81,7 @@ internal sealed class TrayContext : ApplicationContext
 
         _menu.Items.AddRange(
         [
-            _status, _detail, new ToolStripSeparator(),
+            _header, new ToolStripSeparator(),
             _connect, _connectGw[0], _connectGw[1], _connectGw[2], _disconnect, new ToolStripSeparator(),
             _settingsItem, _import, _install, new ToolStripSeparator(),
             _showLog, _openLogDir, _auto, _iconMenu, new ToolStripSeparator(),
@@ -93,7 +96,11 @@ internal sealed class TrayContext : ApplicationContext
             ContextMenuStrip = _menu,
             Visible = true,
         };
-        _icon.DoubleClick += (_, _) => ShowLog();
+        // 左鍵：狀態面板（原本的雙擊開記錄改由右鍵選單「顯示引擎輸出」開，避免雙擊時面板開了又關）
+        _icon.MouseDown += (_, e) => { if (e.Button == MouseButtons.Left) _flyout?.NoteIconMouseDown(); };
+        _icon.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) ToggleFlyout(); };
+        ApplyMenuTheme();
+        Theme.Changed += OnThemeChanged;
 
         Redraw();
         foreach (var w in loaded.Warnings)
@@ -173,17 +180,14 @@ internal sealed class TrayContext : ApplicationContext
         _icons.Update(s.IconStyle, s.GreenWhenConnected, _lightTaskbar);
         _icon.Icon = _icons[state];
         _icon.Text = _vpn.Tooltip;
-        _status.Text = "狀態：" + _vpn.StatusLine;
-
-        var parts = new List<string>();
-        if (state == TrayState.Connected)
-        {
-            parts.Add("閘道：" + (_vpn.Gateway?.ToUpperInvariant() ?? "未知"));
-            parts.Add("虛擬 IP：" + (_vpn.Vip ?? "未知"));
-        }
-        if (_vpn.RetryNote is { } note && state != TrayState.Connected) parts.Add(note);
-        _detail.Text = string.Join("　", parts);
-        _detail.Visible = parts.Count > 0;
+        var model = StatusPanelModel.Build(state, _vpn.Gateway, state == TrayState.Busy ? _vpn.StatusLine : null,
+            _vpn.LastError ?? _vpn.RetryNote, _vpn.WantConnected, _vpn.IsBusy);
+        // 第二行：已連線顯示虛擬 IP；其他狀態顯示原因或重試提示（同原本的狀態列＋詳細兩行）
+        var detail = state == TrayState.Connected
+            ? "虛擬 IP " + (_vpn.Vip ?? "未知")
+            : model.Detail ?? (state == TrayState.Busy ? "" : _vpn.RetryNote ?? "");
+        _header.Set(model.Tone, model.Headline, detail);
+        _flyout?.UpdateFromVpn();
 
         var busy = _vpn.IsBusy;
         _connect.Enabled = !busy;
@@ -205,6 +209,29 @@ internal sealed class TrayContext : ApplicationContext
         _disconnect.Enabled = state == TrayState.Connected || _vpn.WantConnected || busy;
         // 精靈可隨時開（它自己的步驟遇到忙碌會等使用者重試）
         _auto.Checked = _vpn.Settings.AutoReconnect;
+    }
+
+    private void ToggleFlyout()
+    {
+        _flyout ??= new StatusFlyout(_vpn, () => ShowSettings(importOnShow: false));
+        _flyout.Toggle();
+    }
+
+    /// <summary>右鍵選單套主題色（深色模式時選單也是深色）。</summary>
+    private void ApplyMenuTheme()
+    {
+        _menu.Renderer = new ThemedMenuRenderer();
+        _menu.BackColor = Theme.Surface;
+        _menu.ForeColor = Theme.Ink;
+        _menu.Font = Theme.Ui(9f);
+        _header.Font = Theme.Ui(9f, System.Drawing.FontStyle.Bold);
+    }
+
+    private void OnThemeChanged()
+    {
+        if (_disposed) return;
+        ApplyMenuTheme();
+        _menu.Invalidate();
     }
 
     /// <summary>通知：ShowBalloonTip 遇到空標題或空內文會丟例外，先補上預設文字。</summary>
@@ -234,7 +261,8 @@ internal sealed class TrayContext : ApplicationContext
             return _settingsForm;
         }
         // 自動重連取最新值：設定視窗開著時也可能從托盤切換
-        _settingsForm = new SettingsForm(_vpn.Settings, () => _vpn.Settings.AutoReconnect, () => _vpn.Settings, importOnShow);
+        _settingsForm = new SettingsForm(_vpn.Settings, () => _vpn.Settings.AutoReconnect, () => _vpn.Settings, importOnShow,
+            history: _vpn.History, connectedGateway: () => _vpn.State == TrayState.Connected ? _vpn.ConnectedGateway : null);
         _settingsForm.FormClosed += (_, _) =>
         {
             if (_settingsForm?.Saved is { } saved) _vpn.UpdateSettings(saved);
@@ -288,6 +316,7 @@ internal sealed class TrayContext : ApplicationContext
         _ui.Post(_ =>
         {
             if (_disposed) return;
+            Theme.Refresh();   // 應用程式深淺色（視窗、面板、選單）；有變才觸發 Theme.Changed
             var light = TrayIcons.ReadLightTaskbar();
             if (light == _lightTaskbar) return;
             _lightTaskbar = light;
@@ -351,6 +380,7 @@ internal sealed class TrayContext : ApplicationContext
         {
             _disposed = true;
             SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
+            Theme.Changed -= OnThemeChanged;
             _watchdog.Dispose();
             _icon.Visible = false;
             _icon.Dispose();
@@ -360,6 +390,8 @@ internal sealed class TrayContext : ApplicationContext
             _logForm?.Dispose();
             _settingsForm?.Dispose();
             _wizardForm?.Dispose();
+            _flyout?.Dispose();
+            Theme.DisposeFonts();
         }
         base.Dispose(disposing);
     }
