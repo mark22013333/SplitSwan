@@ -1,0 +1,5530 @@
+{
+ "E700": {
+  "fluent": "GlobalNavButton",
+  "mdl2": "GlobalNavigationButton"
+ },
+ "E701": {
+  "fluent": "Wifi",
+  "mdl2": "Wifi"
+ },
+ "E702": {
+  "fluent": "Bluetooth",
+  "mdl2": "Bluetooth"
+ },
+ "E703": {
+  "fluent": "Connect",
+  "mdl2": "Connect"
+ },
+ "E704": {
+  "fluent": "InternetSharing",
+  "mdl2": "InternetSharing"
+ },
+ "E705": {
+  "fluent": "VPN",
+  "mdl2": "VPN"
+ },
+ "E706": {
+  "fluent": "Brightness",
+  "mdl2": "Brightness"
+ },
+ "E707": {
+  "fluent": "MapPin",
+  "mdl2": "MapPin"
+ },
+ "E708": {
+  "fluent": "QuietHours",
+  "mdl2": "QuietHours"
+ },
+ "E709": {
+  "fluent": "Airplane",
+  "mdl2": "Airplane"
+ },
+ "E70A": {
+  "fluent": "Tablet",
+  "mdl2": "Tablet"
+ },
+ "E70B": {
+  "fluent": "QuickNote",
+  "mdl2": "QuickNote"
+ },
+ "E70C": {
+  "fluent": "RememberedDevice",
+  "mdl2": "RememberedDevice"
+ },
+ "E70D": {
+  "fluent": "ChevronDown",
+  "mdl2": "ChevronDown"
+ },
+ "E70E": {
+  "fluent": "ChevronUp",
+  "mdl2": "ChevronUp"
+ },
+ "E70F": {
+  "fluent": "Edit",
+  "mdl2": "Edit"
+ },
+ "E710": {
+  "fluent": "Add",
+  "mdl2": "Add"
+ },
+ "E711": {
+  "fluent": "Cancel",
+  "mdl2": "Cancel"
+ },
+ "E712": {
+  "fluent": "More",
+  "mdl2": "More"
+ },
+ "E713": {
+  "fluent": "Settings",
+  "mdl2": "Setting"
+ },
+ "E714": {
+  "fluent": "Video",
+  "mdl2": "Video"
+ },
+ "E715": {
+  "fluent": "Mail",
+  "mdl2": "Mail"
+ },
+ "E716": {
+  "fluent": "People",
+  "mdl2": "People"
+ },
+ "E717": {
+  "fluent": "Phone",
+  "mdl2": "Phone"
+ },
+ "E718": {
+  "fluent": "Pin",
+  "mdl2": "Pin"
+ },
+ "E719": {
+  "fluent": "Shop",
+  "mdl2": "Shop"
+ },
+ "E71A": {
+  "fluent": "Stop",
+  "mdl2": "Stop"
+ },
+ "E71B": {
+  "fluent": "Link",
+  "mdl2": "Link"
+ },
+ "E71C": {
+  "fluent": "Filter",
+  "mdl2": "Filter"
+ },
+ "E71D": {
+  "fluent": "AllApps",
+  "mdl2": "AllApps"
+ },
+ "E71E": {
+  "fluent": "Zoom",
+  "mdl2": "Zoom"
+ },
+ "E71F": {
+  "fluent": "ZoomOut",
+  "mdl2": "ZoomOut"
+ },
+ "E720": {
+  "fluent": "Microphone",
+  "mdl2": "Microphone"
+ },
+ "E721": {
+  "fluent": "Search",
+  "mdl2": "Search"
+ },
+ "E722": {
+  "fluent": "Camera",
+  "mdl2": "Camera"
+ },
+ "E723": {
+  "fluent": "Attach",
+  "mdl2": "Attach"
+ },
+ "E724": {
+  "fluent": "Send",
+  "mdl2": "Send"
+ },
+ "E725": {
+  "fluent": "SendFill",
+  "mdl2": "SendFill"
+ },
+ "E726": {
+  "fluent": "WalkSolid",
+  "mdl2": "WalkSolid"
+ },
+ "E727": {
+  "fluent": "InPrivate",
+  "mdl2": "InPrivate"
+ },
+ "E728": {
+  "fluent": "FavoriteList",
+  "mdl2": "FavoriteList"
+ },
+ "E729": {
+  "fluent": "PageSolid",
+  "mdl2": "PageSolid"
+ },
+ "E72A": {
+  "fluent": "Forward",
+  "mdl2": "Forward"
+ },
+ "E72B": {
+  "fluent": "Back",
+  "mdl2": "Back"
+ },
+ "E72C": {
+  "fluent": "Refresh",
+  "mdl2": "Refresh"
+ },
+ "E72D": {
+  "fluent": "Share",
+  "mdl2": "Share"
+ },
+ "E72E": {
+  "fluent": "Lock",
+  "mdl2": "Lock"
+ },
+ "E730": {
+  "fluent": "ReportHacked",
+  "mdl2": "ReportHacked"
+ },
+ "E731": {
+  "fluent": "EMI",
+  "mdl2": "EMI"
+ },
+ "E734": {
+  "fluent": "FavoriteStar",
+  "mdl2": "FavoriteStar"
+ },
+ "E735": {
+  "fluent": "FavoriteStarFill",
+  "mdl2": "FavoriteStarFill"
+ },
+ "E736": {
+  "fluent": "ReadingMode",
+  "mdl2": "ReadingMode"
+ },
+ "E737": {
+  "fluent": "Favicon",
+  "mdl2": "Favicon"
+ },
+ "E738": {
+  "fluent": "Remove",
+  "mdl2": "Remove"
+ },
+ "E739": {
+  "fluent": "Checkbox",
+  "mdl2": "Checkbox"
+ },
+ "E73A": {
+  "fluent": "CheckboxComposite",
+  "mdl2": "CheckboxComposite"
+ },
+ "E73B": {
+  "fluent": "CheckboxFill",
+  "mdl2": "CheckboxFill"
+ },
+ "E73C": {
+  "fluent": "CheckboxIndeterminate",
+  "mdl2": "CheckboxIndeterminate"
+ },
+ "E73D": {
+  "fluent": "CheckboxCompositeReversed",
+  "mdl2": "CheckboxCompositeReversed"
+ },
+ "E73E": {
+  "fluent": "CheckMark",
+  "mdl2": "CheckMark"
+ },
+ "E73F": {
+  "fluent": "BackToWindow",
+  "mdl2": "BackToWindow"
+ },
+ "E740": {
+  "fluent": "FullScreen",
+  "mdl2": "FullScreen"
+ },
+ "E741": {
+  "fluent": "ResizeTouchLarger",
+  "mdl2": "ResizeTouchLarger"
+ },
+ "E742": {
+  "fluent": "ResizeTouchSmaller",
+  "mdl2": "ResizeTouchSmaller"
+ },
+ "E743": {
+  "fluent": "ResizeMouseSmall",
+  "mdl2": "ResizeMouseSmall"
+ },
+ "E744": {
+  "fluent": "ResizeMouseMedium",
+  "mdl2": "ResizeMouseMedium"
+ },
+ "E745": {
+  "fluent": "ResizeMouseWide",
+  "mdl2": "ResizeMouseWide"
+ },
+ "E746": {
+  "fluent": "ResizeMouseTall",
+  "mdl2": "ResizeMouseTall"
+ },
+ "E747": {
+  "fluent": "ResizeMouseLarge",
+  "mdl2": "ResizeMouseLarge"
+ },
+ "E748": {
+  "fluent": "SwitchUser",
+  "mdl2": "SwitchUser"
+ },
+ "E749": {
+  "fluent": "Print",
+  "mdl2": "Print"
+ },
+ "E74A": {
+  "fluent": "Up",
+  "mdl2": "Up"
+ },
+ "E74B": {
+  "fluent": "Down",
+  "mdl2": "Down"
+ },
+ "E74C": {
+  "fluent": "OEM",
+  "mdl2": "OEM"
+ },
+ "E74D": {
+  "fluent": "Delete",
+  "mdl2": "Delete"
+ },
+ "E74E": {
+  "fluent": "Save",
+  "mdl2": "Save"
+ },
+ "E74F": {
+  "fluent": "Mute",
+  "mdl2": "Mute"
+ },
+ "E750": {
+  "fluent": "BackSpaceQWERTY",
+  "mdl2": "BackSpaceQWERTY"
+ },
+ "E751": {
+  "fluent": "ReturnKey",
+  "mdl2": "ReturnKey"
+ },
+ "E752": {
+  "fluent": "UpArrowShiftKey",
+  "mdl2": "UpArrowShiftKey"
+ },
+ "E753": {
+  "fluent": "Cloud",
+  "mdl2": "Cloud"
+ },
+ "E754": {
+  "fluent": "Flashlight",
+  "mdl2": "Flashlight"
+ },
+ "E755": {
+  "fluent": "RotationLock",
+  "mdl2": "RotationLock"
+ },
+ "E756": {
+  "fluent": "CommandPrompt",
+  "mdl2": "CommandPrompt"
+ },
+ "E759": {
+  "fluent": "SIPMove",
+  "mdl2": "SIPMove"
+ },
+ "E75A": {
+  "fluent": "SIPUndock",
+  "mdl2": "SIPUndock"
+ },
+ "E75B": {
+  "fluent": "SIPRedock",
+  "mdl2": "SIPRedock"
+ },
+ "E75C": {
+  "fluent": "EraseTool",
+  "mdl2": "EraseTool"
+ },
+ "E75D": {
+  "fluent": "UnderscoreSpace",
+  "mdl2": "UnderscoreSpace"
+ },
+ "E75E": {
+  "fluent": "GripperTool",
+  "mdl2": "GripperTool"
+ },
+ "E75F": {
+  "fluent": "Dialpad",
+  "mdl2": "Dialpad"
+ },
+ "E760": {
+  "fluent": "PageLeft",
+  "mdl2": "PageLeft"
+ },
+ "E761": {
+  "fluent": "PageRight",
+  "mdl2": "PageRight"
+ },
+ "E762": {
+  "fluent": "MultiSelect",
+  "mdl2": "MultiSelect"
+ },
+ "E763": {
+  "fluent": "KeyboardLeftHanded",
+  "mdl2": "KeyboardLeftHanded"
+ },
+ "E764": {
+  "fluent": "KeyboardRightHanded",
+  "mdl2": "KeyboardRightHanded"
+ },
+ "E765": {
+  "fluent": "KeyboardClassic",
+  "mdl2": "KeyboardClassic"
+ },
+ "E766": {
+  "fluent": "KeyboardSplit",
+  "mdl2": "KeyboardSplit"
+ },
+ "E767": {
+  "fluent": "Volume",
+  "mdl2": "Volume"
+ },
+ "E768": {
+  "fluent": "Play",
+  "mdl2": "Play"
+ },
+ "E769": {
+  "fluent": "Pause",
+  "mdl2": "Pause"
+ },
+ "E76B": {
+  "fluent": "ChevronLeft",
+  "mdl2": "ChevronLeft"
+ },
+ "E76C": {
+  "fluent": "ChevronRight",
+  "mdl2": "ChevronRight"
+ },
+ "E76D": {
+  "fluent": "InkingTool",
+  "mdl2": "InkingTool"
+ },
+ "E76E": {
+  "fluent": "Emoji2",
+  "mdl2": "Emoji2"
+ },
+ "E76F": {
+  "fluent": "GripperBarHorizontal",
+  "mdl2": "GripperBarHorizontal"
+ },
+ "E770": {
+  "fluent": "System",
+  "mdl2": "System"
+ },
+ "E771": {
+  "fluent": "Personalize",
+  "mdl2": "Personalize"
+ },
+ "E772": {
+  "fluent": "Devices",
+  "mdl2": "Devices"
+ },
+ "E773": {
+  "fluent": "SearchAndApps",
+  "mdl2": "SearchAndApps"
+ },
+ "E774": {
+  "fluent": "Globe",
+  "mdl2": "Globe"
+ },
+ "E775": {
+  "fluent": "TimeLanguage",
+  "mdl2": "TimeLanguage"
+ },
+ "E776": {
+  "fluent": "EaseOfAccess",
+  "mdl2": "EaseOfAccess"
+ },
+ "E777": {
+  "fluent": "UpdateRestore",
+  "mdl2": "UpdateRestore"
+ },
+ "E778": {
+  "fluent": "HangUp",
+  "mdl2": "HangUp"
+ },
+ "E779": {
+  "fluent": "ContactInfo",
+  "mdl2": "ContactInfo"
+ },
+ "E77A": {
+  "fluent": "Unpin",
+  "mdl2": "Unpin"
+ },
+ "E77B": {
+  "fluent": "Contact",
+  "mdl2": "Contact"
+ },
+ "E77C": {
+  "fluent": "Memo",
+  "mdl2": "Memo"
+ },
+ "E77E": {
+  "fluent": "IncomingCall",
+  "mdl2": "IncomingCall"
+ },
+ "E77F": {
+  "fluent": "Paste",
+  "mdl2": "Paste"
+ },
+ "E780": {
+  "fluent": "PhoneBook",
+  "mdl2": "PhoneBook"
+ },
+ "E781": {
+  "fluent": "LEDLight",
+  "mdl2": "LEDLight"
+ },
+ "E783": {
+  "fluent": "Error",
+  "mdl2": "Error"
+ },
+ "E784": {
+  "fluent": "GripperBarVertical",
+  "mdl2": "GripperBarVertical"
+ },
+ "E785": {
+  "fluent": "Unlock",
+  "mdl2": "Unlock"
+ },
+ "E786": {
+  "fluent": "Slideshow",
+  "mdl2": "Slideshow"
+ },
+ "E787": {
+  "fluent": "Calendar",
+  "mdl2": "Calendar"
+ },
+ "E788": {
+  "fluent": "GripperResize",
+  "mdl2": "GripperResize"
+ },
+ "E789": {
+  "fluent": "Megaphone",
+  "mdl2": "Megaphone"
+ },
+ "E78A": {
+  "fluent": "Trim",
+  "mdl2": "Trim"
+ },
+ "E78B": {
+  "fluent": "NewWindow",
+  "mdl2": "NewWindow"
+ },
+ "E78C": {
+  "fluent": "SaveLocal",
+  "mdl2": "SaveLocal"
+ },
+ "E790": {
+  "fluent": "Color",
+  "mdl2": "Color"
+ },
+ "E791": {
+  "fluent": "DataSense",
+  "mdl2": "DataSense"
+ },
+ "E792": {
+  "fluent": "SaveAs",
+  "mdl2": "SaveAs"
+ },
+ "E793": {
+  "fluent": "Light",
+  "mdl2": "Light"
+ },
+ "E799": {
+  "fluent": "AspectRatio",
+  "mdl2": "AspectRatio"
+ },
+ "E7A5": {
+  "fluent": "DataSenseBar",
+  "mdl2": "DataSenseBar"
+ },
+ "E7A6": {
+  "fluent": "Redo",
+  "mdl2": "Redo"
+ },
+ "E7A7": {
+  "fluent": "Undo",
+  "mdl2": "Undo"
+ },
+ "E7A8": {
+  "fluent": "Crop",
+  "mdl2": "Crop"
+ },
+ "E7AC": {
+  "fluent": "OpenWith",
+  "mdl2": "OpenWith"
+ },
+ "E7AD": {
+  "fluent": "Rotate",
+  "mdl2": "Rotate"
+ },
+ "E7B3": {
+  "fluent": "RedEye",
+  "mdl2": "RedEye"
+ },
+ "E7B5": {
+  "fluent": "SetlockScreen",
+  "mdl2": "SetlockScreen"
+ },
+ "E7B7": {
+  "fluent": "MapPin2",
+  "mdl2": "MapPin2"
+ },
+ "E7B8": {
+  "fluent": "Package",
+  "mdl2": "Package"
+ },
+ "E7BA": {
+  "fluent": "Warning",
+  "mdl2": "Warning"
+ },
+ "E7BC": {
+  "fluent": "ReadingList",
+  "mdl2": "ReadingList"
+ },
+ "E7BE": {
+  "fluent": "Education",
+  "mdl2": "Education"
+ },
+ "E7BF": {
+  "fluent": "ShoppingCart",
+  "mdl2": "ShoppingCart"
+ },
+ "E7C0": {
+  "fluent": "Train",
+  "mdl2": "Train"
+ },
+ "E7C1": {
+  "fluent": "Flag",
+  "mdl2": "Flag"
+ },
+ "E7C3": {
+  "fluent": "Page",
+  "mdl2": "Page"
+ },
+ "E7C4": {
+  "fluent": "TaskView",
+  "mdl2": "TaskView"
+ },
+ "E7C5": {
+  "fluent": "BrowsePhotos",
+  "mdl2": "BrowsePhotos"
+ },
+ "E7C6": {
+  "fluent": "HalfStarLeft",
+  "mdl2": "HalfStarLeft"
+ },
+ "E7C7": {
+  "fluent": "HalfStarRight",
+  "mdl2": "HalfStarRight"
+ },
+ "E7C8": {
+  "fluent": "Record",
+  "mdl2": "Record"
+ },
+ "E7C9": {
+  "fluent": "TouchPointer",
+  "mdl2": "TouchPointer"
+ },
+ "E7DE": {
+  "fluent": "LangJPN",
+  "mdl2": "LangJPN"
+ },
+ "E7E3": {
+  "fluent": "Ferry",
+  "mdl2": "Ferry"
+ },
+ "E7E6": {
+  "fluent": "Highlight",
+  "mdl2": "Highlight"
+ },
+ "E7E7": {
+  "fluent": "ActionCenterNotification",
+  "mdl2": "ActionCenterNotification"
+ },
+ "E7E8": {
+  "fluent": "PowerButton",
+  "mdl2": "PowerButton"
+ },
+ "E7EA": {
+  "fluent": "ResizeTouchNarrower",
+  "mdl2": "ResizeTouchNarrower"
+ },
+ "E7EB": {
+  "fluent": "ResizeTouchShorter",
+  "mdl2": "ResizeTouchShorter"
+ },
+ "E7EC": {
+  "fluent": "DrivingMode",
+  "mdl2": "DrivingMode"
+ },
+ "E7ED": {
+  "fluent": "RingerSilent",
+  "mdl2": "RingerSilent"
+ },
+ "E7EE": {
+  "fluent": "OtherUser",
+  "mdl2": "OtherUser"
+ },
+ "E7EF": {
+  "fluent": "Admin",
+  "mdl2": "Admin"
+ },
+ "E7F0": {
+  "fluent": "CC",
+  "mdl2": "CC"
+ },
+ "E7F1": {
+  "fluent": "SDCard",
+  "mdl2": "SDCard"
+ },
+ "E7F2": {
+  "fluent": "CallForwarding",
+  "mdl2": "CallForwarding"
+ },
+ "E7F3": {
+  "fluent": "SettingsDisplaySound",
+  "mdl2": "SettingsDisplaySound"
+ },
+ "E7F4": {
+  "fluent": "TVMonitor",
+  "mdl2": "TVMonitor"
+ },
+ "E7F5": {
+  "fluent": "Speakers",
+  "mdl2": "Speakers"
+ },
+ "E7F6": {
+  "fluent": "Headphone",
+  "mdl2": "Headphone"
+ },
+ "E7F7": {
+  "fluent": "DeviceLaptopPic",
+  "mdl2": "DeviceLaptopPic"
+ },
+ "E7F8": {
+  "fluent": "DeviceLaptopNoPic",
+  "mdl2": "DeviceLaptopNoPic"
+ },
+ "E7F9": {
+  "fluent": "DeviceMonitorRightPic",
+  "mdl2": "DeviceMonitorRightPic"
+ },
+ "E7FA": {
+  "fluent": "DeviceMonitorLeftPic",
+  "mdl2": "DeviceMonitorLeftPic"
+ },
+ "E7FB": {
+  "fluent": "DeviceMonitorNoPic",
+  "mdl2": "DeviceMonitorNoPic"
+ },
+ "E7FC": {
+  "fluent": "Game",
+  "mdl2": "Game"
+ },
+ "E7FD": {
+  "fluent": "HorizontalTabKey",
+  "mdl2": "HorizontalTabKey"
+ },
+ "E802": {
+  "fluent": "StreetsideSplitMinimize",
+  "mdl2": "StreetsideSplitMinimize"
+ },
+ "E803": {
+  "fluent": "StreetsideSplitExpand",
+  "mdl2": "StreetsideSplitExpand"
+ },
+ "E804": {
+  "fluent": "Car",
+  "mdl2": "Car"
+ },
+ "E805": {
+  "fluent": "Walk",
+  "mdl2": "Walk"
+ },
+ "E806": {
+  "fluent": "Bus",
+  "mdl2": "Bus"
+ },
+ "E809": {
+  "fluent": "TiltUp",
+  "mdl2": "TiltUp"
+ },
+ "E80A": {
+  "fluent": "TiltDown",
+  "mdl2": "TiltDown"
+ },
+ "E80B": {
+  "fluent": "CallControl",
+  "mdl2": "CallControl"
+ },
+ "E80C": {
+  "fluent": "RotateMapRight",
+  "mdl2": "RotateMapRight"
+ },
+ "E80D": {
+  "fluent": "RotateMapLeft",
+  "mdl2": "RotateMapLeft"
+ },
+ "E80F": {
+  "fluent": "Home",
+  "mdl2": "Home"
+ },
+ "E811": {
+  "fluent": "ParkingLocation",
+  "mdl2": "ParkingLocation"
+ },
+ "E812": {
+  "fluent": "MapCompassTop",
+  "mdl2": "MapCompassTop"
+ },
+ "E813": {
+  "fluent": "MapCompassBottom",
+  "mdl2": "MapCompassBottom"
+ },
+ "E814": {
+  "fluent": "IncidentTriangle",
+  "mdl2": "IncidentTriangle"
+ },
+ "E815": {
+  "fluent": "Touch",
+  "mdl2": "Touch"
+ },
+ "E816": {
+  "fluent": "MapDirections",
+  "mdl2": "MapDirections"
+ },
+ "E819": {
+  "fluent": "StartPoint",
+  "mdl2": "StartPoint"
+ },
+ "E81A": {
+  "fluent": "StopPoint",
+  "mdl2": "StopPoint"
+ },
+ "E81B": {
+  "fluent": "EndPoint",
+  "mdl2": "EndPoint"
+ },
+ "E81C": {
+  "fluent": "History",
+  "mdl2": "History"
+ },
+ "E81D": {
+  "fluent": "Location",
+  "mdl2": "Location"
+ },
+ "E81E": {
+  "fluent": "MapLayers",
+  "mdl2": "MapLayers"
+ },
+ "E81F": {
+  "fluent": "Accident",
+  "mdl2": "Accident"
+ },
+ "E821": {
+  "fluent": "Work",
+  "mdl2": "Work"
+ },
+ "E822": {
+  "fluent": "Construction",
+  "mdl2": "Construction"
+ },
+ "E823": {
+  "fluent": "Recent",
+  "mdl2": "Recent"
+ },
+ "E825": {
+  "fluent": "Bank",
+  "mdl2": "Bank"
+ },
+ "E826": {
+  "fluent": "DownloadMap",
+  "mdl2": "DownloadMap"
+ },
+ "E829": {
+  "fluent": "InkingToolFill2",
+  "mdl2": "InkingToolFill2"
+ },
+ "E82A": {
+  "fluent": "HighlightFill2",
+  "mdl2": "HighlightFill2"
+ },
+ "E82B": {
+  "fluent": "EraseToolFill",
+  "mdl2": "EraseToolFill"
+ },
+ "E82C": {
+  "fluent": "EraseToolFill2",
+  "mdl2": "EraseToolFill2"
+ },
+ "E82D": {
+  "fluent": "Dictionary",
+  "mdl2": "Dictionary"
+ },
+ "E82E": {
+  "fluent": "DictionaryAdd",
+  "mdl2": "DictionaryAdd"
+ },
+ "E82F": {
+  "fluent": "ToolTip",
+  "mdl2": "ToolTip"
+ },
+ "E830": {
+  "fluent": "ChromeBack",
+  "mdl2": "ChromeBack"
+ },
+ "E835": {
+  "fluent": "ProvisioningPackage",
+  "mdl2": "ProvisioningPackage"
+ },
+ "E836": {
+  "fluent": "AddRemoteDevice",
+  "mdl2": "AddRemoteDevice"
+ },
+ "E838": {
+  "fluent": "FolderOpen",
+  "mdl2": "FolderOpen"
+ },
+ "E839": {
+  "fluent": "Ethernet",
+  "mdl2": "Ethernet"
+ },
+ "E83A": {
+  "fluent": "ShareBroadband",
+  "mdl2": "ShareBroadband"
+ },
+ "E83B": {
+  "fluent": "DirectAccess",
+  "mdl2": "DirectAccess"
+ },
+ "E83C": {
+  "fluent": "DialUp",
+  "mdl2": "DialUp"
+ },
+ "E83D": {
+  "fluent": "DefenderApp",
+  "mdl2": "DefenderApp"
+ },
+ "E83E": {
+  "fluent": "BatteryCharging9",
+  "mdl2": "BatteryCharging9"
+ },
+ "E83F": {
+  "fluent": "Battery10",
+  "mdl2": "Battery10"
+ },
+ "E840": {
+  "fluent": "Pinned",
+  "mdl2": "Pinned"
+ },
+ "E841": {
+  "fluent": "PinFill",
+  "mdl2": "PinFill"
+ },
+ "E842": {
+  "fluent": "PinnedFill",
+  "mdl2": "PinnedFill"
+ },
+ "E843": {
+  "fluent": "PeriodKey",
+  "mdl2": "PeriodKey"
+ },
+ "E844": {
+  "fluent": "PuncKey",
+  "mdl2": "PuncKey"
+ },
+ "E845": {
+  "fluent": "RevToggleKey",
+  "mdl2": "RevToggleKey"
+ },
+ "E846": {
+  "fluent": "RightArrowKeyTime1",
+  "mdl2": "RightArrowKeyTime1"
+ },
+ "E847": {
+  "fluent": "RightArrowKeyTime2",
+  "mdl2": "RightArrowKeyTime2"
+ },
+ "E848": {
+  "fluent": "LeftQuote",
+  "mdl2": "LeftQuote"
+ },
+ "E849": {
+  "fluent": "RightQuote",
+  "mdl2": "RightQuote"
+ },
+ "E84A": {
+  "fluent": "DownShiftKey",
+  "mdl2": "DownShiftKey"
+ },
+ "E84B": {
+  "fluent": "UpShiftKey",
+  "mdl2": "UpShiftKey"
+ },
+ "E84C": {
+  "fluent": "PuncKey0",
+  "mdl2": "PuncKey0"
+ },
+ "E84D": {
+  "fluent": "PuncKeyLeftBottom",
+  "mdl2": "PuncKeyLeftBottom"
+ },
+ "E84E": {
+  "fluent": "RightArrowKeyTime3",
+  "mdl2": "RightArrowKeyTime3"
+ },
+ "E84F": {
+  "fluent": "RightArrowKeyTime4",
+  "mdl2": "RightArrowKeyTime4"
+ },
+ "E850": {
+  "fluent": "Battery0",
+  "mdl2": "Battery0"
+ },
+ "E851": {
+  "fluent": "Battery1",
+  "mdl2": "Battery1"
+ },
+ "E852": {
+  "fluent": "Battery2",
+  "mdl2": "Battery2"
+ },
+ "E853": {
+  "fluent": "Battery3",
+  "mdl2": "Battery3"
+ },
+ "E854": {
+  "fluent": "Battery4",
+  "mdl2": "Battery4"
+ },
+ "E855": {
+  "fluent": "Battery5",
+  "mdl2": "Battery5"
+ },
+ "E856": {
+  "fluent": "Battery6",
+  "mdl2": "Battery6"
+ },
+ "E857": {
+  "fluent": "Battery7",
+  "mdl2": "Battery7"
+ },
+ "E858": {
+  "fluent": "Battery8",
+  "mdl2": "Battery8"
+ },
+ "E859": {
+  "fluent": "Battery9",
+  "mdl2": "Battery9"
+ },
+ "E85A": {
+  "fluent": "BatteryCharging0",
+  "mdl2": "BatteryCharging0"
+ },
+ "E85B": {
+  "fluent": "BatteryCharging1",
+  "mdl2": "BatteryCharging1"
+ },
+ "E85C": {
+  "fluent": "BatteryCharging2",
+  "mdl2": "BatteryCharging2"
+ },
+ "E85D": {
+  "fluent": "BatteryCharging3",
+  "mdl2": "BatteryCharging3"
+ },
+ "E85E": {
+  "fluent": "BatteryCharging4",
+  "mdl2": "BatteryCharging4"
+ },
+ "E85F": {
+  "fluent": "BatteryCharging5",
+  "mdl2": "BatteryCharging5"
+ },
+ "E860": {
+  "fluent": "BatteryCharging6",
+  "mdl2": "BatteryCharging6"
+ },
+ "E861": {
+  "fluent": "BatteryCharging7",
+  "mdl2": "BatteryCharging7"
+ },
+ "E862": {
+  "fluent": "BatteryCharging8",
+  "mdl2": "BatteryCharging8"
+ },
+ "E863": {
+  "fluent": "BatterySaver0",
+  "mdl2": "BatterySaver0"
+ },
+ "E864": {
+  "fluent": "BatterySaver1",
+  "mdl2": "BatterySaver1"
+ },
+ "E865": {
+  "fluent": "BatterySaver2",
+  "mdl2": "BatterySaver2"
+ },
+ "E866": {
+  "fluent": "BatterySaver3",
+  "mdl2": "BatterySaver3"
+ },
+ "E867": {
+  "fluent": "BatterySaver4",
+  "mdl2": "BatterySaver4"
+ },
+ "E868": {
+  "fluent": "BatterySaver5",
+  "mdl2": "BatterySaver5"
+ },
+ "E869": {
+  "fluent": "BatterySaver6",
+  "mdl2": "BatterySaver6"
+ },
+ "E86A": {
+  "fluent": "BatterySaver7",
+  "mdl2": "BatterySaver7"
+ },
+ "E86B": {
+  "fluent": "BatterySaver8",
+  "mdl2": "BatterySaver8"
+ },
+ "E86C": {
+  "fluent": "SignalBars1",
+  "mdl2": "SignalBars1"
+ },
+ "E86D": {
+  "fluent": "SignalBars2",
+  "mdl2": "SignalBars2"
+ },
+ "E86E": {
+  "fluent": "SignalBars3",
+  "mdl2": "SignalBars3"
+ },
+ "E86F": {
+  "fluent": "SignalBars4",
+  "mdl2": "SignalBars4"
+ },
+ "E870": {
+  "fluent": "SignalBars5",
+  "mdl2": "SignalBars5"
+ },
+ "E871": {
+  "fluent": "SignalNotConnected",
+  "mdl2": "SignalNotConnected"
+ },
+ "E872": {
+  "fluent": "Wifi1",
+  "mdl2": "Wifi1"
+ },
+ "E873": {
+  "fluent": "Wifi2",
+  "mdl2": "Wifi2"
+ },
+ "E874": {
+  "fluent": "Wifi3",
+  "mdl2": "Wifi3"
+ },
+ "E875": {
+  "fluent": "MobSIMLock",
+  "mdl2": "MobSIMLock"
+ },
+ "E876": {
+  "fluent": "MobSIMMissing",
+  "mdl2": "MobSIMMissing"
+ },
+ "E877": {
+  "fluent": "Vibrate",
+  "mdl2": "Vibrate"
+ },
+ "E878": {
+  "fluent": "RoamingInternational",
+  "mdl2": "RoamingInternational"
+ },
+ "E879": {
+  "fluent": "RoamingDomestic",
+  "mdl2": "RoamingDomestic"
+ },
+ "E87A": {
+  "fluent": "CallForwardInternational",
+  "mdl2": "CallForwardInternational"
+ },
+ "E87B": {
+  "fluent": "CallForwardRoaming",
+  "mdl2": "CallForwardRoaming"
+ },
+ "E87C": {
+  "fluent": "JpnRomanji",
+  "mdl2": "JpnRomanji"
+ },
+ "E87D": {
+  "fluent": "JpnRomanjiLock",
+  "mdl2": "JpnRomanjiLock"
+ },
+ "E87E": {
+  "fluent": "JpnRomanjiShift",
+  "mdl2": "JpnRomanjiShift"
+ },
+ "E87F": {
+  "fluent": "JpnRomanjiShiftLock",
+  "mdl2": "JpnRomanjiShiftLock"
+ },
+ "E880": {
+  "fluent": "StatusDataTransfer",
+  "mdl2": "StatusDataTransfer"
+ },
+ "E881": {
+  "fluent": "StatusDataTransferVPN",
+  "mdl2": "StatusDataTransferVPN"
+ },
+ "E882": {
+  "fluent": "StatusDualSIM2",
+  "mdl2": "StatusDualSIM2"
+ },
+ "E883": {
+  "fluent": "StatusDualSIM2VPN",
+  "mdl2": "StatusDualSIM2VPN"
+ },
+ "E884": {
+  "fluent": "StatusDualSIM1",
+  "mdl2": "StatusDualSIM1"
+ },
+ "E885": {
+  "fluent": "StatusDualSIM1VPN",
+  "mdl2": "StatusDualSIM1VPN"
+ },
+ "E886": {
+  "fluent": "StatusSGLTE",
+  "mdl2": "StatusSGLTE"
+ },
+ "E887": {
+  "fluent": "StatusSGLTECell",
+  "mdl2": "StatusSGLTECell"
+ },
+ "E888": {
+  "fluent": "StatusSGLTEDataVPN",
+  "mdl2": "StatusSGLTEDataVPN"
+ },
+ "E889": {
+  "fluent": "StatusVPN",
+  "mdl2": "StatusVPN"
+ },
+ "E88A": {
+  "fluent": "WifiHotspot",
+  "mdl2": "WifiHotspot"
+ },
+ "E88B": {
+  "fluent": "LanguageKor",
+  "mdl2": "LanguageKor"
+ },
+ "E88C": {
+  "fluent": "LanguageCht",
+  "mdl2": "LanguageCht"
+ },
+ "E88D": {
+  "fluent": "LanguageChs",
+  "mdl2": "LanguageChs"
+ },
+ "E88E": {
+  "fluent": "USB",
+  "mdl2": "USB"
+ },
+ "E88F": {
+  "fluent": "InkingToolFill",
+  "mdl2": "InkingToolFill"
+ },
+ "E890": {
+  "fluent": "View",
+  "mdl2": "View"
+ },
+ "E891": {
+  "fluent": "HighlightFill",
+  "mdl2": "HighlightFill"
+ },
+ "E892": {
+  "fluent": "Previous",
+  "mdl2": "Previous"
+ },
+ "E893": {
+  "fluent": "Next",
+  "mdl2": "Next"
+ },
+ "E894": {
+  "fluent": "Clear",
+  "mdl2": "Clear"
+ },
+ "E895": {
+  "fluent": "Sync",
+  "mdl2": "Sync"
+ },
+ "E896": {
+  "fluent": "Download",
+  "mdl2": "Download"
+ },
+ "E897": {
+  "fluent": "Help",
+  "mdl2": "Help"
+ },
+ "E898": {
+  "fluent": "Upload",
+  "mdl2": "Upload"
+ },
+ "E899": {
+  "fluent": "Emoji",
+  "mdl2": "Emoji"
+ },
+ "E89A": {
+  "fluent": "TwoPage",
+  "mdl2": "TwoPage"
+ },
+ "E89B": {
+  "fluent": "LeaveChat",
+  "mdl2": "LeaveChat"
+ },
+ "E89C": {
+  "fluent": "MailForward",
+  "mdl2": "MailForward"
+ },
+ "E89E": {
+  "fluent": "RotateCamera",
+  "mdl2": "RotateCamera"
+ },
+ "E89F": {
+  "fluent": "ClosePane",
+  "mdl2": "ClosePane"
+ },
+ "E8A0": {
+  "fluent": "OpenPane",
+  "mdl2": "OpenPane"
+ },
+ "E8A1": {
+  "fluent": "PreviewLink",
+  "mdl2": "PreviewLink"
+ },
+ "E8A2": {
+  "fluent": "AttachCamera",
+  "mdl2": "AttachCamera"
+ },
+ "E8A3": {
+  "fluent": "ZoomIn",
+  "mdl2": "ZoomIn"
+ },
+ "E8A4": {
+  "fluent": "Bookmarks",
+  "mdl2": "Bookmarks"
+ },
+ "E8A5": {
+  "fluent": "Document",
+  "mdl2": "Document"
+ },
+ "E8A6": {
+  "fluent": "ProtectedDocument",
+  "mdl2": "ProtectedDocument"
+ },
+ "E8A7": {
+  "fluent": "OpenInNewWindow",
+  "mdl2": "OpenInNewWindow"
+ },
+ "E8A8": {
+  "fluent": "MailFill",
+  "mdl2": "MailFill"
+ },
+ "E8A9": {
+  "fluent": "ViewAll",
+  "mdl2": "ViewAll"
+ },
+ "E8AA": {
+  "fluent": "VideoChat",
+  "mdl2": "VideoChat"
+ },
+ "E8AB": {
+  "fluent": "Switch",
+  "mdl2": "Switch"
+ },
+ "E8AC": {
+  "fluent": "Rename",
+  "mdl2": "Rename"
+ },
+ "E8AD": {
+  "fluent": "Go",
+  "mdl2": "Go"
+ },
+ "E8AE": {
+  "fluent": "SurfaceHub",
+  "mdl2": "SurfaceHub"
+ },
+ "E8AF": {
+  "fluent": "Remote",
+  "mdl2": "Remote"
+ },
+ "E8B0": {
+  "fluent": "Click",
+  "mdl2": "Click"
+ },
+ "E8B1": {
+  "fluent": "Shuffle",
+  "mdl2": "Shuffle"
+ },
+ "E8B2": {
+  "fluent": "Movies",
+  "mdl2": "Movies"
+ },
+ "E8B3": {
+  "fluent": "SelectAll",
+  "mdl2": "SelectAll"
+ },
+ "E8B4": {
+  "fluent": "Orientation",
+  "mdl2": "Orientation"
+ },
+ "E8B5": {
+  "fluent": "Import",
+  "mdl2": "Import"
+ },
+ "E8B6": {
+  "fluent": "ImportAll",
+  "mdl2": "ImportAll"
+ },
+ "E8B7": {
+  "fluent": "Folder",
+  "mdl2": "Folder"
+ },
+ "E8B8": {
+  "fluent": "Webcam",
+  "mdl2": "Webcam"
+ },
+ "E8B9": {
+  "fluent": "Picture",
+  "mdl2": "Picture"
+ },
+ "E8BA": {
+  "fluent": "Caption",
+  "mdl2": "Caption"
+ },
+ "E8BB": {
+  "fluent": "ChromeClose",
+  "mdl2": "ChromeClose"
+ },
+ "E8BC": {
+  "fluent": "ShowResults",
+  "mdl2": "ShowResults"
+ },
+ "E8BD": {
+  "fluent": "Message",
+  "mdl2": "Message"
+ },
+ "E8BE": {
+  "fluent": "Leaf",
+  "mdl2": "Leaf"
+ },
+ "E8BF": {
+  "fluent": "CalendarDay",
+  "mdl2": "CalendarDay"
+ },
+ "E8C0": {
+  "fluent": "CalendarWeek",
+  "mdl2": "CalendarWeek"
+ },
+ "E8C1": {
+  "fluent": "Characters",
+  "mdl2": "Characters"
+ },
+ "E8C2": {
+  "fluent": "MailReplyAll",
+  "mdl2": "MailReplyAll"
+ },
+ "E8C3": {
+  "fluent": "Read",
+  "mdl2": "Read"
+ },
+ "E8C4": {
+  "fluent": "ShowBcc",
+  "mdl2": "ShowBcc"
+ },
+ "E8C5": {
+  "fluent": "HideBcc",
+  "mdl2": "HideBcc"
+ },
+ "E8C6": {
+  "fluent": "Cut",
+  "mdl2": "Cut"
+ },
+ "E8C7": {
+  "fluent": "PaymentCard",
+  "mdl2": "PaymentCard"
+ },
+ "E8C8": {
+  "fluent": "Copy",
+  "mdl2": "Copy"
+ },
+ "E8C9": {
+  "fluent": "Important",
+  "mdl2": "Important"
+ },
+ "E8CA": {
+  "fluent": "MailReply",
+  "mdl2": "MailReply"
+ },
+ "E8CB": {
+  "fluent": "Sort",
+  "mdl2": "Sort"
+ },
+ "E8CC": {
+  "fluent": "MobileTablet",
+  "mdl2": "MobileTablet"
+ },
+ "E8CD": {
+  "fluent": "DisconnectDrive",
+  "mdl2": "DisconnectDrive"
+ },
+ "E8CE": {
+  "fluent": "MapDrive",
+  "mdl2": "MapDrive"
+ },
+ "E8CF": {
+  "fluent": "ContactPresence",
+  "mdl2": "ContactPresence"
+ },
+ "E8D0": {
+  "fluent": "Priority",
+  "mdl2": "Priority"
+ },
+ "E8D1": {
+  "fluent": "GotoToday",
+  "mdl2": "GotoToday"
+ },
+ "E8D2": {
+  "fluent": "Font",
+  "mdl2": "Font"
+ },
+ "E8D3": {
+  "fluent": "FontColor",
+  "mdl2": "FontColor"
+ },
+ "E8D4": {
+  "fluent": "Contact2",
+  "mdl2": "Contact2"
+ },
+ "E8D5": {
+  "fluent": "FolderFill",
+  "mdl2": "FolderFill"
+ },
+ "E8D6": {
+  "fluent": "Audio",
+  "mdl2": "Audio"
+ },
+ "E8D7": {
+  "fluent": "Permissions",
+  "mdl2": "Permissions"
+ },
+ "E8D8": {
+  "fluent": "DisableUpdates",
+  "mdl2": "DisableUpdates"
+ },
+ "E8D9": {
+  "fluent": "Unfavorite",
+  "mdl2": "Unfavorite"
+ },
+ "E8DA": {
+  "fluent": "OpenLocal",
+  "mdl2": "OpenLocal"
+ },
+ "E8DB": {
+  "fluent": "Italic",
+  "mdl2": "Italic"
+ },
+ "E8DC": {
+  "fluent": "Underline",
+  "mdl2": "Underline"
+ },
+ "E8DD": {
+  "fluent": "Bold",
+  "mdl2": "Bold"
+ },
+ "E8DE": {
+  "fluent": "MoveToFolder",
+  "mdl2": "MoveToFolder"
+ },
+ "E8DF": {
+  "fluent": "LikeDislike",
+  "mdl2": "LikeDislike"
+ },
+ "E8E0": {
+  "fluent": "Dislike",
+  "mdl2": "Dislike"
+ },
+ "E8E1": {
+  "fluent": "Like",
+  "mdl2": "Like"
+ },
+ "E8E2": {
+  "fluent": "AlignRight",
+  "mdl2": "AlignRight"
+ },
+ "E8E3": {
+  "fluent": "AlignCenter",
+  "mdl2": "AlignCenter"
+ },
+ "E8E4": {
+  "fluent": "AlignLeft",
+  "mdl2": "AlignLeft"
+ },
+ "E8E5": {
+  "fluent": "OpenFile",
+  "mdl2": "OpenFile"
+ },
+ "E8E6": {
+  "fluent": "ClearSelection",
+  "mdl2": "ClearSelection"
+ },
+ "E8E7": {
+  "fluent": "FontDecrease",
+  "mdl2": "FontDecrease"
+ },
+ "E8E8": {
+  "fluent": "FontIncrease",
+  "mdl2": "FontIncrease"
+ },
+ "E8E9": {
+  "fluent": "FontSize",
+  "mdl2": "FontSize"
+ },
+ "E8EA": {
+  "fluent": "CellPhone",
+  "mdl2": "CellPhone"
+ },
+ "E8EB": {
+  "fluent": "Reshare",
+  "mdl2": "Reshare"
+ },
+ "E8EC": {
+  "fluent": "Tag",
+  "mdl2": "Tag"
+ },
+ "E8ED": {
+  "fluent": "RepeatOne",
+  "mdl2": "RepeatOne"
+ },
+ "E8EE": {
+  "fluent": "RepeatAll",
+  "mdl2": "RepeatAll"
+ },
+ "E8EF": {
+  "fluent": "Calculator",
+  "mdl2": "Calculator"
+ },
+ "E8F0": {
+  "fluent": "Directions",
+  "mdl2": "Directions"
+ },
+ "E8F1": {
+  "fluent": "Library",
+  "mdl2": "Library"
+ },
+ "E8F2": {
+  "fluent": "ChatBubbles",
+  "mdl2": "ChatBubbles"
+ },
+ "E8F3": {
+  "fluent": "PostUpdate",
+  "mdl2": "PostUpdate"
+ },
+ "E8F4": {
+  "fluent": "NewFolder",
+  "mdl2": "NewFolder"
+ },
+ "E8F5": {
+  "fluent": "CalendarReply",
+  "mdl2": "CalendarReply"
+ },
+ "E8F6": {
+  "fluent": "UnsyncFolder",
+  "mdl2": "UnsyncFolder"
+ },
+ "E8F7": {
+  "fluent": "SyncFolder",
+  "mdl2": "SyncFolder"
+ },
+ "E8F8": {
+  "fluent": "BlockContact",
+  "mdl2": "BlockContact"
+ },
+ "E8F9": {
+  "fluent": "SwitchApps",
+  "mdl2": "SwitchApps"
+ },
+ "E8FA": {
+  "fluent": "AddFriend",
+  "mdl2": "AddFriend"
+ },
+ "E8FB": {
+  "fluent": "Accept",
+  "mdl2": "Accept"
+ },
+ "E8FC": {
+  "fluent": "GoToStart",
+  "mdl2": "GoToStart"
+ },
+ "E8FD": {
+  "fluent": "BulletedList",
+  "mdl2": "BulletedList"
+ },
+ "E8FE": {
+  "fluent": "Scan",
+  "mdl2": "Scan"
+ },
+ "E8FF": {
+  "fluent": "Preview",
+  "mdl2": "Preview"
+ },
+ "E902": {
+  "fluent": "Group",
+  "mdl2": "Group"
+ },
+ "E904": {
+  "fluent": "ZeroBars",
+  "mdl2": "ZeroBars"
+ },
+ "E905": {
+  "fluent": "OneBar",
+  "mdl2": "OneBar"
+ },
+ "E906": {
+  "fluent": "TwoBars",
+  "mdl2": "TwoBars"
+ },
+ "E907": {
+  "fluent": "ThreeBars",
+  "mdl2": "ThreeBars"
+ },
+ "E908": {
+  "fluent": "FourBars",
+  "mdl2": "FourBars"
+ },
+ "E909": {
+  "fluent": "World",
+  "mdl2": "World"
+ },
+ "E90A": {
+  "fluent": "Comment",
+  "mdl2": "Comment"
+ },
+ "E90B": {
+  "fluent": "MusicInfo",
+  "mdl2": "MusicInfo"
+ },
+ "E90C": {
+  "fluent": "DockLeft",
+  "mdl2": "DockLeft"
+ },
+ "E90D": {
+  "fluent": "DockRight",
+  "mdl2": "DockRight"
+ },
+ "E90E": {
+  "fluent": "DockBottom",
+  "mdl2": "DockBottom"
+ },
+ "E90F": {
+  "fluent": "Repair",
+  "mdl2": "Repair"
+ },
+ "E910": {
+  "fluent": "Accounts",
+  "mdl2": "Accounts"
+ },
+ "E911": {
+  "fluent": "DullSound",
+  "mdl2": "DullSound"
+ },
+ "E912": {
+  "fluent": "Manage",
+  "mdl2": "Manage"
+ },
+ "E913": {
+  "fluent": "Street",
+  "mdl2": "Street"
+ },
+ "E914": {
+  "fluent": "Printer3D",
+  "mdl2": "Printer3D"
+ },
+ "E915": {
+  "fluent": "RadioBullet",
+  "mdl2": "RadioBullet"
+ },
+ "E916": {
+  "fluent": "Stopwatch",
+  "mdl2": "Stopwatch"
+ },
+ "E91B": {
+  "fluent": "Photo",
+  "mdl2": "Photo"
+ },
+ "E91C": {
+  "fluent": "ActionCenter",
+  "mdl2": "ActionCenter"
+ },
+ "E91F": {
+  "fluent": "FullCircleMask",
+  "mdl2": "FullCircleMask"
+ },
+ "E921": {
+  "fluent": "ChromeMinimize",
+  "mdl2": "ChromeMinimize"
+ },
+ "E922": {
+  "fluent": "ChromeMaximize",
+  "mdl2": "ChromeMaximize"
+ },
+ "E923": {
+  "fluent": "ChromeRestore",
+  "mdl2": "ChromeRestore"
+ },
+ "E924": {
+  "fluent": "Annotation",
+  "mdl2": "Annotation"
+ },
+ "E925": {
+  "fluent": "BackSpaceQWERTYSm",
+  "mdl2": "BackSpaceQWERTYSm"
+ },
+ "E926": {
+  "fluent": "BackSpaceQWERTYMd",
+  "mdl2": "BackSpaceQWERTYMd"
+ },
+ "E927": {
+  "fluent": "Swipe",
+  "mdl2": "Swipe"
+ },
+ "E928": {
+  "fluent": "Fingerprint",
+  "mdl2": "Fingerprint"
+ },
+ "E929": {
+  "fluent": "Handwriting",
+  "mdl2": "Handwriting"
+ },
+ "E92C": {
+  "fluent": "ChromeBackToWindow",
+  "mdl2": "ChromeBackToWindow"
+ },
+ "E92D": {
+  "fluent": "ChromeFullScreen",
+  "mdl2": "ChromeFullScreen"
+ },
+ "E92E": {
+  "fluent": "KeyboardStandard",
+  "mdl2": "KeyboardStandard"
+ },
+ "E92F": {
+  "fluent": "KeyboardDismiss",
+  "mdl2": "KeyboardDismiss"
+ },
+ "E930": {
+  "fluent": "Completed",
+  "mdl2": "Completed"
+ },
+ "E931": {
+  "fluent": "ChromeAnnotate",
+  "mdl2": "ChromeAnnotate"
+ },
+ "E932": {
+  "fluent": "Label",
+  "mdl2": "Label"
+ },
+ "E933": {
+  "fluent": "IBeam",
+  "mdl2": "IBeam"
+ },
+ "E934": {
+  "fluent": "IBeamOutline",
+  "mdl2": "IBeamOutline"
+ },
+ "E935": {
+  "fluent": "FlickDown",
+  "mdl2": "FlickDown"
+ },
+ "E936": {
+  "fluent": "FlickUp",
+  "mdl2": "FlickUp"
+ },
+ "E937": {
+  "fluent": "FlickLeft",
+  "mdl2": "FlickLeft"
+ },
+ "E938": {
+  "fluent": "FlickRight",
+  "mdl2": "FlickRight"
+ },
+ "E939": {
+  "fluent": "FeedbackApp",
+  "mdl2": "FeedbackApp"
+ },
+ "E93C": {
+  "fluent": "MusicAlbum",
+  "mdl2": "MusicAlbum"
+ },
+ "E93E": {
+  "fluent": "Streaming",
+  "mdl2": "Streaming"
+ },
+ "E943": {
+  "fluent": "Code",
+  "mdl2": "Code"
+ },
+ "E944": {
+  "fluent": "ReturnToWindow",
+  "mdl2": "ReturnToWindow"
+ },
+ "E945": {
+  "fluent": "LightningBolt",
+  "mdl2": "LightningBolt"
+ },
+ "E946": {
+  "fluent": "Info",
+  "mdl2": "Info"
+ },
+ "E947": {
+  "fluent": "CalculatorMultiply",
+  "mdl2": "CalculatorMultiply"
+ },
+ "E948": {
+  "fluent": "CalculatorAddition",
+  "mdl2": "CalculatorAddition"
+ },
+ "E949": {
+  "fluent": "CalculatorSubtract",
+  "mdl2": "CalculatorSubtract"
+ },
+ "E94A": {
+  "fluent": "CalculatorDivide",
+  "mdl2": "CalculatorDivide"
+ },
+ "E94B": {
+  "fluent": "CalculatorSquareroot",
+  "mdl2": "CalculatorSquareroot"
+ },
+ "E94C": {
+  "fluent": "CalculatorPercentage",
+  "mdl2": "CalculatorPercentage"
+ },
+ "E94D": {
+  "fluent": "CalculatorNegate",
+  "mdl2": "CalculatorNegate"
+ },
+ "E94E": {
+  "fluent": "CalculatorEqualTo",
+  "mdl2": "CalculatorEqualTo"
+ },
+ "E94F": {
+  "fluent": "CalculatorBackspace",
+  "mdl2": "CalculatorBackspace"
+ },
+ "E950": {
+  "fluent": "Component",
+  "mdl2": "Component"
+ },
+ "E951": {
+  "fluent": "DMC",
+  "mdl2": "DMC"
+ },
+ "E952": {
+  "fluent": "Dock",
+  "mdl2": "Dock"
+ },
+ "E953": {
+  "fluent": "MultimediaDMS",
+  "mdl2": "MultimediaDMS"
+ },
+ "E954": {
+  "fluent": "MultimediaDVR",
+  "mdl2": "MultimediaDVR"
+ },
+ "E955": {
+  "fluent": "MultimediaPMP",
+  "mdl2": "MultimediaPMP"
+ },
+ "E956": {
+  "fluent": "PrintfaxPrinterFile",
+  "mdl2": "PrintfaxPrinterFile"
+ },
+ "E957": {
+  "fluent": "Sensor",
+  "mdl2": "Sensor"
+ },
+ "E958": {
+  "fluent": "StorageOptical",
+  "mdl2": "StorageOptical"
+ },
+ "E95A": {
+  "fluent": "Communications",
+  "mdl2": "Communications"
+ },
+ "E95B": {
+  "fluent": "Headset",
+  "mdl2": "Headset"
+ },
+ "E95D": {
+  "fluent": "Projector",
+  "mdl2": "Projector"
+ },
+ "E95E": {
+  "fluent": "Health",
+  "mdl2": "Health"
+ },
+ "E95F": {
+  "fluent": "Wire",
+  "mdl2": "Wire"
+ },
+ "E960": {
+  "fluent": "Webcam2",
+  "mdl2": "Webcam2"
+ },
+ "E961": {
+  "fluent": "Input",
+  "mdl2": "Input"
+ },
+ "E962": {
+  "fluent": "Mouse",
+  "mdl2": "Mouse"
+ },
+ "E963": {
+  "fluent": "Smartcard",
+  "mdl2": "Smartcard"
+ },
+ "E964": {
+  "fluent": "SmartcardVirtual",
+  "mdl2": "SmartcardVirtual"
+ },
+ "E965": {
+  "fluent": "MediaStorageTower",
+  "mdl2": "MediaStorageTower"
+ },
+ "E966": {
+  "fluent": "ReturnKeySm",
+  "mdl2": "ReturnKeySm"
+ },
+ "E967": {
+  "fluent": "GameConsole",
+  "mdl2": "GameConsole"
+ },
+ "E968": {
+  "fluent": "Network",
+  "mdl2": "Network"
+ },
+ "E969": {
+  "fluent": "StorageNetworkWireless",
+  "mdl2": "StorageNetworkWireless"
+ },
+ "E96A": {
+  "fluent": "StorageTape",
+  "mdl2": "StorageTape"
+ },
+ "E96D": {
+  "fluent": "ChevronUpSmall",
+  "mdl2": "ChevronUpSmall"
+ },
+ "E96E": {
+  "fluent": "ChevronDownSmall",
+  "mdl2": "ChevronDownSmall"
+ },
+ "E96F": {
+  "fluent": "ChevronLeftSmall",
+  "mdl2": "ChevronLeftSmall"
+ },
+ "E970": {
+  "fluent": "ChevronRightSmall",
+  "mdl2": "ChevronRightSmall"
+ },
+ "E971": {
+  "fluent": "ChevronUpMed",
+  "mdl2": "ChevronUpMed"
+ },
+ "E972": {
+  "fluent": "ChevronDownMed",
+  "mdl2": "ChevronDownMed"
+ },
+ "E973": {
+  "fluent": "ChevronLeftMed",
+  "mdl2": "ChevronLeftMed"
+ },
+ "E974": {
+  "fluent": "ChevronRightMed",
+  "mdl2": "ChevronRightMed"
+ },
+ "E975": {
+  "fluent": "Devices2",
+  "mdl2": "Devices2"
+ },
+ "E976": {
+  "fluent": "ExpandTile",
+  "mdl2": "ExpandTile"
+ },
+ "E977": {
+  "fluent": "PC1",
+  "mdl2": "PC1"
+ },
+ "E978": {
+  "fluent": "PresenceChicklet",
+  "mdl2": "PresenceChicklet"
+ },
+ "E979": {
+  "fluent": "PresenceChickletVideo",
+  "mdl2": "PresenceChickletVideo"
+ },
+ "E97A": {
+  "fluent": "Reply",
+  "mdl2": "Reply"
+ },
+ "E97B": {
+  "fluent": "SetTile",
+  "mdl2": "SetTile"
+ },
+ "E97C": {
+  "fluent": "Type",
+  "mdl2": "Type"
+ },
+ "E97D": {
+  "fluent": "Korean",
+  "mdl2": "Korean"
+ },
+ "E97E": {
+  "fluent": "HalfAlpha",
+  "mdl2": "HalfAlpha"
+ },
+ "E97F": {
+  "fluent": "FullAlpha",
+  "mdl2": "FullAlpha"
+ },
+ "E980": {
+  "fluent": "Key12On",
+  "mdl2": "Key12On"
+ },
+ "E981": {
+  "fluent": "ChineseChangjie",
+  "mdl2": "ChineseChangjie"
+ },
+ "E982": {
+  "fluent": "QWERTYOn",
+  "mdl2": "QWERTYOn"
+ },
+ "E983": {
+  "fluent": "QWERTYOff",
+  "mdl2": "QWERTYOff"
+ },
+ "E984": {
+  "fluent": "ChineseQuick",
+  "mdl2": "ChineseQuick"
+ },
+ "E985": {
+  "fluent": "Japanese",
+  "mdl2": "Japanese"
+ },
+ "E986": {
+  "fluent": "FullHiragana",
+  "mdl2": "FullHiragana"
+ },
+ "E987": {
+  "fluent": "FullKatakana",
+  "mdl2": "FullKatakana"
+ },
+ "E988": {
+  "fluent": "HalfKatakana",
+  "mdl2": "HalfKatakana"
+ },
+ "E989": {
+  "fluent": "ChineseBoPoMoFo",
+  "mdl2": "ChineseBoPoMoFo"
+ },
+ "E98A": {
+  "fluent": "ChinesePinyin",
+  "mdl2": "ChinesePinyin"
+ },
+ "E98F": {
+  "fluent": "ConstructionCone",
+  "mdl2": "ConstructionCone"
+ },
+ "E990": {
+  "fluent": "XboxOneConsole",
+  "mdl2": "XboxOneConsole"
+ },
+ "E992": {
+  "fluent": "Volume0",
+  "mdl2": "Volume0"
+ },
+ "E993": {
+  "fluent": "Volume1",
+  "mdl2": "Volume1"
+ },
+ "E994": {
+  "fluent": "Volume2",
+  "mdl2": "Volume2"
+ },
+ "E995": {
+  "fluent": "Volume3",
+  "mdl2": "Volume3"
+ },
+ "E996": {
+  "fluent": "BatteryUnknown",
+  "mdl2": "BatteryUnknown"
+ },
+ "E998": {
+  "fluent": "WifiAttentionOverlay",
+  "mdl2": "WifiAttentionOverlay"
+ },
+ "E99A": {
+  "fluent": "Robot",
+  "mdl2": "Robot"
+ },
+ "E9A1": {
+  "fluent": "TapAndSend",
+  "mdl2": "TapAndSend"
+ },
+ "E9A6": {
+  "fluent": "FitPage",
+  "mdl2": "FitPage"
+ },
+ "E9A8": {
+  "fluent": "PasswordKeyShow",
+  "mdl2": "PasswordKeyShow"
+ },
+ "E9A9": {
+  "fluent": "PasswordKeyHide",
+  "mdl2": "PasswordKeyHide"
+ },
+ "E9AA": {
+  "fluent": "BidiLtr",
+  "mdl2": "BidiLtr"
+ },
+ "E9AB": {
+  "fluent": "BidiRtl",
+  "mdl2": "BidiRtl"
+ },
+ "E9AC": {
+  "fluent": "ForwardSm",
+  "mdl2": "ForwardSm"
+ },
+ "E9AD": {
+  "fluent": "CommaKey",
+  "mdl2": "CommaKey"
+ },
+ "E9AE": {
+  "fluent": "DashKey",
+  "mdl2": "DashKey"
+ },
+ "E9AF": {
+  "fluent": "DullSoundKey",
+  "mdl2": "DullSoundKey"
+ },
+ "E9B0": {
+  "fluent": "HalfDullSound",
+  "mdl2": "HalfDullSound"
+ },
+ "E9B1": {
+  "fluent": "RightDoubleQuote",
+  "mdl2": "RightDoubleQuote"
+ },
+ "E9B2": {
+  "fluent": "LeftDoubleQuote",
+  "mdl2": "LeftDoubleQuote"
+ },
+ "E9B3": {
+  "fluent": "PuncKeyRightBottom",
+  "mdl2": "PuncKeyRightBottom"
+ },
+ "E9B4": {
+  "fluent": "PuncKey1",
+  "mdl2": "PuncKey1"
+ },
+ "E9B5": {
+  "fluent": "PuncKey2",
+  "mdl2": "PuncKey2"
+ },
+ "E9B6": {
+  "fluent": "PuncKey3",
+  "mdl2": "PuncKey3"
+ },
+ "E9B7": {
+  "fluent": "PuncKey4",
+  "mdl2": "PuncKey4"
+ },
+ "E9B8": {
+  "fluent": "PuncKey5",
+  "mdl2": "PuncKey5"
+ },
+ "E9B9": {
+  "fluent": "PuncKey6",
+  "mdl2": "PuncKey6"
+ },
+ "E9BA": {
+  "fluent": "PuncKey9",
+  "mdl2": "PuncKey9"
+ },
+ "E9BB": {
+  "fluent": "PuncKey7",
+  "mdl2": "PuncKey7"
+ },
+ "E9BC": {
+  "fluent": "PuncKey8",
+  "mdl2": "PuncKey8"
+ },
+ "E9CA": {
+  "fluent": "Frigid",
+  "mdl2": "Frigid"
+ },
+ "E9CE": {
+  "fluent": "Unknown",
+  "mdl2": "Unknown"
+ },
+ "E9D2": {
+  "fluent": "AreaChart",
+  "mdl2": "AreaChart"
+ },
+ "E9D5": {
+  "fluent": "CheckList",
+  "mdl2": "CheckList"
+ },
+ "E9D9": {
+  "fluent": "Diagnostic",
+  "mdl2": "Diagnostic"
+ },
+ "E9E9": {
+  "fluent": "Equalizer",
+  "mdl2": "Equalizer"
+ },
+ "E9F3": {
+  "fluent": "Process",
+  "mdl2": "Process"
+ },
+ "E9F5": {
+  "fluent": "Processing",
+  "mdl2": "Processing"
+ },
+ "E9F9": {
+  "fluent": "ReportDocument",
+  "mdl2": "ReportDocument"
+ },
+ "EA0C": {
+  "fluent": "VideoSolid",
+  "mdl2": "VideoSolid"
+ },
+ "EA0D": {
+  "fluent": "MixedMediaBadge",
+  "mdl2": "MixedMediaBadge"
+ },
+ "EA14": {
+  "fluent": "DisconnectDisplay",
+  "mdl2": "DisconnectDisplay"
+ },
+ "EA18": {
+  "fluent": "Shield",
+  "mdl2": "Shield"
+ },
+ "EA1F": {
+  "fluent": "Info2",
+  "mdl2": "Info2"
+ },
+ "EA21": {
+  "fluent": "ActionCenterAsterisk",
+  "mdl2": "ActionCenterAsterisk"
+ },
+ "EA24": {
+  "fluent": "Beta",
+  "mdl2": "Beta"
+ },
+ "EA35": {
+  "fluent": "SaveCopy",
+  "mdl2": "SaveCopy"
+ },
+ "EA37": {
+  "fluent": "List",
+  "mdl2": "List"
+ },
+ "EA38": {
+  "fluent": "Asterisk",
+  "mdl2": "Asterisk"
+ },
+ "EA39": {
+  "fluent": "ErrorBadge",
+  "mdl2": "ErrorBadge"
+ },
+ "EA3A": {
+  "fluent": "CircleRing",
+  "mdl2": "CircleRing"
+ },
+ "EA3B": {
+  "fluent": "CircleFill",
+  "mdl2": "CircleFill"
+ },
+ "EA3C": {
+  "fluent": "MergeCall",
+  "mdl2": "MergeCall"
+ },
+ "EA3D": {
+  "fluent": "PrivateCall",
+  "mdl2": "PrivateCall"
+ },
+ "EA3F": {
+  "fluent": "Record2",
+  "mdl2": "Record2"
+ },
+ "EA40": {
+  "fluent": "AllAppsMirrored",
+  "mdl2": "AllAppsMirrored"
+ },
+ "EA41": {
+  "fluent": "BookmarksMirrored",
+  "mdl2": "BookmarksMirrored"
+ },
+ "EA42": {
+  "fluent": "BulletedListMirrored",
+  "mdl2": "BulletedListMirrored"
+ },
+ "EA43": {
+  "fluent": "CallForwardInternationalMirrored",
+  "mdl2": "CallForwardInternationalMirrored"
+ },
+ "EA44": {
+  "fluent": "CallForwardRoamingMirrored",
+  "mdl2": "CallForwardRoamingMirrored"
+ },
+ "EA47": {
+  "fluent": "ChromeBackMirrored",
+  "mdl2": "ChromeBackMirrored"
+ },
+ "EA48": {
+  "fluent": "ClearSelectionMirrored",
+  "mdl2": "ClearSelectionMirrored"
+ },
+ "EA49": {
+  "fluent": "ClosePaneMirrored",
+  "mdl2": "ClosePaneMirrored"
+ },
+ "EA4A": {
+  "fluent": "ContactInfoMirrored",
+  "mdl2": "ContactInfoMirrored"
+ },
+ "EA4B": {
+  "fluent": "DockRightMirrored",
+  "mdl2": "DockRightMirrored"
+ },
+ "EA4C": {
+  "fluent": "DockLeftMirrored",
+  "mdl2": "DockLeftMirrored"
+ },
+ "EA4E": {
+  "fluent": "ExpandTileMirrored",
+  "mdl2": "ExpandTileMirrored"
+ },
+ "EA4F": {
+  "fluent": "GoMirrored",
+  "mdl2": "GoMirrored"
+ },
+ "EA50": {
+  "fluent": "GripperResizeMirrored",
+  "mdl2": "GripperResizeMirrored"
+ },
+ "EA51": {
+  "fluent": "HelpMirrored",
+  "mdl2": "HelpMirrored"
+ },
+ "EA52": {
+  "fluent": "ImportMirrored",
+  "mdl2": "ImportMirrored"
+ },
+ "EA53": {
+  "fluent": "ImportAllMirrored",
+  "mdl2": "ImportAllMirrored"
+ },
+ "EA54": {
+  "fluent": "LeaveChatMirrored",
+  "mdl2": "LeaveChatMirrored"
+ },
+ "EA55": {
+  "fluent": "ListMirrored",
+  "mdl2": "ListMirrored"
+ },
+ "EA56": {
+  "fluent": "MailForwardMirrored",
+  "mdl2": "MailForwardMirrored"
+ },
+ "EA57": {
+  "fluent": "MailReplyMirrored",
+  "mdl2": "MailReplyMirrored"
+ },
+ "EA58": {
+  "fluent": "MailReplyAllMirrored",
+  "mdl2": "MailReplyAllMirrored"
+ },
+ "EA5B": {
+  "fluent": "OpenPaneMirrored",
+  "mdl2": "OpenPaneMirrored"
+ },
+ "EA5C": {
+  "fluent": "OpenWithMirrored",
+  "mdl2": "OpenWithMirrored"
+ },
+ "EA5E": {
+  "fluent": "ParkingLocationMirrored",
+  "mdl2": "ParkingLocationMirrored"
+ },
+ "EA5F": {
+  "fluent": "ResizeMouseMediumMirrored",
+  "mdl2": "ResizeMouseMediumMirrored"
+ },
+ "EA60": {
+  "fluent": "ResizeMouseSmallMirrored",
+  "mdl2": "ResizeMouseSmallMirrored"
+ },
+ "EA61": {
+  "fluent": "ResizeMouseTallMirrored",
+  "mdl2": "ResizeMouseTallMirrored"
+ },
+ "EA62": {
+  "fluent": "ResizeTouchNarrowerMirrored",
+  "mdl2": "ResizeTouchNarrowerMirrored"
+ },
+ "EA63": {
+  "fluent": "SendMirrored",
+  "mdl2": "SendMirrored"
+ },
+ "EA64": {
+  "fluent": "SendFillMirrored",
+  "mdl2": "SendFillMirrored"
+ },
+ "EA65": {
+  "fluent": "ShowResultsMirrored",
+  "mdl2": "ShowResultsMirrored"
+ },
+ "EA69": {
+  "fluent": "Media",
+  "mdl2": "Media"
+ },
+ "EA6A": {
+  "fluent": "SyncError",
+  "mdl2": "SyncError"
+ },
+ "EA6C": {
+  "fluent": "Devices3",
+  "mdl2": "Devices3"
+ },
+ "EA79": {
+  "fluent": "SlowMotionOn",
+  "mdl2": "SlowMotionOn"
+ },
+ "EA80": {
+  "fluent": "Lightbulb",
+  "mdl2": "Lightbulb"
+ },
+ "EA81": {
+  "fluent": "StatusCircle",
+  "mdl2": "StatusCircle"
+ },
+ "EA82": {
+  "fluent": "StatusTriangle",
+  "mdl2": "StatusTriangle"
+ },
+ "EA83": {
+  "fluent": "StatusError",
+  "mdl2": "StatusError"
+ },
+ "EA84": {
+  "fluent": "StatusWarning",
+  "mdl2": "StatusWarning"
+ },
+ "EA86": {
+  "fluent": "Puzzle",
+  "mdl2": "Puzzle"
+ },
+ "EA89": {
+  "fluent": "CalendarSolid",
+  "mdl2": "CalendarSolid"
+ },
+ "EA8A": {
+  "fluent": "HomeSolid",
+  "mdl2": "HomeSolid"
+ },
+ "EA8B": {
+  "fluent": "ParkingLocationSolid",
+  "mdl2": "ParkingLocationSolid"
+ },
+ "EA8C": {
+  "fluent": "ContactSolid",
+  "mdl2": "ContactSolid"
+ },
+ "EA8D": {
+  "fluent": "ConstructionSolid",
+  "mdl2": "ConstructionSolid"
+ },
+ "EA8E": {
+  "fluent": "AccidentSolid",
+  "mdl2": "AccidentSolid"
+ },
+ "EA8F": {
+  "fluent": "Ringer",
+  "mdl2": "Ringer"
+ },
+ "EA90": {
+  "fluent": "PDF",
+  "mdl2": "PDF"
+ },
+ "EA91": {
+  "fluent": "ThoughtBubble",
+  "mdl2": "ThoughtBubble"
+ },
+ "EA92": {
+  "fluent": "HeartBroken",
+  "mdl2": "HeartBroken"
+ },
+ "EA93": {
+  "fluent": "BatteryCharging10",
+  "mdl2": "BatteryCharging10"
+ },
+ "EA94": {
+  "fluent": "BatterySaver9",
+  "mdl2": "BatterySaver9"
+ },
+ "EA95": {
+  "fluent": "BatterySaver10",
+  "mdl2": "BatterySaver10"
+ },
+ "EA97": {
+  "fluent": "CallForwardingMirrored",
+  "mdl2": "CallForwardingMirrored"
+ },
+ "EA98": {
+  "fluent": "MultiSelectMirrored",
+  "mdl2": "MultiSelectMirrored"
+ },
+ "EA99": {
+  "fluent": "Broom",
+  "mdl2": "Broom"
+ },
+ "EAC2": {
+  "fluent": "ForwardCall",
+  "mdl2": "ForwardCall"
+ },
+ "EADF": {
+  "fluent": "Trackers",
+  "mdl2": "Trackers"
+ },
+ "EAFC": {
+  "fluent": "Market",
+  "mdl2": "Market"
+ },
+ "EB05": {
+  "fluent": "PieSingle",
+  "mdl2": "PieSingle"
+ },
+ "EB0F": {
+  "fluent": "StockUp",
+  "mdl2": "StockDown"
+ },
+ "EB11": {
+  "fluent": "StockDown",
+  "mdl2": "StockUp"
+ },
+ "EB3C": {
+  "fluent": "Design",
+  "mdl2": "Design"
+ },
+ "EB41": {
+  "fluent": "Website",
+  "mdl2": "Website"
+ },
+ "EB42": {
+  "fluent": "Drop",
+  "mdl2": "Drop"
+ },
+ "EB44": {
+  "fluent": "Radar",
+  "mdl2": "Radar"
+ },
+ "EB47": {
+  "fluent": "BusSolid",
+  "mdl2": "BusSolid"
+ },
+ "EB48": {
+  "fluent": "FerrySolid",
+  "mdl2": "FerrySolid"
+ },
+ "EB49": {
+  "fluent": "StartPointSolid",
+  "mdl2": "StartPointSolid"
+ },
+ "EB4A": {
+  "fluent": "StopPointSolid",
+  "mdl2": "StopPointSolid"
+ },
+ "EB4B": {
+  "fluent": "EndPointSolid",
+  "mdl2": "EndPointSolid"
+ },
+ "EB4C": {
+  "fluent": "AirplaneSolid",
+  "mdl2": "AirplaneSolid"
+ },
+ "EB4D": {
+  "fluent": "TrainSolid",
+  "mdl2": "TrainSolid"
+ },
+ "EB4E": {
+  "fluent": "WorkSolid",
+  "mdl2": "WorkSolid"
+ },
+ "EB4F": {
+  "fluent": "ReminderFill",
+  "mdl2": "ReminderFill"
+ },
+ "EB50": {
+  "fluent": "Reminder",
+  "mdl2": "Reminder"
+ },
+ "EB51": {
+  "fluent": "Heart",
+  "mdl2": "Heart"
+ },
+ "EB52": {
+  "fluent": "HeartFill",
+  "mdl2": "HeartFill"
+ },
+ "EB55": {
+  "fluent": "EthernetError",
+  "mdl2": "EthernetError"
+ },
+ "EB56": {
+  "fluent": "EthernetWarning",
+  "mdl2": "EthernetWarning"
+ },
+ "EB57": {
+  "fluent": "StatusConnecting1",
+  "mdl2": "StatusConnecting1"
+ },
+ "EB58": {
+  "fluent": "StatusConnecting2",
+  "mdl2": "StatusConnecting2"
+ },
+ "EB59": {
+  "fluent": "StatusUnsecure",
+  "mdl2": "StatusUnsecure"
+ },
+ "EB5A": {
+  "fluent": "WifiError0",
+  "mdl2": "WifiError0"
+ },
+ "EB5B": {
+  "fluent": "WifiError1",
+  "mdl2": "WifiError1"
+ },
+ "EB5C": {
+  "fluent": "WifiError2",
+  "mdl2": "WifiError2"
+ },
+ "EB5D": {
+  "fluent": "WifiError3",
+  "mdl2": "WifiError3"
+ },
+ "EB5E": {
+  "fluent": "WifiError4",
+  "mdl2": "WifiError4"
+ },
+ "EB5F": {
+  "fluent": "WifiWarning0",
+  "mdl2": "WifiWarning0"
+ },
+ "EB60": {
+  "fluent": "WifiWarning1",
+  "mdl2": "WifiWarning1"
+ },
+ "EB61": {
+  "fluent": "WifiWarning2",
+  "mdl2": "WifiWarning2"
+ },
+ "EB62": {
+  "fluent": "WifiWarning3",
+  "mdl2": "WifiWarning3"
+ },
+ "EB63": {
+  "fluent": "WifiWarning4",
+  "mdl2": "WifiWarning4"
+ },
+ "EB66": {
+  "fluent": "Devices4",
+  "mdl2": "Devices4"
+ },
+ "EB67": {
+  "fluent": "NUIIris",
+  "mdl2": "NUIIris"
+ },
+ "EB68": {
+  "fluent": "NUIFace",
+  "mdl2": "NUIFace"
+ },
+ "EB7E": {
+  "fluent": "EditMirrored",
+  "mdl2": "EditMirrored"
+ },
+ "EB82": {
+  "fluent": "NUIFPStartSlideHand",
+  "mdl2": "NUIFPStartSlideHand"
+ },
+ "EB83": {
+  "fluent": "NUIFPStartSlideAction",
+  "mdl2": "NUIFPStartSlideAction"
+ },
+ "EB84": {
+  "fluent": "NUIFPContinueSlideHand",
+  "mdl2": "NUIFPContinueSlideHand"
+ },
+ "EB85": {
+  "fluent": "NUIFPContinueSlideAction",
+  "mdl2": "NUIFPContinueSlideAction"
+ },
+ "EB86": {
+  "fluent": "NUIFPRollRightHand",
+  "mdl2": "NUIFPRollRightHand"
+ },
+ "EB87": {
+  "fluent": "NUIFPRollRightHandAction",
+  "mdl2": "NUIFPRollRightHandAction"
+ },
+ "EB88": {
+  "fluent": "NUIFPRollLeftHand",
+  "mdl2": "NUIFPRollLeftHand"
+ },
+ "EB89": {
+  "fluent": "NUIFPRollLeftAction",
+  "mdl2": "NUIFPRollLeftAction"
+ },
+ "EB8A": {
+  "fluent": "NUIFPPressHand",
+  "mdl2": "NUIFPPressHand"
+ },
+ "EB8B": {
+  "fluent": "NUIFPPressAction",
+  "mdl2": "NUIFPPressAction"
+ },
+ "EB8C": {
+  "fluent": "NUIFPPressRepeatHand",
+  "mdl2": "NUIFPPressRepeatHand"
+ },
+ "EB8D": {
+  "fluent": "NUIFPPressRepeatAction",
+  "mdl2": "NUIFPPressRepeatAction"
+ },
+ "EB90": {
+  "fluent": "StatusErrorFull",
+  "mdl2": "StatusErrorFull"
+ },
+ "EB91": {
+  "fluent": "TaskViewExpanded",
+  "mdl2": "TaskViewExpanded"
+ },
+ "EB95": {
+  "fluent": "Certificate",
+  "mdl2": "Certificate"
+ },
+ "EB96": {
+  "fluent": "BackSpaceQWERTYLg",
+  "mdl2": "BackSpaceQWERTYLg"
+ },
+ "EB97": {
+  "fluent": "ReturnKeyLg",
+  "mdl2": "ReturnKeyLg"
+ },
+ "EB9D": {
+  "fluent": "FastForward",
+  "mdl2": "FastForward"
+ },
+ "EB9E": {
+  "fluent": "Rewind",
+  "mdl2": "Rewind"
+ },
+ "EB9F": {
+  "fluent": "Photo2",
+  "mdl2": "Photo2"
+ },
+ "EBA0": {
+  "fluent": "MobBattery0",
+  "mdl2": "MobBattery0"
+ },
+ "EBA1": {
+  "fluent": "MobBattery1",
+  "mdl2": "MobBattery1"
+ },
+ "EBA2": {
+  "fluent": "MobBattery2",
+  "mdl2": "MobBattery2"
+ },
+ "EBA3": {
+  "fluent": "MobBattery3",
+  "mdl2": "MobBattery3"
+ },
+ "EBA4": {
+  "fluent": "MobBattery4",
+  "mdl2": "MobBattery4"
+ },
+ "EBA5": {
+  "fluent": "MobBattery5",
+  "mdl2": "MobBattery5"
+ },
+ "EBA6": {
+  "fluent": "MobBattery6",
+  "mdl2": "MobBattery6"
+ },
+ "EBA7": {
+  "fluent": "MobBattery7",
+  "mdl2": "MobBattery7"
+ },
+ "EBA8": {
+  "fluent": "MobBattery8",
+  "mdl2": "MobBattery8"
+ },
+ "EBA9": {
+  "fluent": "MobBattery9",
+  "mdl2": "MobBattery9"
+ },
+ "EBAA": {
+  "fluent": "MobBattery10",
+  "mdl2": "MobBattery10"
+ },
+ "EBAB": {
+  "fluent": "MobBatteryCharging0",
+  "mdl2": "MobBatteryCharging0"
+ },
+ "EBAC": {
+  "fluent": "MobBatteryCharging1",
+  "mdl2": "MobBatteryCharging1"
+ },
+ "EBAD": {
+  "fluent": "MobBatteryCharging2",
+  "mdl2": "MobBatteryCharging2"
+ },
+ "EBAE": {
+  "fluent": "MobBatteryCharging3",
+  "mdl2": "MobBatteryCharging3"
+ },
+ "EBAF": {
+  "fluent": "MobBatteryCharging4",
+  "mdl2": "MobBatteryCharging4"
+ },
+ "EBB0": {
+  "fluent": "MobBatteryCharging5",
+  "mdl2": "MobBatteryCharging5"
+ },
+ "EBB1": {
+  "fluent": "MobBatteryCharging6",
+  "mdl2": "MobBatteryCharging6"
+ },
+ "EBB2": {
+  "fluent": "MobBatteryCharging7",
+  "mdl2": "MobBatteryCharging7"
+ },
+ "EBB3": {
+  "fluent": "MobBatteryCharging8",
+  "mdl2": "MobBatteryCharging8"
+ },
+ "EBB4": {
+  "fluent": "MobBatteryCharging9",
+  "mdl2": "MobBatteryCharging9"
+ },
+ "EBB5": {
+  "fluent": "MobBatteryCharging10",
+  "mdl2": "MobBatteryCharging10"
+ },
+ "EBB6": {
+  "fluent": "MobBatterySaver0",
+  "mdl2": "MobBatterySaver0"
+ },
+ "EBB7": {
+  "fluent": "MobBatterySaver1",
+  "mdl2": "MobBatterySaver1"
+ },
+ "EBB8": {
+  "fluent": "MobBatterySaver2",
+  "mdl2": "MobBatterySaver2"
+ },
+ "EBB9": {
+  "fluent": "MobBatterySaver3",
+  "mdl2": "MobBatterySaver3"
+ },
+ "EBBA": {
+  "fluent": "MobBatterySaver4",
+  "mdl2": "MobBatterySaver4"
+ },
+ "EBBB": {
+  "fluent": "MobBatterySaver5",
+  "mdl2": "MobBatterySaver5"
+ },
+ "EBBC": {
+  "fluent": "MobBatterySaver6",
+  "mdl2": "MobBatterySaver6"
+ },
+ "EBBD": {
+  "fluent": "MobBatterySaver7",
+  "mdl2": "MobBatterySaver7"
+ },
+ "EBBE": {
+  "fluent": "MobBatterySaver8",
+  "mdl2": "MobBatterySaver8"
+ },
+ "EBBF": {
+  "fluent": "MobBatterySaver9",
+  "mdl2": "MobBatterySaver9"
+ },
+ "EBC0": {
+  "fluent": "MobBatterySaver10",
+  "mdl2": "MobBatterySaver10"
+ },
+ "EBC3": {
+  "fluent": "DictionaryCloud",
+  "mdl2": "DictionaryCloud"
+ },
+ "EBC4": {
+  "fluent": "ResetDrive",
+  "mdl2": "ResetDrive"
+ },
+ "EBC5": {
+  "fluent": "VolumeBars",
+  "mdl2": "VolumeBars"
+ },
+ "EBC6": {
+  "fluent": "Project",
+  "mdl2": "Project"
+ },
+ "EBD2": {
+  "fluent": "AdjustHologram",
+  "mdl2": "AdjustHologram"
+ },
+ "EBD4": {
+  "fluent": "MobWifiCallBars",
+  "mdl2": "WifiCallBars"
+ },
+ "EBD5": {
+  "fluent": "MobWifiCall0",
+  "mdl2": "WifiCall0"
+ },
+ "EBD6": {
+  "fluent": "MobWifiCall1",
+  "mdl2": "WifiCall1"
+ },
+ "EBD7": {
+  "fluent": "MobWifiCall2",
+  "mdl2": "WifiCall2"
+ },
+ "EBD8": {
+  "fluent": "MobWifiCall3",
+  "mdl2": "WifiCall3"
+ },
+ "EBD9": {
+  "fluent": "MobWifiCall4",
+  "mdl2": "WifiCall4"
+ },
+ "EBDA": {
+  "fluent": "Family",
+  "mdl2": "Family"
+ },
+ "EBDB": {
+  "fluent": "LockFeedback",
+  "mdl2": "LockFeedback"
+ },
+ "EBDE": {
+  "fluent": "DeviceDiscovery",
+  "mdl2": "DeviceDiscovery"
+ },
+ "EBE6": {
+  "fluent": "WindDirection",
+  "mdl2": "WindDirection"
+ },
+ "EBE7": {
+  "fluent": "RightArrowKeyTime0",
+  "mdl2": "RightArrowKeyTime0"
+ },
+ "EBE8": {
+  "fluent": "Bug",
+  "mdl2": "Bug"
+ },
+ "EBFC": {
+  "fluent": "TabletMode",
+  "mdl2": "TabletMode"
+ },
+ "EBFD": {
+  "fluent": "StatusCircleLeft",
+  "mdl2": "StatusCircleLeft"
+ },
+ "EBFE": {
+  "fluent": "StatusTriangleLeft",
+  "mdl2": "StatusTriangleLeft"
+ },
+ "EBFF": {
+  "fluent": "StatusErrorLeft",
+  "mdl2": "StatusErrorLeft"
+ },
+ "EC00": {
+  "fluent": "StatusWarningLeft",
+  "mdl2": "StatusWarningLeft"
+ },
+ "EC02": {
+  "fluent": "MobBatteryUnknown",
+  "mdl2": "MobBatteryUnknown"
+ },
+ "EC05": {
+  "fluent": "NetworkTower",
+  "mdl2": "NetworkTower"
+ },
+ "EC06": {
+  "fluent": "CityNext",
+  "mdl2": "CityNext"
+ },
+ "EC07": {
+  "fluent": "CityNext2",
+  "mdl2": "CityNext2"
+ },
+ "EC08": {
+  "fluent": "Courthouse",
+  "mdl2": "Courthouse"
+ },
+ "EC09": {
+  "fluent": "Groceries",
+  "mdl2": "Groceries"
+ },
+ "EC0A": {
+  "fluent": "Sustainable",
+  "mdl2": "Sustainable"
+ },
+ "EC0B": {
+  "fluent": "BuildingEnergy",
+  "mdl2": "BuildingEnergy"
+ },
+ "EC11": {
+  "fluent": "ToggleFilled",
+  "mdl2": "ToggleFilled"
+ },
+ "EC12": {
+  "fluent": "ToggleBorder",
+  "mdl2": "ToggleBorder"
+ },
+ "EC13": {
+  "fluent": "SliderThumb",
+  "mdl2": "SliderThumb"
+ },
+ "EC14": {
+  "fluent": "ToggleThumb",
+  "mdl2": "ToggleThumb"
+ },
+ "EC15": {
+  "fluent": "MiracastLogoSmall",
+  "mdl2": "MiracastLogoSmall"
+ },
+ "EC16": {
+  "fluent": "MiracastLogoLarge",
+  "mdl2": "MiracastLogoLarge"
+ },
+ "EC19": {
+  "fluent": "PLAP",
+  "mdl2": "PLAP"
+ },
+ "EC1B": {
+  "fluent": "Badge",
+  "mdl2": "Badge"
+ },
+ "EC1E": {
+  "fluent": "SignalRoaming",
+  "mdl2": "SignalRoaming"
+ },
+ "EC20": {
+  "fluent": "MobileLocked",
+  "mdl2": "MobileLocked"
+ },
+ "EC24": {
+  "fluent": "InsiderHubApp",
+  "mdl2": "InsiderHubApp"
+ },
+ "EC25": {
+  "fluent": "PersonalFolder",
+  "mdl2": "PersonalFolder"
+ },
+ "EC26": {
+  "fluent": "HomeGroup",
+  "mdl2": "HomeGroup"
+ },
+ "EC27": {
+  "fluent": "MyNetwork",
+  "mdl2": "MyNetwork"
+ },
+ "EC31": {
+  "fluent": "KeyboardFull",
+  "mdl2": "KeyboardFull"
+ },
+ "EC32": {
+  "fluent": "Cafe",
+  "mdl2": "Cafe"
+ },
+ "EC37": {
+  "fluent": "MobSignal1",
+  "mdl2": "MobSignal1"
+ },
+ "EC38": {
+  "fluent": "MobSignal2",
+  "mdl2": "MobSignal2"
+ },
+ "EC39": {
+  "fluent": "MobSignal3",
+  "mdl2": "MobSignal3"
+ },
+ "EC3A": {
+  "fluent": "MobSignal4",
+  "mdl2": "MobSignal4"
+ },
+ "EC3B": {
+  "fluent": "MobSignal5",
+  "mdl2": "MobSignal5"
+ },
+ "EC3C": {
+  "fluent": "MobWifi1",
+  "mdl2": "MobWifi1"
+ },
+ "EC3D": {
+  "fluent": "MobWifi2",
+  "mdl2": "MobWifi2"
+ },
+ "EC3E": {
+  "fluent": "MobWifi3",
+  "mdl2": "MobWifi3"
+ },
+ "EC3F": {
+  "fluent": "MobWifi4",
+  "mdl2": "MobWifi4"
+ },
+ "EC40": {
+  "fluent": "MobAirplane",
+  "mdl2": "MobAirplane"
+ },
+ "EC41": {
+  "fluent": "MobBluetooth",
+  "mdl2": "MobBluetooth"
+ },
+ "EC42": {
+  "fluent": "MobActionCenter",
+  "mdl2": "MobActionCenter"
+ },
+ "EC43": {
+  "fluent": "MobLocation",
+  "mdl2": "MobLocation"
+ },
+ "EC44": {
+  "fluent": "MobWifiHotspot",
+  "mdl2": "MobWifiHotspot"
+ },
+ "EC45": {
+  "fluent": "LanguageJpn",
+  "mdl2": "LanguageJpn"
+ },
+ "EC46": {
+  "fluent": "MobQuietHours",
+  "mdl2": "MobQuietHours"
+ },
+ "EC47": {
+  "fluent": "MobDrivingMode",
+  "mdl2": "MobDrivingMode"
+ },
+ "EC48": {
+  "fluent": "SpeedOff",
+  "mdl2": "SpeedOff"
+ },
+ "EC49": {
+  "fluent": "SpeedMedium",
+  "mdl2": "SpeedMedium"
+ },
+ "EC4A": {
+  "fluent": "SpeedHigh",
+  "mdl2": "SpeedHigh"
+ },
+ "EC4E": {
+  "fluent": "ThisPC",
+  "mdl2": "ThisPC"
+ },
+ "EC4F": {
+  "fluent": "MusicNote",
+  "mdl2": "MusicNote"
+ },
+ "EC50": {
+  "fluent": "FileExplorer",
+  "mdl2": "FileExplorer"
+ },
+ "EC51": {
+  "fluent": "FileExplorerApp",
+  "mdl2": "FileExplorerApp"
+ },
+ "EC52": {
+  "fluent": "LeftArrowKeyTime0",
+  "mdl2": "LeftArrowKeyTime0"
+ },
+ "EC54": {
+  "fluent": "MicOff",
+  "mdl2": "MicOff"
+ },
+ "EC55": {
+  "fluent": "MicSleep",
+  "mdl2": "MicSleep"
+ },
+ "EC56": {
+  "fluent": "MicError",
+  "mdl2": "MicError"
+ },
+ "EC57": {
+  "fluent": "PlaybackRate1x",
+  "mdl2": "PlaybackRate1x"
+ },
+ "EC58": {
+  "fluent": "PlaybackRateOther",
+  "mdl2": "PlaybackRateOther"
+ },
+ "EC59": {
+  "fluent": "CashDrawer",
+  "mdl2": "CashDrawer"
+ },
+ "EC5A": {
+  "fluent": "BarcodeScanner",
+  "mdl2": "BarcodeScanner"
+ },
+ "EC5B": {
+  "fluent": "ReceiptPrinter",
+  "mdl2": "ReceiptPrinter"
+ },
+ "EC5C": {
+  "fluent": "MagStripeReader",
+  "mdl2": "MagStripeReader"
+ },
+ "EC61": {
+  "fluent": "CompletedSolid",
+  "mdl2": "CompletedSolid"
+ },
+ "EC64": {
+  "fluent": "CompanionApp",
+  "mdl2": "CompanionApp"
+ },
+ "EC6C": {
+  "fluent": "Favicon2",
+  "mdl2": "Favicon2"
+ },
+ "EC6D": {
+  "fluent": "SwipeRevealArt",
+  "mdl2": "SwipeRevealArt"
+ },
+ "EC71": {
+  "fluent": "MicOn",
+  "mdl2": "MicOn"
+ },
+ "EC72": {
+  "fluent": "MicClipping",
+  "mdl2": "MicClipping"
+ },
+ "EC74": {
+  "fluent": "TabletSelected",
+  "mdl2": "TabletSelected"
+ },
+ "EC75": {
+  "fluent": "MobileSelected",
+  "mdl2": "MobileSelected"
+ },
+ "EC76": {
+  "fluent": "LaptopSelected",
+  "mdl2": "LaptopSelected"
+ },
+ "EC77": {
+  "fluent": "TVMonitorSelected",
+  "mdl2": "TVMonitorSelected"
+ },
+ "EC7A": {
+  "fluent": "DeveloperTools",
+  "mdl2": "DeveloperTools"
+ },
+ "EC7E": {
+  "fluent": "MobCallForwarding",
+  "mdl2": "MobCallForwarding"
+ },
+ "EC7F": {
+  "fluent": "MobCallForwardingMirrored",
+  "mdl2": "MobCallForwardingMirrored"
+ },
+ "EC80": {
+  "fluent": "BodyCam",
+  "mdl2": "BodyCam"
+ },
+ "EC81": {
+  "fluent": "PoliceCar",
+  "mdl2": "PoliceCar"
+ },
+ "EC87": {
+  "fluent": "Draw",
+  "mdl2": "Draw"
+ },
+ "EC88": {
+  "fluent": "DrawSolid",
+  "mdl2": "DrawSolid"
+ },
+ "EC8A": {
+  "fluent": "LowerBrightness",
+  "mdl2": "LowerBrightness"
+ },
+ "EC8F": {
+  "fluent": "ScrollUpDown",
+  "mdl2": "ScrollUpDown"
+ },
+ "EC92": {
+  "fluent": "DateTime",
+  "mdl2": "DateTime"
+ },
+ "ECA5": {
+  "fluent": "Tiles",
+  "mdl2": "Tiles"
+ },
+ "ECA7": {
+  "fluent": "PartyLeader",
+  "mdl2": "PartyLeader"
+ },
+ "ECAA": {
+  "fluent": "AppIconDefault",
+  "mdl2": "AppIconDefault"
+ },
+ "ECAD": {
+  "fluent": "Calories",
+  "mdl2": "Calories"
+ },
+ "ECB9": {
+  "fluent": "BandBattery0",
+  "mdl2": "BandBattery0"
+ },
+ "ECBA": {
+  "fluent": "BandBattery1",
+  "mdl2": "BandBattery1"
+ },
+ "ECBB": {
+  "fluent": "BandBattery2",
+  "mdl2": "BandBattery2"
+ },
+ "ECBC": {
+  "fluent": "BandBattery3",
+  "mdl2": "BandBattery3"
+ },
+ "ECBD": {
+  "fluent": "BandBattery4",
+  "mdl2": "BandBattery4"
+ },
+ "ECBE": {
+  "fluent": "BandBattery5",
+  "mdl2": "BandBattery5"
+ },
+ "ECBF": {
+  "fluent": "BandBattery6",
+  "mdl2": "BandBattery6"
+ },
+ "ECC4": {
+  "fluent": "AddSurfaceHub",
+  "mdl2": "AddSurfaceHub"
+ },
+ "ECC5": {
+  "fluent": "DevUpdate",
+  "mdl2": "DevUpdate"
+ },
+ "ECC6": {
+  "fluent": "Unit",
+  "mdl2": "Unit"
+ },
+ "ECC8": {
+  "fluent": "AddTo",
+  "mdl2": "AddTo"
+ },
+ "ECC9": {
+  "fluent": "RemoveFrom",
+  "mdl2": "RemoveFrom"
+ },
+ "ECCA": {
+  "fluent": "RadioBtnOff",
+  "mdl2": "RadioBtnOff"
+ },
+ "ECCB": {
+  "fluent": "RadioBtnOn",
+  "mdl2": "RadioBtnOn"
+ },
+ "ECCC": {
+  "fluent": "RadioBullet2",
+  "mdl2": "RadioBullet2"
+ },
+ "ECCD": {
+  "fluent": "ExploreContent",
+  "mdl2": "ExploreContent"
+ },
+ "ECE4": {
+  "fluent": "Blocked2",
+  "mdl2": "Blocked2"
+ },
+ "ECE7": {
+  "fluent": "ScrollMode",
+  "mdl2": "ScrollMode"
+ },
+ "ECE8": {
+  "fluent": "ZoomMode",
+  "mdl2": "ZoomMode"
+ },
+ "ECE9": {
+  "fluent": "PanMode",
+  "mdl2": "PanMode"
+ },
+ "ECF0": {
+  "fluent": "WiredUSB",
+  "mdl2": "WiredUSB"
+ },
+ "ECF1": {
+  "fluent": "WirelessUSB",
+  "mdl2": "WirelessUSB"
+ },
+ "ECF3": {
+  "fluent": "USBSafeConnect",
+  "mdl2": "USBSafeConnect"
+ },
+ "ED0C": {
+  "fluent": "ActionCenterNotificationMirrored",
+  "mdl2": "ActionCenterNotificationMirrored"
+ },
+ "ED0D": {
+  "fluent": "ActionCenterMirrored",
+  "mdl2": "ActionCenterMirrored"
+ },
+ "ED0E": {
+  "fluent": "SubscriptionAdd",
+  "mdl2": "SubscriptionAdd"
+ },
+ "ED10": {
+  "fluent": "ResetDevice",
+  "mdl2": "ResetDevice"
+ },
+ "ED11": {
+  "fluent": "SubscriptionAddMirrored",
+  "mdl2": "SubscriptionAddMirrored"
+ },
+ "ED14": {
+  "fluent": "QRCode",
+  "mdl2": "QRCode"
+ },
+ "ED15": {
+  "fluent": "Feedback",
+  "mdl2": "Feedback"
+ },
+ "ED1E": {
+  "fluent": "Subtitles",
+  "mdl2": "Subtitles"
+ },
+ "ED1F": {
+  "fluent": "SubtitlesAudio",
+  "mdl2": "SubtitlesAudio"
+ },
+ "ED25": {
+  "fluent": "OpenFolderHorizontal",
+  "mdl2": "OpenFolderHorizontal"
+ },
+ "ED28": {
+  "fluent": "CalendarMirrored",
+  "mdl2": "CalendarMirrored"
+ },
+ "ED2A": {
+  "fluent": "MobeSIM",
+  "mdl2": "MobeSIM"
+ },
+ "ED2B": {
+  "fluent": "MobeSIMNoProfile",
+  "mdl2": "MobeSIMNoProfile"
+ },
+ "ED2C": {
+  "fluent": "MobeSIMLocked",
+  "mdl2": "MobeSIMLocked"
+ },
+ "ED2D": {
+  "fluent": "MobeSIMBusy",
+  "mdl2": "MobeSIMBusy"
+ },
+ "ED2E": {
+  "fluent": "SignalError",
+  "mdl2": "SignalError"
+ },
+ "ED2F": {
+  "fluent": "StreamingEnterprise",
+  "mdl2": "StreamingEnterprise"
+ },
+ "ED30": {
+  "fluent": "Headphone0",
+  "mdl2": "Headphone0"
+ },
+ "ED31": {
+  "fluent": "Headphone1",
+  "mdl2": "Headphone1"
+ },
+ "ED32": {
+  "fluent": "Headphone2",
+  "mdl2": "Headphone2"
+ },
+ "ED33": {
+  "fluent": "Headphone3",
+  "mdl2": "Headphone3"
+ },
+ "ED35": {
+  "fluent": "Apps",
+  "mdl2": "Apps"
+ },
+ "ED39": {
+  "fluent": "KeyboardBrightness",
+  "mdl2": "KeyboardBrightness"
+ },
+ "ED3A": {
+  "fluent": "KeyboardLowerBrightness",
+  "mdl2": "KeyboardLowerBrightness"
+ },
+ "ED3C": {
+  "fluent": "SkipBack10",
+  "mdl2": "SkipBack10"
+ },
+ "ED3D": {
+  "fluent": "SkipForward30",
+  "mdl2": "SkipForward30"
+ },
+ "ED41": {
+  "fluent": "TreeFolderFolder",
+  "mdl2": "TreeFolderFolder"
+ },
+ "ED42": {
+  "fluent": "TreeFolderFolderFill",
+  "mdl2": "TreeFolderFolderFill"
+ },
+ "ED43": {
+  "fluent": "TreeFolderFolderOpen",
+  "mdl2": "TreeFolderFolderOpen"
+ },
+ "ED44": {
+  "fluent": "TreeFolderFolderOpenFill",
+  "mdl2": "TreeFolderFolderOpenFill"
+ },
+ "ED47": {
+  "fluent": "MultimediaDMP",
+  "mdl2": "MultimediaDMP"
+ },
+ "ED4C": {
+  "fluent": "KeyboardOneHanded",
+  "mdl2": "KeyboardOneHanded"
+ },
+ "ED4D": {
+  "fluent": "Narrator",
+  "mdl2": "Narrator"
+ },
+ "ED53": {
+  "fluent": "EmojiTabPeople",
+  "mdl2": "EmojiTabPeople"
+ },
+ "ED54": {
+  "fluent": "EmojiTabSmilesAnimals",
+  "mdl2": "EmojiTabSmilesAnimals"
+ },
+ "ED55": {
+  "fluent": "EmojiTabCelebrationObjects",
+  "mdl2": "EmojiTabCelebrationObjects"
+ },
+ "ED56": {
+  "fluent": "EmojiTabFoodPlants",
+  "mdl2": "EmojiTabFoodPlants"
+ },
+ "ED57": {
+  "fluent": "EmojiTabTransitPlaces",
+  "mdl2": "EmojiTabTransitPlaces"
+ },
+ "ED58": {
+  "fluent": "EmojiTabSymbols",
+  "mdl2": "EmojiTabSymbols"
+ },
+ "ED59": {
+  "fluent": "EmojiTabTextSmiles",
+  "mdl2": "EmojiTabTextSmiles"
+ },
+ "ED5A": {
+  "fluent": "EmojiTabFavorites",
+  "mdl2": "EmojiTabFavorites"
+ },
+ "ED5B": {
+  "fluent": "EmojiSwatch",
+  "mdl2": "EmojiSwatch"
+ },
+ "ED5C": {
+  "fluent": "ConnectApp",
+  "mdl2": "ConnectApp"
+ },
+ "ED5D": {
+  "fluent": "CompanionDeviceFramework",
+  "mdl2": "CompanionDeviceFramework"
+ },
+ "ED5E": {
+  "fluent": "Ruler",
+  "mdl2": "Ruler"
+ },
+ "ED5F": {
+  "fluent": "FingerInking",
+  "mdl2": "FingerInking"
+ },
+ "ED60": {
+  "fluent": "StrokeErase",
+  "mdl2": "StrokeErase"
+ },
+ "ED61": {
+  "fluent": "PointErase",
+  "mdl2": "PointErase"
+ },
+ "ED62": {
+  "fluent": "ClearAllInk",
+  "mdl2": "ClearAllInk"
+ },
+ "ED63": {
+  "fluent": "Pencil",
+  "mdl2": "Pencil"
+ },
+ "ED64": {
+  "fluent": "Marker",
+  "mdl2": "Marker"
+ },
+ "ED65": {
+  "fluent": "InkingCaret",
+  "mdl2": "InkingCaret"
+ },
+ "ED66": {
+  "fluent": "InkingColorOutline",
+  "mdl2": "InkingColorOutline"
+ },
+ "ED67": {
+  "fluent": "InkingColorFill",
+  "mdl2": "InkingColorFill"
+ },
+ "EDA2": {
+  "fluent": "HardDrive",
+  "mdl2": "HardDrive"
+ },
+ "EDA3": {
+  "fluent": "NetworkAdapter",
+  "mdl2": "NetworkAdapter"
+ },
+ "EDA4": {
+  "fluent": "Touchscreen",
+  "mdl2": "Touchscreen"
+ },
+ "EDA5": {
+  "fluent": "NetworkPrinter",
+  "mdl2": "NetworkPrinter"
+ },
+ "EDA6": {
+  "fluent": "CloudPrinter",
+  "mdl2": "CloudPrinter"
+ },
+ "EDA7": {
+  "fluent": "KeyboardShortcut",
+  "mdl2": "KeyboardShortcut"
+ },
+ "EDA8": {
+  "fluent": "BrushSize",
+  "mdl2": "BrushSize"
+ },
+ "EDA9": {
+  "fluent": "NarratorForward",
+  "mdl2": "NarratorForward"
+ },
+ "EDAA": {
+  "fluent": "NarratorForwardMirrored",
+  "mdl2": "NarratorForwardMirrored"
+ },
+ "EDAB": {
+  "fluent": "SyncBadge12",
+  "mdl2": "SyncBadge12"
+ },
+ "EDAC": {
+  "fluent": "RingerBadge12",
+  "mdl2": "RingerBadge12"
+ },
+ "EDAD": {
+  "fluent": "AsteriskBadge12",
+  "mdl2": "AsteriskBadge12"
+ },
+ "EDAE": {
+  "fluent": "ErrorBadge12",
+  "mdl2": "ErrorBadge12"
+ },
+ "EDAF": {
+  "fluent": "CircleRingBadge12",
+  "mdl2": "CircleRingBadge12"
+ },
+ "EDB0": {
+  "fluent": "CircleFillBadge12",
+  "mdl2": "CircleFillBadge12"
+ },
+ "EDB1": {
+  "fluent": "ImportantBadge12",
+  "mdl2": "ImportantBadge12"
+ },
+ "EDB3": {
+  "fluent": "MailBadge12",
+  "mdl2": "MailBadge12"
+ },
+ "EDB4": {
+  "fluent": "PauseBadge12",
+  "mdl2": "PauseBadge12"
+ },
+ "EDB5": {
+  "fluent": "PlayBadge12",
+  "mdl2": "PlayBadge12"
+ },
+ "EDC6": {
+  "fluent": "PenWorkspace",
+  "mdl2": "PenWorkspace"
+ },
+ "EDD6": {
+  "fluent": "CaretRight8",
+  "mdl2": "CaretRight8"
+ },
+ "EDD9": {
+  "fluent": "CaretLeftSolid8",
+  "mdl2": "CaretLeftSolid8"
+ },
+ "EDDA": {
+  "fluent": "CaretRightSolid8",
+  "mdl2": "CaretRightSolid8"
+ },
+ "EDDB": {
+  "fluent": "CaretUpSolid8",
+  "mdl2": "CaretUpSolid8"
+ },
+ "EDDC": {
+  "fluent": "CaretDownSolid8",
+  "mdl2": "CaretDownSolid8"
+ },
+ "EDE0": {
+  "fluent": "Strikethrough",
+  "mdl2": "Strikethrough"
+ },
+ "EDE1": {
+  "fluent": "Export",
+  "mdl2": "Export"
+ },
+ "EDE2": {
+  "fluent": "ExportMirrored",
+  "mdl2": "ExportMirrored"
+ },
+ "EDE3": {
+  "fluent": "ButtonMenu",
+  "mdl2": "ButtonMenu"
+ },
+ "EDE4": {
+  "fluent": "CloudSearch",
+  "mdl2": "CloudSearch"
+ },
+ "EDE5": {
+  "fluent": "PinyinIMELogo",
+  "mdl2": "PinyinIMELogo"
+ },
+ "EDFB": {
+  "fluent": "CalligraphyPen",
+  "mdl2": "CalligraphyPen"
+ },
+ "EE35": {
+  "fluent": "ReplyMirrored",
+  "mdl2": "ReplyMirrored"
+ },
+ "EE3F": {
+  "fluent": "LockscreenDesktop",
+  "mdl2": "LockscreenDesktop"
+ },
+ "EE40": {
+  "fluent": "TaskViewSettings",
+  "mdl2": "TaskViewSettings"
+ },
+ "EE47": {
+  "fluent": "MiniExpand2Mirrored",
+  "mdl2": "MiniExpand2Mirrored"
+ },
+ "EE49": {
+  "fluent": "MiniContract2Mirrored",
+  "mdl2": "MiniContract2Mirrored"
+ },
+ "EE4A": {
+  "fluent": "Play36",
+  "mdl2": "Play36"
+ },
+ "EE56": {
+  "fluent": "PenPalette",
+  "mdl2": "PenPalette"
+ },
+ "EE57": {
+  "fluent": "GuestUser",
+  "mdl2": "GuestUser"
+ },
+ "EE63": {
+  "fluent": "SettingsBattery",
+  "mdl2": "SettingsBattery"
+ },
+ "EE64": {
+  "fluent": "TaskbarPhone",
+  "mdl2": "TaskbarPhone"
+ },
+ "EE65": {
+  "fluent": "LockScreenGlance",
+  "mdl2": "LockScreenGlance"
+ },
+ "EE6F": {
+  "fluent": "GenericScan",
+  "mdl2": "GenericScan"
+ },
+ "EE71": {
+  "fluent": "ImageExport",
+  "mdl2": "ImageExport"
+ },
+ "EE77": {
+  "fluent": "WifiEthernet",
+  "mdl2": "WifiEthernet"
+ },
+ "EE79": {
+  "fluent": "ActionCenterQuiet",
+  "mdl2": "ActionCenterQuiet"
+ },
+ "EE7A": {
+  "fluent": "ActionCenterQuietNotification",
+  "mdl2": "ActionCenterQuietNotification"
+ },
+ "EE92": {
+  "fluent": "TrackersMirrored",
+  "mdl2": "TrackersMirrored"
+ },
+ "EE93": {
+  "fluent": "DateTimeMirrored",
+  "mdl2": "DateTimeMirrored"
+ },
+ "EE94": {
+  "fluent": "Wheel",
+  "mdl2": "Wheel"
+ },
+ "EEA3": {
+  "fluent": "VirtualMachineGroup",
+  "mdl2": "VirtualMachineGroup"
+ },
+ "EECA": {
+  "fluent": "ButtonView2",
+  "mdl2": "ButtonView2"
+ },
+ "EF15": {
+  "fluent": "PenWorkspaceMirrored",
+  "mdl2": "PenWorkspaceMirrored"
+ },
+ "EF16": {
+  "fluent": "PenPaletteMirrored",
+  "mdl2": "PenPaletteMirrored"
+ },
+ "EF17": {
+  "fluent": "StrokeEraseMirrored",
+  "mdl2": "StrokeEraseMirrored"
+ },
+ "EF18": {
+  "fluent": "PointEraseMirrored",
+  "mdl2": "PointEraseMirrored"
+ },
+ "EF19": {
+  "fluent": "ClearAllInkMirrored",
+  "mdl2": "ClearAllInkMirrored"
+ },
+ "EF1F": {
+  "fluent": "BackgroundToggle",
+  "mdl2": "BackgroundToggle"
+ },
+ "EF20": {
+  "fluent": "Marquee",
+  "mdl2": "Marquee"
+ },
+ "EF2C": {
+  "fluent": "ChromeCloseContrast",
+  "mdl2": "ChromeCloseContrast"
+ },
+ "EF2D": {
+  "fluent": "ChromeMinimizeContrast",
+  "mdl2": "ChromeMinimizeContrast"
+ },
+ "EF2E": {
+  "fluent": "ChromeMaximizeContrast",
+  "mdl2": "ChromeMaximizeContrast"
+ },
+ "EF2F": {
+  "fluent": "ChromeRestoreContrast",
+  "mdl2": "ChromeRestoreContrast"
+ },
+ "EF31": {
+  "fluent": "TrafficLight",
+  "mdl2": "TrafficLight"
+ },
+ "EF3B": {
+  "fluent": "Replay",
+  "mdl2": "Replay"
+ },
+ "EF3C": {
+  "fluent": "Eyedropper",
+  "mdl2": "Eyedropper"
+ },
+ "EF3D": {
+  "fluent": "LineDisplay",
+  "mdl2": "LineDisplay"
+ },
+ "EF3E": {
+  "fluent": "PINPad",
+  "mdl2": "PINPad"
+ },
+ "EF3F": {
+  "fluent": "SignatureCapture",
+  "mdl2": "SignatureCapture"
+ },
+ "EF40": {
+  "fluent": "ChipCardCreditCardReader",
+  "mdl2": "ChipCardCreditCardReader"
+ },
+ "EF58": {
+  "fluent": "PlayerSettings",
+  "mdl2": "PlayerSettings"
+ },
+ "EF6B": {
+  "fluent": "LandscapeOrientation",
+  "mdl2": "LandscapeOrientation"
+ },
+ "EF90": {
+  "fluent": "Flow",
+  "mdl2": "Flow"
+ },
+ "EFA5": {
+  "fluent": "Touchpad",
+  "mdl2": "Touchpad"
+ },
+ "EFA9": {
+  "fluent": "Speech",
+  "mdl2": "Speech"
+ },
+ "F000": {
+  "fluent": "KnowledgeArticle",
+  "mdl2": "KnowledgeArticle"
+ },
+ "F003": {
+  "fluent": "Relationship",
+  "mdl2": "Relationship"
+ },
+ "F080": {
+  "fluent": "DefaultAPN",
+  "mdl2": "DefaultAPN"
+ },
+ "F081": {
+  "fluent": "UserAPN",
+  "mdl2": "UserAPN"
+ },
+ "F085": {
+  "fluent": "DoublePinyin",
+  "mdl2": "DoublePinyin"
+ },
+ "F08C": {
+  "fluent": "BlueLight",
+  "mdl2": "BlueLight"
+ },
+ "F093": {
+  "fluent": "ButtonA",
+  "mdl2": "ButtonA"
+ },
+ "F094": {
+  "fluent": "ButtonB",
+  "mdl2": "ButtonB"
+ },
+ "F095": {
+  "fluent": "ButtonY",
+  "mdl2": "ButtonY"
+ },
+ "F096": {
+  "fluent": "ButtonX",
+  "mdl2": "ButtonX"
+ },
+ "F0AD": {
+  "fluent": "ArrowUp8",
+  "mdl2": "ArrowUp8"
+ },
+ "F0AE": {
+  "fluent": "ArrowDown8",
+  "mdl2": "ArrowDown8"
+ },
+ "F0AF": {
+  "fluent": "ArrowRight8",
+  "mdl2": "ArrowRight8"
+ },
+ "F0B0": {
+  "fluent": "ArrowLeft8",
+  "mdl2": "ArrowLeft8"
+ },
+ "F0B2": {
+  "fluent": "QuarentinedItems",
+  "mdl2": "QuarentinedItems"
+ },
+ "F0B3": {
+  "fluent": "QuarentinedItemsMirrored",
+  "mdl2": "QuarentinedItemsMirrored"
+ },
+ "F0B4": {
+  "fluent": "Protractor",
+  "mdl2": "Protractor"
+ },
+ "F0B5": {
+  "fluent": "ChecklistMirrored",
+  "mdl2": "ChecklistMirrored"
+ },
+ "F0B6": {
+  "fluent": "StatusCircle7",
+  "mdl2": "StatusCircle7"
+ },
+ "F0B7": {
+  "fluent": "StatusCheckmark7",
+  "mdl2": "StatusCheckmark7"
+ },
+ "F0B8": {
+  "fluent": "StatusErrorCircle7",
+  "mdl2": "StatusErrorCircle7"
+ },
+ "F0B9": {
+  "fluent": "Connected",
+  "mdl2": "Connected"
+ },
+ "F0C6": {
+  "fluent": "PencilFill",
+  "mdl2": "PencilFill"
+ },
+ "F0C7": {
+  "fluent": "CalligraphyFill",
+  "mdl2": "CalligraphyFill"
+ },
+ "F0CA": {
+  "fluent": "QuarterStarLeft",
+  "mdl2": "QuarterStarLeft"
+ },
+ "F0CB": {
+  "fluent": "QuarterStarRight",
+  "mdl2": "QuarterStarRight"
+ },
+ "F0CC": {
+  "fluent": "ThreeQuarterStarLeft",
+  "mdl2": "ThreeQuarterStarLeft"
+ },
+ "F0CD": {
+  "fluent": "ThreeQuarterStarRight",
+  "mdl2": "ThreeQuarterStarRight"
+ },
+ "F0CE": {
+  "fluent": "QuietHoursBadge12",
+  "mdl2": "QuietHoursBadge12"
+ },
+ "F0D2": {
+  "fluent": "BackMirrored",
+  "mdl2": "BackMirrored"
+ },
+ "F0D3": {
+  "fluent": "ForwardMirrored",
+  "mdl2": "ForwardMirrored"
+ },
+ "F0D5": {
+  "fluent": "ChromeBackContrast",
+  "mdl2": "ChromeBackContrast"
+ },
+ "F0D6": {
+  "fluent": "ChromeBackContrastMirrored",
+  "mdl2": "ChromeBackContrastMirrored"
+ },
+ "F0D7": {
+  "fluent": "ChromeBackToWindowContrast",
+  "mdl2": "ChromeBackToWindowContrast"
+ },
+ "F0D8": {
+  "fluent": "ChromeFullScreenContrast",
+  "mdl2": "ChromeFullScreenContrast"
+ },
+ "F0E2": {
+  "fluent": "GridView",
+  "mdl2": "GridView"
+ },
+ "F0E3": {
+  "fluent": "ClipboardList",
+  "mdl2": "ClipboardList"
+ },
+ "F0E4": {
+  "fluent": "ClipboardListMirrored",
+  "mdl2": "ClipboardListMirrored"
+ },
+ "F0E5": {
+  "fluent": "OutlineQuarterStarLeft",
+  "mdl2": "OutlineQuarterStarLeft"
+ },
+ "F0E6": {
+  "fluent": "OutlineQuarterStarRight",
+  "mdl2": "OutlineQuarterStarRight"
+ },
+ "F0E7": {
+  "fluent": "OutlineHalfStarLeft",
+  "mdl2": "OutlineHalfStarLeft"
+ },
+ "F0E8": {
+  "fluent": "OutlineHalfStarRight",
+  "mdl2": "OutlineHalfStarRight"
+ },
+ "F0E9": {
+  "fluent": "OutlineThreeQuarterStarLeft",
+  "mdl2": "OutlineThreeQuarterStarLeft"
+ },
+ "F0EA": {
+  "fluent": "OutlineThreeQuarterStarRight",
+  "mdl2": "OutlineThreeQuarterStarRight"
+ },
+ "F0EB": {
+  "fluent": "SpatialVolume0",
+  "mdl2": "SpatialVolume0"
+ },
+ "F0EC": {
+  "fluent": "SpatialVolume1",
+  "mdl2": "SpatialVolume1"
+ },
+ "F0ED": {
+  "fluent": "SpatialVolume2",
+  "mdl2": "SpatialVolume2"
+ },
+ "F0EE": {
+  "fluent": "SpatialVolume3",
+  "mdl2": "SpatialVolume3"
+ },
+ "F0EF": {
+  "fluent": "ApplicationGuard",
+  "mdl2": "ApplicationGuard"
+ },
+ "F0F7": {
+  "fluent": "OutlineStarLeftHalf",
+  "mdl2": "OutlineStarLeftHalf"
+ },
+ "F0F8": {
+  "fluent": "OutlineStarRightHalf",
+  "mdl2": "OutlineStarRightHalf"
+ },
+ "F0F9": {
+  "fluent": "ChromeAnnotateContrast",
+  "mdl2": "ChromeAnnotateContrast"
+ },
+ "F0FB": {
+  "fluent": "DefenderBadge12",
+  "mdl2": "DefenderBadge12"
+ },
+ "F103": {
+  "fluent": "DetachablePC",
+  "mdl2": "DetachablePC"
+ },
+ "F108": {
+  "fluent": "LeftStick",
+  "mdl2": "LeftStick"
+ },
+ "F109": {
+  "fluent": "RightStick",
+  "mdl2": "RightStick"
+ },
+ "F10A": {
+  "fluent": "TriggerLeft",
+  "mdl2": "TriggerLeft"
+ },
+ "F10B": {
+  "fluent": "TriggerRight",
+  "mdl2": "TriggerRight"
+ },
+ "F10C": {
+  "fluent": "BumperLeft",
+  "mdl2": "BumperLeft"
+ },
+ "F10D": {
+  "fluent": "BumperRight",
+  "mdl2": "BumperRight"
+ },
+ "F10E": {
+  "fluent": "Dpad",
+  "mdl2": "Dpad"
+ },
+ "F110": {
+  "fluent": "EnglishPunctuation",
+  "mdl2": "EnglishPunctuation"
+ },
+ "F111": {
+  "fluent": "ChinesePunctuation",
+  "mdl2": "ChinesePunctuation"
+ },
+ "F119": {
+  "fluent": "HMD",
+  "mdl2": "HMD"
+ },
+ "F11B": {
+  "fluent": "CtrlSpatialRight",
+  "mdl2": "CtrlSpatialRight"
+ },
+ "F126": {
+  "fluent": "PaginationDotOutline10",
+  "mdl2": "PaginationDotOutline10"
+ },
+ "F127": {
+  "fluent": "PaginationDotSolid10",
+  "mdl2": "PaginationDotSolid10"
+ },
+ "F128": {
+  "fluent": "StrokeErase2",
+  "mdl2": "StrokeErase2"
+ },
+ "F129": {
+  "fluent": "SmallErase",
+  "mdl2": "SmallErase"
+ },
+ "F12A": {
+  "fluent": "LargeErase",
+  "mdl2": "LargeErase"
+ },
+ "F12B": {
+  "fluent": "FolderHorizontal",
+  "mdl2": "FolderHorizontal"
+ },
+ "F12E": {
+  "fluent": "MicrophoneListening",
+  "mdl2": "MicrophoneListening"
+ },
+ "F12F": {
+  "fluent": "StatusExclamationCircle7",
+  "mdl2": "StatusExclamationCircle7"
+ },
+ "F131": {
+  "fluent": "Video360",
+  "mdl2": "Video360"
+ },
+ "F133": {
+  "fluent": "GiftboxOpen",
+  "mdl2": "GiftboxOpen"
+ },
+ "F136": {
+  "fluent": "StatusCircleOuter",
+  "mdl2": "StatusCircleOuter"
+ },
+ "F137": {
+  "fluent": "StatusCircleInner",
+  "mdl2": "StatusCircleInner"
+ },
+ "F138": {
+  "fluent": "StatusCircleRing",
+  "mdl2": "StatusCircleRing"
+ },
+ "F139": {
+  "fluent": "StatusTriangleOuter",
+  "mdl2": "StatusTriangleOuter"
+ },
+ "F13A": {
+  "fluent": "StatusTriangleInner",
+  "mdl2": "StatusTriangleInner"
+ },
+ "F13B": {
+  "fluent": "StatusTriangleExclamation",
+  "mdl2": "StatusTriangleExclamation"
+ },
+ "F13C": {
+  "fluent": "StatusCircleExclamation",
+  "mdl2": "StatusCircleExclamation"
+ },
+ "F13D": {
+  "fluent": "StatusCircleErrorX",
+  "mdl2": "StatusCircleErrorX"
+ },
+ "F13E": {
+  "fluent": "StatusCircleCheckmark",
+  "mdl2": "StatusCircleCheckmark"
+ },
+ "F13F": {
+  "fluent": "StatusCircleInfo",
+  "mdl2": "StatusCircleInfo"
+ },
+ "F140": {
+  "fluent": "StatusCircleBlock",
+  "mdl2": "StatusCircleBlock"
+ },
+ "F141": {
+  "fluent": "StatusCircleBlock2",
+  "mdl2": "StatusCircleBlock2"
+ },
+ "F142": {
+  "fluent": "StatusCircleQuestionMark",
+  "mdl2": "StatusCircleQuestionMark"
+ },
+ "F143": {
+  "fluent": "StatusCircleSync",
+  "mdl2": "StatusCircleSync"
+ },
+ "F146": {
+  "fluent": "Dial1",
+  "mdl2": "Dial1"
+ },
+ "F147": {
+  "fluent": "Dial2",
+  "mdl2": "Dial2"
+ },
+ "F148": {
+  "fluent": "Dial3",
+  "mdl2": "Dial3"
+ },
+ "F149": {
+  "fluent": "Dial4",
+  "mdl2": "Dial4"
+ },
+ "F14A": {
+  "fluent": "Dial5",
+  "mdl2": "Dial5"
+ },
+ "F14B": {
+  "fluent": "Dial6",
+  "mdl2": "Dial6"
+ },
+ "F14C": {
+  "fluent": "Dial7",
+  "mdl2": "Dial7"
+ },
+ "F14D": {
+  "fluent": "Dial8",
+  "mdl2": "Dial8"
+ },
+ "F14E": {
+  "fluent": "Dial9",
+  "mdl2": "Dial9"
+ },
+ "F14F": {
+  "fluent": "Dial10",
+  "mdl2": "Dial10"
+ },
+ "F150": {
+  "fluent": "Dial11",
+  "mdl2": "Dial11"
+ },
+ "F151": {
+  "fluent": "Dial12",
+  "mdl2": "Dial12"
+ },
+ "F152": {
+  "fluent": "Dial13",
+  "mdl2": "Dial13"
+ },
+ "F153": {
+  "fluent": "Dial14",
+  "mdl2": "Dial14"
+ },
+ "F154": {
+  "fluent": "Dial15",
+  "mdl2": "Dial15"
+ },
+ "F155": {
+  "fluent": "Dial16",
+  "mdl2": "Dial16"
+ },
+ "F156": {
+  "fluent": "DialShape1",
+  "mdl2": "DialShape1"
+ },
+ "F157": {
+  "fluent": "DialShape2",
+  "mdl2": "DialShape2"
+ },
+ "F158": {
+  "fluent": "DialShape3",
+  "mdl2": "DialShape3"
+ },
+ "F159": {
+  "fluent": "DialShape4",
+  "mdl2": "DialShape4"
+ },
+ "F161": {
+  "fluent": "TollSolid",
+  "mdl2": "TollSolid"
+ },
+ "F163": {
+  "fluent": "TrafficCongestionSolid",
+  "mdl2": "TrafficCongestionSolid"
+ },
+ "F164": {
+  "fluent": "ExploreContentSingle",
+  "mdl2": "ExploreContentSingle"
+ },
+ "F165": {
+  "fluent": "CollapseContent",
+  "mdl2": "CollapseContent"
+ },
+ "F166": {
+  "fluent": "CollapseContentSingle",
+  "mdl2": "CollapseContentSingle"
+ },
+ "F167": {
+  "fluent": "InfoSolid",
+  "mdl2": "InfoSolid"
+ },
+ "F168": {
+  "fluent": "GroupList",
+  "mdl2": "GroupList"
+ },
+ "F169": {
+  "fluent": "CaretBottomRightSolidCenter8",
+  "mdl2": "CaretBottomRightSolidCenter8"
+ },
+ "F16A": {
+  "fluent": "ProgressRingDots",
+  "mdl2": "ProgressRingDots"
+ },
+ "F16B": {
+  "fluent": "Checkbox14",
+  "mdl2": "Checkbox14"
+ },
+ "F16C": {
+  "fluent": "CheckboxComposite14",
+  "mdl2": "CheckboxComposite14"
+ },
+ "F16D": {
+  "fluent": "CheckboxIndeterminateCombo14",
+  "mdl2": "CheckboxIndeterminateCombo14"
+ },
+ "F16E": {
+  "fluent": "CheckboxIndeterminateCombo",
+  "mdl2": "CheckboxIndeterminateCombo"
+ },
+ "F175": {
+  "fluent": "StatusPause7",
+  "mdl2": "StatusPause7"
+ },
+ "F17F": {
+  "fluent": "CharacterAppearance",
+  "mdl2": "CharacterAppearance"
+ },
+ "F180": {
+  "fluent": "Lexicon",
+  "mdl2": "Lexicon"
+ },
+ "F182": {
+  "fluent": "ScreenTime",
+  "mdl2": "ScreenTime"
+ },
+ "F191": {
+  "fluent": "HeadlessDevice",
+  "mdl2": "HeadlessDevice"
+ },
+ "F193": {
+  "fluent": "NetworkSharing",
+  "mdl2": "NetworkSharing"
+ },
+ "F19D": {
+  "fluent": "EyeGaze",
+  "mdl2": "EyeGaze"
+ },
+ "F19E": {
+  "fluent": "ToggleLeft",
+  "mdl2": "ToggleLeft"
+ },
+ "F19F": {
+  "fluent": "ToggleRight",
+  "mdl2": "ToggleRight"
+ },
+ "F1AD": {
+  "fluent": "WindowsInsider",
+  "mdl2": "WindowsInsider"
+ },
+ "F1CB": {
+  "fluent": "ChromeSwitch",
+  "mdl2": "ChromeSwitch"
+ },
+ "F1CC": {
+  "fluent": "ChromeSwitchContast",
+  "mdl2": "ChromeSwitchContast"
+ },
+ "F1D8": {
+  "fluent": "StatusCheckmark",
+  "mdl2": "StatusCheckmark"
+ },
+ "F1D9": {
+  "fluent": "StatusCheckmarkLeft",
+  "mdl2": "StatusCheckmarkLeft"
+ },
+ "F20C": {
+  "fluent": "KeyboardLeftAligned",
+  "mdl2": "KeyboardLeftAligned"
+ },
+ "F20D": {
+  "fluent": "KeyboardRightAligned",
+  "mdl2": "KeyboardRightAligned"
+ },
+ "F210": {
+  "fluent": "KeyboardSettings",
+  "mdl2": "KeyboardSettings"
+ },
+ "F211": {
+  "fluent": "NetworkPhysical",
+  "mdl2": "NetworkPhysical"
+ },
+ "F22C": {
+  "fluent": "IOT",
+  "mdl2": "IOT"
+ },
+ "F22E": {
+  "fluent": "UnknownMirrored",
+  "mdl2": "UnknownMirrored"
+ },
+ "F246": {
+  "fluent": "ViewDashboard",
+  "mdl2": "ViewDashboard"
+ },
+ "F259": {
+  "fluent": "ExploitProtectionSettings",
+  "mdl2": "ExploitProtectionSettings"
+ },
+ "F260": {
+  "fluent": "KeyboardNarrow",
+  "mdl2": "KeyboardNarrow"
+ },
+ "F261": {
+  "fluent": "Keyboard12Key",
+  "mdl2": "Keyboard12Key"
+ },
+ "F26B": {
+  "fluent": "KeyboardDock",
+  "mdl2": "KeyboardDock"
+ },
+ "F26C": {
+  "fluent": "KeyboardUndock",
+  "mdl2": "KeyboardUndock"
+ },
+ "F26D": {
+  "fluent": "KeyboardLeftDock",
+  "mdl2": "KeyboardLeftDock"
+ },
+ "F26E": {
+  "fluent": "KeyboardRightDock",
+  "mdl2": "KeyboardRightDock"
+ },
+ "F270": {
+  "fluent": "Ear",
+  "mdl2": "Ear"
+ },
+ "F271": {
+  "fluent": "PointerHand",
+  "mdl2": "PointerHand"
+ },
+ "F272": {
+  "fluent": "Bullseye",
+  "mdl2": "Bullseye"
+ },
+ "F2B7": {
+  "fluent": "LocaleLanguage",
+  "mdl2": "LocaleLanguage"
+ },
+ "F32A": {
+  "fluent": "PassiveAuthentication",
+  "mdl2": "PassiveAuthentication"
+ },
+ "F354": {
+  "fluent": "ColorSolid",
+  "mdl2": "ColorSolid"
+ },
+ "F384": {
+  "fluent": "NetworkOffline",
+  "mdl2": "NetworkOffline"
+ },
+ "F385": {
+  "fluent": "NetworkConnected",
+  "mdl2": "NetworkConnected"
+ },
+ "F386": {
+  "fluent": "NetworkConnectedCheckmark",
+  "mdl2": "NetworkConnectedCheckmark"
+ },
+ "F3B1": {
+  "fluent": "SignOut",
+  "mdl2": "SignOut"
+ },
+ "F3CC": {
+  "fluent": "StatusInfo",
+  "mdl2": "StatusInfo"
+ },
+ "F3CD": {
+  "fluent": "StatusInfoLeft",
+  "mdl2": "StatusInfoLeft"
+ },
+ "F3E2": {
+  "fluent": "NearbySharing",
+  "mdl2": "NearbySharing"
+ },
+ "F3E7": {
+  "fluent": "CtrlSpatialLeft",
+  "mdl2": "CtrlSpatialLeft"
+ },
+ "F404": {
+  "fluent": "InteractiveDashboard",
+  "mdl2": "InteractiveDashboard"
+ },
+ "F406": {
+  "fluent": "ClippingTool",
+  "mdl2": "ClippingTool"
+ },
+ "F407": {
+  "fluent": "RectangularClipping",
+  "mdl2": "RectangularClipping"
+ },
+ "F408": {
+  "fluent": "FreeFormClipping",
+  "mdl2": "FreeFormClipping"
+ },
+ "F413": {
+  "fluent": "CopyTo",
+  "mdl2": "CopyTo"
+ },
+ "F439": {
+  "fluent": "DynamicLock",
+  "mdl2": "DynamicLock"
+ },
+ "F45E": {
+  "fluent": "PenTips",
+  "mdl2": "PenTips"
+ },
+ "F45F": {
+  "fluent": "PenTipsMirrored",
+  "mdl2": "PenTipsMirrored"
+ },
+ "F460": {
+  "fluent": "HWPJoin",
+  "mdl2": "HWPJoin"
+ },
+ "F461": {
+  "fluent": "HWPInsert",
+  "mdl2": "HWPInsert"
+ },
+ "F462": {
+  "fluent": "HWPStrikeThrough",
+  "mdl2": "HWPStrikeThrough"
+ },
+ "F463": {
+  "fluent": "HWPScratchOut",
+  "mdl2": "HWPScratchOut"
+ },
+ "F464": {
+  "fluent": "HWPSplit",
+  "mdl2": "HWPSplit"
+ },
+ "F465": {
+  "fluent": "HWPNewLine",
+  "mdl2": "HWPNewLine"
+ },
+ "F466": {
+  "fluent": "HWPOverwrite",
+  "mdl2": "HWPOverwrite"
+ },
+ "F473": {
+  "fluent": "MobWifiWarning1",
+  "mdl2": "MobWifiWarning1"
+ },
+ "F474": {
+  "fluent": "MobWifiWarning2",
+  "mdl2": "MobWifiWarning2"
+ },
+ "F475": {
+  "fluent": "MobWifiWarning3",
+  "mdl2": "MobWifiWarning3"
+ },
+ "F476": {
+  "fluent": "MobWifiWarning4",
+  "mdl2": "MobWifiWarning4"
+ },
+ "F49A": {
+  "fluent": "Globe2",
+  "mdl2": "Globe2"
+ },
+ "F4A5": {
+  "fluent": "SpecialEffectSize",
+  "mdl2": "SpecialEffectSize"
+ },
+ "F4A9": {
+  "fluent": "GIF",
+  "mdl2": "GIF"
+ },
+ "F4AA": {
+  "fluent": "Sticker2",
+  "mdl2": "Sticker2"
+ },
+ "F4BE": {
+  "fluent": "SurfaceHubSelected",
+  "mdl2": "SurfaceHubSelected"
+ },
+ "F4BF": {
+  "fluent": "HoloLensSelected",
+  "mdl2": "HoloLensSelected"
+ },
+ "F4C0": {
+  "fluent": "Earbud",
+  "mdl2": "Earbud"
+ },
+ "F4C3": {
+  "fluent": "MixVolumes",
+  "mdl2": "MixVolumes"
+ },
+ "F540": {
+  "fluent": "Safe",
+  "mdl2": "Safe"
+ },
+ "F552": {
+  "fluent": "LaptopSecure",
+  "mdl2": "LaptopSecure"
+ },
+ "F56D": {
+  "fluent": "PrintDefault",
+  "mdl2": "PrintDefault"
+ },
+ "F56E": {
+  "fluent": "PageMirrored",
+  "mdl2": "PageMirrored"
+ },
+ "F56F": {
+  "fluent": "LandscapeOrientationMirrored",
+  "mdl2": "LandscapeOrientationMirrored"
+ },
+ "F570": {
+  "fluent": "ColorOff",
+  "mdl2": "ColorOff"
+ },
+ "F571": {
+  "fluent": "PrintAllPages",
+  "mdl2": "PrintAllPages"
+ },
+ "F572": {
+  "fluent": "PrintCustomRange",
+  "mdl2": "PrintCustomRange"
+ },
+ "F573": {
+  "fluent": "PageMarginPortraitNarrow",
+  "mdl2": "PageMarginPortraitNarrow"
+ },
+ "F574": {
+  "fluent": "PageMarginPortraitNormal",
+  "mdl2": "PageMarginPortraitNormal"
+ },
+ "F575": {
+  "fluent": "PageMarginPortraitModerate",
+  "mdl2": "PageMarginPortraitModerate"
+ },
+ "F576": {
+  "fluent": "PageMarginPortraitWide",
+  "mdl2": "PageMarginPortraitWide"
+ },
+ "F577": {
+  "fluent": "PageMarginLandscapeNarrow",
+  "mdl2": "PageMarginLandscapeNarrow"
+ },
+ "F578": {
+  "fluent": "PageMarginLandscapeNormal",
+  "mdl2": "PageMarginLandscapeNormal"
+ },
+ "F579": {
+  "fluent": "PageMarginLandscapeModerate",
+  "mdl2": "PageMarginLandscapeModerate"
+ },
+ "F57A": {
+  "fluent": "PageMarginLandscapeWide",
+  "mdl2": "PageMarginLandscapeWide"
+ },
+ "F57B": {
+  "fluent": "CollateLandscape",
+  "mdl2": "CollateLandscape"
+ },
+ "F57C": {
+  "fluent": "CollatePortrait",
+  "mdl2": "CollatePortrait"
+ },
+ "F57D": {
+  "fluent": "CollatePortraitSeparated",
+  "mdl2": "CollatePortraitSeparated"
+ },
+ "F57E": {
+  "fluent": "DuplexLandscapeOneSided",
+  "mdl2": "DuplexLandscapeOneSided"
+ },
+ "F57F": {
+  "fluent": "DuplexLandscapeOneSidedMirrored",
+  "mdl2": "DuplexLandscapeOneSidedMirrored"
+ },
+ "F580": {
+  "fluent": "DuplexLandscapeTwoSidedLongEdge",
+  "mdl2": "DuplexLandscapeTwoSidedLongEdge"
+ },
+ "F581": {
+  "fluent": "DuplexLandscapeTwoSidedLongEdgeMirrored",
+  "mdl2": "DuplexLandscapeTwoSidedLongEdgeMirrored"
+ },
+ "F582": {
+  "fluent": "DuplexLandscapeTwoSidedShortEdge",
+  "mdl2": "DuplexLandscapeTwoSidedShortEdge"
+ },
+ "F583": {
+  "fluent": "DuplexLandscapeTwoSidedShortEdgeMirrored",
+  "mdl2": "DuplexLandscapeTwoSidedShortEdgeMirrored"
+ },
+ "F584": {
+  "fluent": "DuplexPortraitOneSided",
+  "mdl2": "DuplexPortraitOneSided"
+ },
+ "F585": {
+  "fluent": "DuplexPortraitOneSidedMirrored",
+  "mdl2": "DuplexPortraitOneSidedMirrored"
+ },
+ "F586": {
+  "fluent": "DuplexPortraitTwoSidedLongEdge",
+  "mdl2": "DuplexPortraitTwoSidedLongEdge"
+ },
+ "F587": {
+  "fluent": "DuplexPortraitTwoSidedLongEdgeMirrored",
+  "mdl2": "DuplexPortraitTwoSidedLongEdgeMirrored"
+ },
+ "F588": {
+  "fluent": "DuplexPortraitTwoSidedShortEdge",
+  "mdl2": "DuplexPortraitTwoSidedShortEdge"
+ },
+ "F589": {
+  "fluent": "DuplexPortraitTwoSidedShortEdgeMirrored",
+  "mdl2": "DuplexPortraitTwoSidedShortEdgeMirrored"
+ },
+ "F58A": {
+  "fluent": "PPSOneLandscape",
+  "mdl2": "PPSOneLandscape"
+ },
+ "F58B": {
+  "fluent": "PPSTwoLandscape",
+  "mdl2": "PPSTwoLandscape"
+ },
+ "F58C": {
+  "fluent": "PPSTwoPortrait",
+  "mdl2": "PPSTwoPortrait"
+ },
+ "F58D": {
+  "fluent": "PPSFourLandscape",
+  "mdl2": "PPSFourLandscape"
+ },
+ "F58E": {
+  "fluent": "PPSFourPortrait",
+  "mdl2": "PPSFourPortrait"
+ },
+ "F58F": {
+  "fluent": "HolePunchOff",
+  "mdl2": "HolePunchOff"
+ },
+ "F590": {
+  "fluent": "HolePunchPortraitLeft",
+  "mdl2": "HolePunchPortraitLeft"
+ },
+ "F591": {
+  "fluent": "HolePunchPortraitRight",
+  "mdl2": "HolePunchPortraitRight"
+ },
+ "F592": {
+  "fluent": "HolePunchPortraitTop",
+  "mdl2": "HolePunchPortraitTop"
+ },
+ "F593": {
+  "fluent": "HolePunchPortraitBottom",
+  "mdl2": "HolePunchPortraitBottom"
+ },
+ "F594": {
+  "fluent": "HolePunchLandscapeLeft",
+  "mdl2": "HolePunchLandscapeLeft"
+ },
+ "F595": {
+  "fluent": "HolePunchLandscapeRight",
+  "mdl2": "HolePunchLandscapeRight"
+ },
+ "F596": {
+  "fluent": "HolePunchLandscapeTop",
+  "mdl2": "HolePunchLandscapeTop"
+ },
+ "F597": {
+  "fluent": "HolePunchLandscapeBottom",
+  "mdl2": "HolePunchLandscapeBottom"
+ },
+ "F598": {
+  "fluent": "StaplingOff",
+  "mdl2": "StaplingOff"
+ },
+ "F599": {
+  "fluent": "StaplingPortraitTopLeft",
+  "mdl2": "StaplingPortraitTopLeft"
+ },
+ "F59A": {
+  "fluent": "StaplingPortraitTopRight",
+  "mdl2": "StaplingPortraitTopRight"
+ },
+ "F59B": {
+  "fluent": "StaplingPortraitBottomRight",
+  "mdl2": "StaplingPortraitBottomRight"
+ },
+ "F59C": {
+  "fluent": "StaplingPortraitTwoLeft",
+  "mdl2": "StaplingPortraitTwoLeft"
+ },
+ "F59D": {
+  "fluent": "StaplingPortraitTwoRight",
+  "mdl2": "StaplingPortraitTwoRight"
+ },
+ "F59E": {
+  "fluent": "StaplingPortraitTwoTop",
+  "mdl2": "StaplingPortraitTwoTop"
+ },
+ "F59F": {
+  "fluent": "StaplingPortraitTwoBottom",
+  "mdl2": "StaplingPortraitTwoBottom"
+ },
+ "F5A0": {
+  "fluent": "StaplingPortraitBookBinding",
+  "mdl2": "StaplingPortraitBookBinding"
+ },
+ "F5A1": {
+  "fluent": "StaplingLandscapeTopLeft",
+  "mdl2": "StaplingLandscapeTopLeft"
+ },
+ "F5A2": {
+  "fluent": "StaplingLandscapeTopRight",
+  "mdl2": "StaplingLandscapeTopRight"
+ },
+ "F5A3": {
+  "fluent": "StaplingLandscapeBottomLeft",
+  "mdl2": "StaplingLandscapeBottomLeft"
+ },
+ "F5A4": {
+  "fluent": "StaplingLandscapeBottomRight",
+  "mdl2": "StaplingLandscapeBottomRight"
+ },
+ "F5A5": {
+  "fluent": "StaplingLandscapeTwoLeft",
+  "mdl2": "StaplingLandscapeTwoLeft"
+ },
+ "F5A6": {
+  "fluent": "StaplingLandscapeTwoRight",
+  "mdl2": "StaplingLandscapeTwoRight"
+ },
+ "F5A7": {
+  "fluent": "StaplingLandscapeTwoTop",
+  "mdl2": "StaplingLandscapeTwoTop"
+ },
+ "F5A8": {
+  "fluent": "StaplingLandscapeTwoBottom",
+  "mdl2": "StaplingLandscapeTwoBottom"
+ },
+ "F5A9": {
+  "fluent": "StaplingLandscapeBookBinding",
+  "mdl2": "StaplingLandscapeBookBinding"
+ },
+ "F5AA": {
+  "fluent": "StatusDataTransferRoaming",
+  "mdl2": "StatusDataTransferRoaming"
+ },
+ "F5AB": {
+  "fluent": "MobSIMError",
+  "mdl2": "MobSIMError"
+ },
+ "F5AC": {
+  "fluent": "CollateLandscapeSeparated",
+  "mdl2": "CollateLandscapeSeparated"
+ },
+ "F5AD": {
+  "fluent": "PPSOnePortrait",
+  "mdl2": "PPSOnePortrait"
+ },
+ "F5AE": {
+  "fluent": "StaplingPortraitBottomLeft",
+  "mdl2": "StaplingPortraitBottomLeft"
+ },
+ "F5B0": {
+  "fluent": "PlaySolid",
+  "mdl2": "PlaySolid"
+ },
+ "F5E7": {
+  "fluent": "RepeatOff",
+  "mdl2": "RepeatOff"
+ },
+ "F5ED": {
+  "fluent": "Set",
+  "mdl2": "Set"
+ },
+ "F5EE": {
+  "fluent": "SetSolid",
+  "mdl2": "SetSolid"
+ },
+ "F5EF": {
+  "fluent": "FuzzyReading",
+  "mdl2": "FuzzyReading"
+ },
+ "F5F2": {
+  "fluent": "VerticalBattery0",
+  "mdl2": "VerticalBattery0"
+ },
+ "F5F3": {
+  "fluent": "VerticalBattery1",
+  "mdl2": "VerticalBattery1"
+ },
+ "F5F4": {
+  "fluent": "VerticalBattery2",
+  "mdl2": "VerticalBattery2"
+ },
+ "F5F5": {
+  "fluent": "VerticalBattery3",
+  "mdl2": "VerticalBattery3"
+ },
+ "F5F6": {
+  "fluent": "VerticalBattery4",
+  "mdl2": "VerticalBattery4"
+ },
+ "F5F7": {
+  "fluent": "VerticalBattery5",
+  "mdl2": "VerticalBattery5"
+ },
+ "F5F8": {
+  "fluent": "VerticalBattery6",
+  "mdl2": "VerticalBattery6"
+ },
+ "F5F9": {
+  "fluent": "VerticalBattery7",
+  "mdl2": "VerticalBattery7"
+ },
+ "F5FA": {
+  "fluent": "VerticalBattery8",
+  "mdl2": "VerticalBattery8"
+ },
+ "F5FB": {
+  "fluent": "VerticalBattery9",
+  "mdl2": "VerticalBattery9"
+ },
+ "F5FC": {
+  "fluent": "VerticalBattery10",
+  "mdl2": "VerticalBattery10"
+ },
+ "F5FD": {
+  "fluent": "VerticalBatteryCharging0",
+  "mdl2": "VerticalBatteryCharging0"
+ },
+ "F5FE": {
+  "fluent": "VerticalBatteryCharging1",
+  "mdl2": "VerticalBatteryCharging1"
+ },
+ "F5FF": {
+  "fluent": "VerticalBatteryCharging2",
+  "mdl2": "VerticalBatteryCharging2"
+ },
+ "F600": {
+  "fluent": "VerticalBatteryCharging3",
+  "mdl2": "VerticalBatteryCharging3"
+ },
+ "F601": {
+  "fluent": "VerticalBatteryCharging4",
+  "mdl2": "VerticalBatteryCharging4"
+ },
+ "F602": {
+  "fluent": "VerticalBatteryCharging5",
+  "mdl2": "VerticalBatteryCharging5"
+ },
+ "F603": {
+  "fluent": "VerticalBatteryCharging6",
+  "mdl2": "VerticalBatteryCharging6"
+ },
+ "F604": {
+  "fluent": "VerticalBatteryCharging7",
+  "mdl2": "VerticalBatteryCharging7"
+ },
+ "F605": {
+  "fluent": "VerticalBatteryCharging8",
+  "mdl2": "VerticalBatteryCharging8"
+ },
+ "F606": {
+  "fluent": "VerticalBatteryCharging9",
+  "mdl2": "VerticalBatteryCharging9"
+ },
+ "F607": {
+  "fluent": "VerticalBatteryCharging10",
+  "mdl2": "VerticalBatteryCharging10"
+ },
+ "F608": {
+  "fluent": "VerticalBatteryUnknown",
+  "mdl2": "VerticalBatteryUnknown"
+ },
+ "F618": {
+  "fluent": "SIMError",
+  "mdl2": "SIMError"
+ },
+ "F619": {
+  "fluent": "SIMMissing",
+  "mdl2": "SIMMissing"
+ },
+ "F61A": {
+  "fluent": "SIMLock",
+  "mdl2": "SIMLock"
+ },
+ "F61B": {
+  "fluent": "eSIM",
+  "mdl2": "eSIM"
+ },
+ "F61C": {
+  "fluent": "eSIMNoProfile",
+  "mdl2": "eSIMNoProfile"
+ },
+ "F61D": {
+  "fluent": "eSIMLocked",
+  "mdl2": "eSIMLocked"
+ },
+ "F61E": {
+  "fluent": "eSIMBusy",
+  "mdl2": "eSIMBusy"
+ },
+ "F61F": {
+  "fluent": "NoiseCancelation",
+  "mdl2": "NoiseCancelation"
+ },
+ "F620": {
+  "fluent": "NoiseCancelationOff",
+  "mdl2": "NoiseCancelationOff"
+ },
+ "F623": {
+  "fluent": "MusicSharing",
+  "mdl2": "MusicSharing"
+ },
+ "F624": {
+  "fluent": "MusicSharingOff",
+  "mdl2": "MusicSharingOff"
+ },
+ "F63C": {
+  "fluent": "CircleShapeSolid",
+  "mdl2": "CircleShapeSolid"
+ },
+ "F657": {
+  "fluent": "WifiCallBars",
+  "mdl2": "WifiCallBars"
+ },
+ "F658": {
+  "fluent": "WifiCall0",
+  "mdl2": "WifiCall0"
+ },
+ "F659": {
+  "fluent": "WifiCall1",
+  "mdl2": "WifiCall1"
+ },
+ "F65A": {
+  "fluent": "WifiCall2",
+  "mdl2": "WifiCall2"
+ },
+ "F65B": {
+  "fluent": "WifiCall3",
+  "mdl2": "WifiCall3"
+ },
+ "F65C": {
+  "fluent": "WifiCall4",
+  "mdl2": "WifiCall4"
+ },
+ "F69E": {
+  "fluent": "CHTLanguageBar",
+  "mdl2": "CHTLanguageBar"
+ },
+ "F6A9": {
+  "fluent": "ComposeMode",
+  "mdl2": "ComposeMode"
+ },
+ "F6B8": {
+  "fluent": "ExpressiveInputEntry",
+  "mdl2": "ExpressiveInputEntry"
+ },
+ "F6BA": {
+  "fluent": "EmojiTabMoreSymbols",
+  "mdl2": "EmojiTabMoreSymbols"
+ },
+ "F6FA": {
+  "fluent": "WebSearch",
+  "mdl2": "WebSearch"
+ },
+ "F712": {
+  "fluent": "Kiosk",
+  "mdl2": "Kiosk"
+ },
+ "F714": {
+  "fluent": "RTTLogo",
+  "mdl2": "RTTLogo"
+ },
+ "F715": {
+  "fluent": "VoiceCall",
+  "mdl2": "VoiceCall"
+ },
+ "F716": {
+  "fluent": "GoToMessage",
+  "mdl2": "GoToMessage"
+ },
+ "F71A": {
+  "fluent": "ReturnToCall",
+  "mdl2": "ReturnToCall"
+ },
+ "F71C": {
+  "fluent": "StartPresenting",
+  "mdl2": "StartPresenting"
+ },
+ "F71D": {
+  "fluent": "StopPresenting",
+  "mdl2": "StopPresenting"
+ },
+ "F71E": {
+  "fluent": "ProductivityMode",
+  "mdl2": "ProductivityMode"
+ },
+ "F738": {
+  "fluent": "SetHistoryStatus",
+  "mdl2": "SetHistoryStatus"
+ },
+ "F739": {
+  "fluent": "SetHistoryStatus2",
+  "mdl2": "SetHistoryStatus2"
+ },
+ "F73D": {
+  "fluent": "Keyboardsettings20",
+  "mdl2": "Keyboardsettings20"
+ },
+ "F73E": {
+  "fluent": "OneHandedRight20",
+  "mdl2": "OneHandedRight20"
+ },
+ "F73F": {
+  "fluent": "OneHandedLeft20",
+  "mdl2": "OneHandedLeft20"
+ },
+ "F740": {
+  "fluent": "Split20",
+  "mdl2": "Split20"
+ },
+ "F741": {
+  "fluent": "Full20",
+  "mdl2": "Full20"
+ },
+ "F742": {
+  "fluent": "Handwriting20",
+  "mdl2": "Handwriting20"
+ },
+ "F743": {
+  "fluent": "ChevronLeft20",
+  "mdl2": "CheveronLeft20"
+ },
+ "F744": {
+  "fluent": "ChevronLeft32",
+  "mdl2": "CheveronLeft32"
+ },
+ "F745": {
+  "fluent": "ChevronRight20",
+  "mdl2": "CheveronRight20"
+ },
+ "F746": {
+  "fluent": "ChevronRight32",
+  "mdl2": "CheveronRight32"
+ },
+ "F781": {
+  "fluent": "MicOff2",
+  "mdl2": "MicOff2"
+ },
+ "F785": {
+  "fluent": "DeliveryOptimization",
+  "mdl2": "DeliveryOptimization"
+ },
+ "F78A": {
+  "fluent": "CancelMedium",
+  "mdl2": "CancelMedium"
+ },
+ "F78B": {
+  "fluent": "SearchMedium",
+  "mdl2": "SearchMedium"
+ },
+ "F78C": {
+  "fluent": "AcceptMedium",
+  "mdl2": "AcceptMedium"
+ },
+ "F78D": {
+  "fluent": "RevealPasswordMedium",
+  "mdl2": "RevealPasswordMedium"
+ },
+ "F7AD": {
+  "fluent": "DeleteWord",
+  "mdl2": "DeleteWord"
+ },
+ "F7AE": {
+  "fluent": "DeleteWordFill",
+  "mdl2": "DeleteWordFill"
+ },
+ "F7AF": {
+  "fluent": "DeleteLines",
+  "mdl2": "DeleteLines"
+ },
+ "F7B0": {
+  "fluent": "DeleteLinesFill",
+  "mdl2": "DeleteLinesFill"
+ },
+ "F7B1": {
+  "fluent": "InstertWords",
+  "mdl2": "InstertWords"
+ },
+ "F7B2": {
+  "fluent": "InstertWordsFill",
+  "mdl2": "InstertWordsFill"
+ },
+ "F7B3": {
+  "fluent": "JoinWords",
+  "mdl2": "JoinWords"
+ },
+ "F7B4": {
+  "fluent": "JoinWordsFill",
+  "mdl2": "JoinWordsFill"
+ },
+ "F7B5": {
+  "fluent": "OverwriteWords",
+  "mdl2": "OverwriteWords"
+ },
+ "F7B6": {
+  "fluent": "OverwriteWordsFill",
+  "mdl2": "OverwriteWordsFill"
+ },
+ "F7B7": {
+  "fluent": "AddNewLine",
+  "mdl2": "AddNewLine"
+ },
+ "F7B8": {
+  "fluent": "AddNewLineFill",
+  "mdl2": "AddNewLineFill"
+ },
+ "F7B9": {
+  "fluent": "OverwriteWordsKorean",
+  "mdl2": "OverwriteWordsKorean"
+ },
+ "F7BA": {
+  "fluent": "OverwriteWordsFillKorean",
+  "mdl2": "OverwriteWordsFillKorean"
+ },
+ "F7BB": {
+  "fluent": "EducationIcon",
+  "mdl2": "EducationIcon"
+ },
+ "F7ED": {
+  "fluent": "WindowSnipping",
+  "mdl2": "WindowSnipping"
+ },
+ "F7EE": {
+  "fluent": "VideoCapture",
+  "mdl2": "VideoCapture"
+ },
+ "F809": {
+  "fluent": "StatusSecured",
+  "mdl2": "StatusSecured"
+ },
+ "F83B": {
+  "fluent": "NarratorApp",
+  "mdl2": "NarratorApp"
+ },
+ "F83D": {
+  "fluent": "PowerButtonUpdate",
+  "mdl2": "PowerButtonUpdate"
+ },
+ "F83E": {
+  "fluent": "RestartUpdate",
+  "mdl2": "RestartUpdate"
+ },
+ "F83F": {
+  "fluent": "UpdateStatusDot",
+  "mdl2": "UpdateStatusDot"
+ },
+ "F847": {
+  "fluent": "Eject",
+  "mdl2": "Eject"
+ },
+ "F87B": {
+  "fluent": "Spelling",
+  "mdl2": "Spelling"
+ },
+ "F87C": {
+  "fluent": "SpellingKorean",
+  "mdl2": "SpellingKorean"
+ },
+ "F87D": {
+  "fluent": "SpellingSerbian",
+  "mdl2": "SpellingSerbian"
+ },
+ "F87E": {
+  "fluent": "SpellingChinese",
+  "mdl2": "SpellingChinese"
+ },
+ "F89A": {
+  "fluent": "FolderSelect",
+  "mdl2": "FolderSelect"
+ },
+ "F8A5": {
+  "fluent": "SmartScreen",
+  "mdl2": "SmartScreen"
+ },
+ "F8A6": {
+  "fluent": "ExploitProtection",
+  "mdl2": "ExploitProtection"
+ },
+ "F8AA": {
+  "fluent": "AddBold",
+  "mdl2": "AddBold"
+ },
+ "F8AB": {
+  "fluent": "SubtractBold",
+  "mdl2": "SubtractBold"
+ },
+ "F8AC": {
+  "fluent": "BackSolidBold",
+  "mdl2": "BackSolidBold"
+ },
+ "F8AD": {
+  "fluent": "ForwardSolidBold",
+  "mdl2": "ForwardSolidBold"
+ },
+ "F8AE": {
+  "fluent": "PauseBold",
+  "mdl2": "PauseBold"
+ },
+ "F8AF": {
+  "fluent": "ClickSolid",
+  "mdl2": "ClickSolid"
+ },
+ "F8B0": {
+  "fluent": "SettingsSolid",
+  "mdl2": "SettingsSolid"
+ },
+ "F8B1": {
+  "fluent": "MicrophoneSolidBold",
+  "mdl2": "MicrophoneSolidBold"
+ },
+ "F8B2": {
+  "fluent": "SpeechSolidBold",
+  "mdl2": "SpeechSolidBold"
+ },
+ "F8B3": {
+  "fluent": "ClickedOutLoudSolidBold",
+  "mdl2": "ClickedOutLoudSolidBold"
+ }
+}

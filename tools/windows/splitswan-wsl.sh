@@ -4,7 +4,10 @@
 #
 # 用法：
 #   splitswan-wsl.sh setup                 確認 systemd、安裝 strongSwan（回傳 10 代表要重啟 WSL）
-#   splitswan-wsl.sh connect <設定目錄>     安裝設定、依序嘗試 vpn1..N、開啟轉發與 SNAT
+#   splitswan-wsl.sh connect <設定目錄> [順序]
+#                                          安裝設定、依序嘗試閘道、開啟轉發與 SNAT。
+#                                          順序是逗號分隔的閘道編號（例 2,1,3），省略＝vpn1..N 依編號；
+#                                          每台嘗試完輸出 @@ATTEMPT=<n>|<ok|fail>|<秒數>|<摘要>
 #   splitswan-wsl.sh disconnect            中斷所有 SA、清掉 SNAT／MSS 規則
 #   splitswan-wsl.sh status                顯示 SA 與規則
 #   splitswan-wsl.sh brief                 只讀 SA 狀態，輸出 @@STATE／@@GATEWAY／@@VIP（不改任何狀態）
@@ -31,6 +34,8 @@ SWANCTL_PLUGINS=(test-vectors unbound ldap pkcs11 aesni aes des blowfish rc2 sha
                  soup mysql sqlite openxpki)
 PLUGIN_DIR=/usr/lib/ipsec/plugins
 SWANCTL_LOAD_CONF=/etc/strongswan.d/zz-splitswan-swanctl.conf
+# connect 每台 initiate 的輸出留一份取摘要（每次覆寫；不用 tee /dev/fd/2，stdout 是檔案時會被截斷）
+INITIATE_OUT=/run/splitswan-initiate.out
 
 log()  { printf '[WSL] %s\n' "$*"; }
 fail() { printf '[WSL] 錯誤：%s\n' "$*" >&2; exit 1; }
@@ -57,6 +62,24 @@ remote_ts() {
 # 列出設定檔裡的連線名稱（vpn1、vpn2…）
 gateways() {
     grep -oE '^[[:space:]]*vpn[0-9]+[[:space:]]*\{' "$SWANCTL_DIR/swanctl.conf" | grep -oE 'vpn[0-9]+'
+}
+
+# 目前時間（秒，含小數）：bash 5 用 EPOCHREALTIME（小數點可能隨語系變成逗號），否則退回 date
+now_seconds() {
+    local t=${EPOCHREALTIME:-}
+    if [ -z "$t" ]; then
+        t=$(date +%s.%N 2>/dev/null)
+        case "$t" in *[!0-9.]*|'') t=$(date +%s) ;; esac
+    fi
+    printf '%s\n' "${t/,/.}"
+}
+
+# initiate 輸出的摘要：最後一行非空白的訊息，去掉 CR、換行與 |，最多 200 字元
+attempt_summary() {
+    local line
+    line=$(printf '%s\n' "$1" | tr -d '\r' | tr '|' ' ' | grep -v '^[[:space:]]*$' | tail -n 1 \
+        | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')
+    printf '%s\n' "${line:0:200}"
 }
 
 ip2int() {
@@ -183,7 +206,7 @@ cmd_setup() {
 }
 
 cmd_connect() {
-    local src=${1:-}
+    local src=${1:-} order=${2:-}
     [ -n "$src" ] || fail "缺少設定目錄參數"
     [ -f "$src/swanctl.conf" ] || fail "找不到 $src/swanctl.conf"
     [ -f "$src/secrets.conf" ] || fail "找不到 $src/secrets.conf"
@@ -193,6 +216,20 @@ cmd_connect() {
     install -m 600 "$src/secrets.conf" "$SWANCTL_DIR/conf.d/secrets.conf"
     # Windows 上複製或用記事本改過的檔案可能有 BOM 與 CRLF
     sed -i '1s/^\xEF\xBB\xBF//; s/\r$//' "$SWANCTL_DIR/swanctl.conf" "$SWANCTL_DIR/conf.d/secrets.conf"
+
+    # 嘗試順序：省略時是設定檔裡的 vpn1..N；指定時逐一確認編號存在
+    local targets=() all n nums=()
+    all=" $(gateways | tr '\n' ' ') "
+    if [ -n "$order" ]; then
+        IFS=',' read -r -a nums <<< "$order"
+        for n in "${nums[@]}"; do
+            case "$n" in ''|*[!0-9]*) fail "閘道順序格式錯誤：$order" ;; esac
+            case "$all" in *" vpn$n "*) ;; *) fail "閘道編號 $n 不存在" ;; esac
+            targets+=("vpn$n")
+        done
+    else
+        read -r -a targets <<< "$all"
+    fi
 
     local ts
     ts=$(remote_ts)
@@ -234,14 +271,25 @@ cmd_connect() {
     done
     swanctl --load-all || fail "swanctl --load-all 失敗，請檢查設定檔"
 
-    local gw vip="" used=""
-    for gw in $(gateways); do
+    local gw vip="" used="" out rc t0 secs sum
+    install -m 600 /dev/null "$INITIATE_OUT"
+    for gw in "${targets[@]}"; do
         log "嘗試 $gw …"
-        if swanctl --initiate --ike "$gw" --child corp --timeout 30; then
+        t0=$(now_seconds)
+        # 照舊即時顯示，同時存一份給摘要
+        swanctl --initiate --ike "$gw" --child corp --timeout 30 2>&1 | tee "$INITIATE_OUT"
+        rc=${PIPESTATUS[0]}
+        out=$(cat "$INITIATE_OUT")
+        secs=$(LC_ALL=C awk -v a="$t0" -v b="$(now_seconds)" 'BEGIN { printf "%.1f", b - a }')
+        if [ "$rc" -eq 0 ]; then
+            echo "@@ATTEMPT=${gw#vpn}|ok|$secs|"
             vip=$(swanctl --list-sas --ike "$gw" | parse_vip)
             used=$gw
             break
         fi
+        sum=$(attempt_summary "$out")
+        [ -n "$sum" ] || sum="swanctl 結束碼 $rc"
+        echo "@@ATTEMPT=${gw#vpn}|fail|$secs|$sum"
         log "$gw 失敗，換下一台"
         swanctl --terminate --ike "$gw" --force --timeout 5 >/dev/null 2>&1 || true
     done
@@ -332,7 +380,7 @@ cmd_status() {
 
 case "${1:-}" in
     setup)      cmd_setup ;;
-    connect)    shift; cmd_connect "${1:-}" ;;
+    connect)    shift; cmd_connect "${1:-}" "${2:-}" ;;
     disconnect) cmd_disconnect ;;
     status)     cmd_status ;;
     brief)      cmd_brief ;;

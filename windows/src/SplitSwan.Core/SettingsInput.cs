@@ -12,6 +12,22 @@ public static class SettingsInput
     public static string FormatSubnets(IEnumerable<string> subnets) => string.Join("\r\n", subnets);
 
     /// <summary>
+    /// 設定視窗儲存時決定圖示兩欄用誰的值：使用者在表單裡動過的那一欄用表單的值，
+    /// 沒動過的用托盤當下的值（latest）——設定視窗開著時，使用者可能從托盤選單切換過樣式或綠色，
+    /// 表單裡的是開窗當時的舊值，不能蓋回去（同「自動重連」取最新值的做法）。其他欄位一律用 collected。
+    /// </summary>
+    public static StoredSettings MergeIconChoice(StoredSettings collected, StoredSettings latest, bool styleEdited, bool greenEdited)
+    {
+        ArgumentNullException.ThrowIfNull(collected);
+        ArgumentNullException.ThrowIfNull(latest);
+        return collected with
+        {
+            IconStyle = styleEdited ? collected.IconStyle : latest.IconStyle,
+            GreenWhenConnected = greenEdited ? collected.GreenWhenConnected : latest.GreenWhenConnected,
+        };
+    }
+
+    /// <summary>
     /// 把匯入的公司設定套到目前的設定上（只產生「待確認」的值，呼叫端要讓使用者看過閘道並按儲存才寫入）：
     /// 閘道、網段整組換掉；PSK 有附就換、沒附保留原本的；帳號、密碼、DNS 分流與自動重連不動。
     /// 閘道補滿 3 格（空字串＝未設定）。

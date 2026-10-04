@@ -22,7 +22,8 @@ internal static class EngineRunner
     /// <summary>程序結束後，最多再等多久讀到 stdout／stderr 的 EOF。</summary>
     private static readonly TimeSpan EofGrace = TimeSpan.FromSeconds(3);
 
-    public static async Task<EngineResult> RunAsync(EngineAction action, bool logOutput = true)
+    /// <param name="order">connect 的閘道嘗試順序（契約 3 的 -Order）；null＝不帶。其他動作忽略。</param>
+    public static async Task<EngineResult> RunAsync(EngineAction action, bool logOutput = true, IReadOnlyList<int>? order = null)
     {
         var missing = AppPaths.MissingEngineFiles();
         if (missing is not null)
@@ -43,7 +44,7 @@ internal static class EngineRunner
         };
         // 背景執行一律帶 -NoInstall（契約 1）：WSL／Ubuntu 未安裝時引擎只回報「尚未安裝」，
         // 不在沒有主控台的情況下開始互動式安裝；安裝只走「首次安裝」的可見視窗（RunVisibleAsync）
-        var args = EngineCommand.Arguments(action, AppPaths.EnginePs1, AppPaths.ConfDir, noInstall: true);
+        var args = EngineCommand.Arguments(action, AppPaths.EnginePs1, AppPaths.ConfDir, noInstall: true, order: order);
         foreach (var a in args) psi.ArgumentList.Add(a);
 
         var stdout = new List<string>();

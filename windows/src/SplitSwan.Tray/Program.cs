@@ -16,6 +16,10 @@ internal static class Program
             return;
         }
 
+        // 讓連線引擎知道是由 App 呼叫（背景與首次安裝的可見視窗都繼承這個行程環境變數），
+        // 引擎就不會印「請執行 disconnect.cmd」這類只給雙擊 .cmd 的人看的提示
+        Environment.SetEnvironmentVariable("SPLITSWAN_HOST", "tray");
+
         ApplicationConfiguration.Initialize();
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
         Application.ThreadException += (_, e) =>

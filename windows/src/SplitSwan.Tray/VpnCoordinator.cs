@@ -10,7 +10,9 @@ namespace SplitSwan.Tray;
 /// - 想連線時每 15 秒用 brief 輪詢，App 啟動時跑一次以反映既有通道；
 ///   brief 查不到（unknown／失敗／逾時）時沿用上一次狀態，連續 3 次才當成 down（BriefTracker）；
 /// - DropDetector（30 秒）判斷掉線並發通知；自動重連開啟時才重連（退避 30s→60s→120s→240s→5 分鐘）；
-/// - 網路位址變化、睡眠喚醒的處理（Modern Standby 收不到睡眠事件時，靠輪詢間隔過長偵測喚醒）。
+/// - 網路位址變化、睡眠喚醒的處理（Modern Standby 收不到睡眠事件時，靠輪詢間隔過長偵測喚醒）；
+/// - F4 閘道選擇：自動選擇時依 GatewayHistory 排序帶 -Order，指定某台時只試那台（之後的自動重連也重試同一台，同 Mac 版）；
+///   依引擎逐台的 @@ATTEMPT 記錄歷史，連上不到 60 秒就被 brief 確定 down 時補記該台失敗。
 /// 所有公開方法與事件都在 UI 執行緒上執行（WinForms Timer、await 回到 UI 的 SynchronizationContext）。
 /// </summary>
 internal sealed class VpnCoordinator : IDisposable
@@ -34,6 +36,9 @@ internal sealed class VpnCoordinator : IDisposable
     private readonly Func<string, bool> _askOpenInstaller;
 
     private StoredSettings _settings;
+    private GatewayHistory _history;
+    /// <summary>使用者指定的閘道（1 起算）；null＝自動選擇。自動重連沿用（同 Mac 版 retryTargets）。</summary>
+    private int? _target;
     private bool _busy;
     private string? _busyText;
     private bool _pendingDown;
@@ -68,6 +73,8 @@ internal sealed class VpnCoordinator : IDisposable
               ?? throw new InvalidOperationException("VpnCoordinator 必須在 UI 執行緒建立");
         _settings = settings;
         _askOpenInstaller = askOpenInstaller;
+        _history = GatewayHistoryStore.Load();
+        PruneHistory();
         _networkFingerprint = NetworkFingerprint.Current();
         _networkAvailable = NetworkFingerprint.IsAvailable(_networkFingerprint);
         AppLog.SetSecrets(settings.Password, settings.Psk);
@@ -91,6 +98,10 @@ internal sealed class VpnCoordinator : IDisposable
     public string? LastError => _lastError;
     public string? RetryNote => _retryNote;
     public StoredSettings Settings => _settings;
+    /// <summary>閘道連線紀錄（選單顯示上次結果用）。</summary>
+    public GatewayHistory History => _history;
+    /// <summary>已連線的閘道編號（1 起算）；沒連線或不知道是哪台時為 null。</summary>
+    public int? ConnectedGateway => _isUp ? GatewayHistory.GatewayFromConnection(_gateway) : null;
 
     public TrayState State =>
         _busy ? TrayState.Busy
@@ -128,6 +139,12 @@ internal sealed class VpnCoordinator : IDisposable
         var autoTurnedOn = s.AutoReconnect && !_settings.AutoReconnect;
         _settings = s;
         AppLog.SetSecrets(s.Password, s.Psk);
+        PruneHistory();
+        if (_target is { } t && !GatewayRecorder.IsConfigured(t, s.Gateways))
+        {
+            AppLog.Info($"指定的 VPN{t} 已沒有設定，之後改用自動選擇");
+            _target = null;
+        }
         if (!s.AutoReconnect) CancelRetry();
         else if (autoTurnedOn && _wantConnected && !_isUp && !_busy) ScheduleRetry(TimeSpan.FromSeconds(5));
         RaiseChanged();
@@ -135,10 +152,19 @@ internal sealed class VpnCoordinator : IDisposable
 
     // MARK: 使用者操作
 
-    /// <summary>選單「連線」：已連線時等於重新建立（引擎 connect 會先清掉上一次的狀態）。</summary>
-    public void Connect()
+    /// <summary>
+    /// 選單「連線（自動選擇）」（gateway 為 null）或「連線 VPNn」（指定某台）。
+    /// 已連線時等於重新建立（引擎 connect 會先清掉上一次的狀態），可用來換到另一台。
+    /// </summary>
+    public void Connect(int? gateway = null)
     {
         if (_busy) { Notify?.Invoke(AppPaths.AppName, "目前有動作在進行中，請稍候", false); return; }
+        if (gateway is { } g && !GatewayRecorder.IsConfigured(g, _settings.Gateways))
+        {
+            Notify?.Invoke(AppPaths.AppName, $"VPN{g} 沒有設定位址，請到「設定…」填寫", true);
+            return;
+        }
+        _target = gateway;
         _wantConnected = true;
         _pendingDown = false;
         _drop.Reset();
@@ -153,6 +179,7 @@ internal sealed class VpnCoordinator : IDisposable
     public void Disconnect()
     {
         _wantConnected = false;
+        _target = null;
         _rebuildOnRetry = false;
         CancelRetry();
         _drop.Reset();
@@ -298,11 +325,34 @@ internal sealed class VpnCoordinator : IDisposable
             return false;
         }
 
-        // 2. 跑引擎：不論成敗都刪 secrets.conf
+        // 2. 決定閘道嘗試順序：自動＝依連線紀錄排序；指定＝只試那台（指定的那台已沒有設定時改用自動）
+        var order = GatewayRecorder.ResolveOrder(_target, _settings.Gateways, _history, DateTimeOffset.Now);
+        if (order.Count == 0 && _target is not null)
+        {
+            AppLog.Info($"指定的 VPN{_target} 沒有設定，改用自動選擇");
+            _target = null;
+            order = GatewayRecorder.ResolveOrder(null, _settings.Gateways, _history, DateTimeOffset.Now);
+        }
+        if (order.Count == 0)
+        {
+            // ConfWriter 已驗證過至少一台閘道，正常不會走到這裡
+            DeleteSecretsOrWarn();
+            _wantConnected = false;
+            CancelRetry();
+            _lastError = "尚未設定閘道";
+            Notify?.Invoke("無法連線", _lastError, true);
+            return false;
+        }
+        var orderText = GatewayRecorder.DescribeOrder(order);
+        AppLog.Info((_target is null ? "自動選擇，" : "指定閘道，") + "依序嘗試 " + orderText);
+        _busyText = order.Count == 1 ? $"連線 {orderText} 中…" : $"連線中…（依序嘗試 {orderText}）";
+        RaiseChanged();
+
+        // 3. 跑引擎：不論成敗都刪 secrets.conf
         EngineResult r;
         try
         {
-            r = await EngineRunner.RunAsync(EngineAction.Connect);
+            r = await EngineRunner.RunAsync(EngineAction.Connect, order: order);
         }
         catch (Exception ex)
         {
@@ -312,6 +362,9 @@ internal sealed class VpnCoordinator : IDisposable
         {
             DeleteSecretsOrWarn();
         }
+
+        // 4. 依引擎逐台的 @@ATTEMPT 記錄閘道歷史（中途按了斷線或網路斷掉時，失敗不記）
+        RecordAttempts(r.Lines, interrupted: _pendingDown || !_wantConnected || !_networkAvailable);
 
         if (r.Ok)
         {
@@ -545,8 +598,18 @@ internal sealed class VpnCoordinator : IDisposable
         }
         else
         {
+            if (wasUp && _wantConnected)
+            {
+                AppLog.Info("輪詢：通道已不在");
+                // 連上不到 60 秒就被確定 down（例：被閘道踢掉）：替那台補記一筆失敗，讓它進冷卻（同 Mac 版）
+                if (GatewayRecorder.LateFailure(_gateway, _settings.Gateways, now, now - _lastUpAt, _networkAvailable) is { } late)
+                {
+                    _history.Record(late);
+                    GatewayHistoryStore.Save(_history);
+                    AppLog.Info($"VPN{late.Gateway} 連上 {(int)(now - _lastUpAt).TotalSeconds} 秒就失聯，記為一次失敗");
+                }
+            }
             _gateway = _vip = null;
-            if (wasUp && _wantConnected) AppLog.Info("輪詢：通道已不在");
         }
 
         switch (_drop.Evaluate(now, _wantConnected, up, _networkAvailable))
@@ -700,6 +763,29 @@ internal sealed class VpnCoordinator : IDisposable
             Notify?.Invoke("睡眠喚醒", "睡眠後 VPN 通道可能已失效；內網連不到時，請從托盤選單按「連線」重新建立", false);
         }
         RaiseChanged();
+    }
+
+    // MARK: 閘道連線紀錄（F4）
+
+    /// <summary>把引擎輸出的 @@ATTEMPT 行寫進歷史並存檔；沒有任何 @@ATTEMPT（整體失敗）時不記。</summary>
+    private void RecordAttempts(IReadOnlyList<string> lines, bool interrupted)
+    {
+        var parsed = EngineAttempts.Parse(lines);
+        var records = GatewayRecorder.FromEngine(parsed, _settings.Gateways, DateTimeOffset.Now, interrupted);
+        foreach (var a in records) _history.Record(a);
+        if (records.Count > 0) GatewayHistoryStore.Save(_history);
+        if (parsed.Count > records.Count)
+            AppLog.Info($"引擎回報 {parsed.Count} 台嘗試，記錄 {records.Count} 筆（中途斷線或原因不在閘道的失敗不記）");
+    }
+
+    /// <summary>設定中的閘道位址改了：丟掉舊位址的紀錄（同 Mac 版 reloadConfig）。</summary>
+    private void PruneHistory()
+    {
+        var kept = _history.Pruned(_settings.Gateways);
+        if (kept.Attempts.Count == _history.Attempts.Count) return;
+        _history = kept;
+        GatewayHistoryStore.Save(_history);
+        AppLog.Info("閘道位址變更，已清除該台的連線紀錄");
     }
 
     // MARK: 小工具

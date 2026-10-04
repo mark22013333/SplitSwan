@@ -16,6 +16,8 @@ internal static class AppPaths
 
     public static string LogDir { get; } = Path.Combine(DataDir, "logs");
     public static string SettingsFile { get; } = Path.Combine(DataDir, "settings.json");
+    /// <summary>F4 閘道連線紀錄（非機密：只有編號、位址、成敗、耗時、時間）。</summary>
+    public static string GatewayHistoryFile { get; } = Path.Combine(DataDir, "gateway-history.json");
 
     /// <summary>引擎腳本：exe 旁的 engine\。單一檔案發佈時 AppContext.BaseDirectory 就是 exe 所在資料夾。</summary>
     public static string EngineDir { get; } = Path.Combine(AppContext.BaseDirectory, "engine");

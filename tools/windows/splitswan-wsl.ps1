@@ -12,6 +12,8 @@ SplitSwan Windows 實驗版：用 WSL2 裡的 Linux strongSwan 連 FortiGate（s
 brief 輸出 @@STATE=up|down|unknown：up 時加 @@GATEWAY、@@VIP；unknown＝查詢本身失敗或逾時（約 6 秒），
 不代表斷線，此時 @@RESULT=fail。
 -NoInstall：connect 遇到 WSL 或發行版未安裝時不啟動安裝，直接回 @@RESULT=fail:尚未安裝…（托盤 App 用）。
+-Order 2,1,3：connect 依此順序嘗試閘道（1 起算的編號；省略＝vpn1..N 依編號）。每台嘗試完輸出一行
+@@ATTEMPT=<n>|<ok|fail>|<秒數>|<失敗摘要>（同一 key 多行，要逐行讀）；編號不存在回 @@RESULT=fail:閘道編號 N 不存在。
 
 需要的檔案（放在本腳本旁的 conf\ 資料夾，或用 -ConfDir 指定其他資料夾；從 Mac 版複製過來）：
   conf\swanctl.conf   ← Mac：/opt/homebrew/etc/swanctl/swanctl.conf
@@ -30,7 +32,8 @@ param(
     [string]$TestHost,    # 連上後測試的內部主機
     [int]$TestPort = 0,
     [switch]$PauseAtEnd,
-    [switch]$NoInstall    # connect 遇到 WSL／發行版未安裝時不啟動安裝，直接回「尚未安裝」（托盤 App 用）
+    [switch]$NoInstall,   # connect 遇到 WSL／發行版未安裝時不啟動安裝，直接回「尚未安裝」（托盤 App 用）
+    [string]$Order        # connect 的閘道嘗試順序，逗號分隔的編號（例 2,1,3）；省略＝vpn1..N 依編號
 )
 
 $ErrorActionPreference = 'Stop'
@@ -65,7 +68,7 @@ $IsBrief = ($Action -eq 'brief')
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $IsBrief -and -not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-Action', $Action, '-PauseAtEnd')
-    foreach ($name in 'ConfDir', 'Distro', 'Domain', 'DnsServer', 'TestHost') {
+    foreach ($name in 'ConfDir', 'Distro', 'Domain', 'DnsServer', 'TestHost', 'Order') {
         $v = Get-Variable -Name $name -ValueOnly
         if ($v) { $argList += @("-$name", "`"$v`"") }
     }
@@ -89,6 +92,8 @@ $script:Transcribing = $false
 $script:FailReason = $null
 # connect 成功時的閘道與虛擬 IP
 $script:ConnectResult = $null
+# -Order 驗證後的順序（例 2,1,3）；$null＝沒指定，照設定檔順序
+$script:OrderArg = $null
 
 function Write-Step([string]$msg) { Write-Host "`n== $msg" -ForegroundColor Cyan }
 function Write-Ok([string]$msg)   { Write-Host "  OK  $msg" -ForegroundColor Green }
@@ -119,7 +124,9 @@ function Invoke-Wsl {
         @() | & $script:Wsl @Argv 2>&1 | ForEach-Object {
             $l = ("$_") -replace "`0", ''
             $lines.Add($l)
-            if (-not $Quiet -and -not $l.StartsWith('@@')) { Write-Host "  $l" }
+            # @@ 機讀行不顯示；@@ATTEMPT 例外，原樣即時轉出給托盤 App 逐台記錄
+            if ($l.StartsWith('@@ATTEMPT=')) { Write-Host $l }
+            elseif (-not $Quiet -and -not $l.StartsWith('@@')) { Write-Host "  $l" }
         }
         $code = $LASTEXITCODE
     } finally {
@@ -134,6 +141,22 @@ function Get-Results($lines) {
         if ($l -match '^@@([A-Z]+)=(.*)$') { $r[$Matches[1]] = $Matches[2].Trim() }
     }
     return $r
+}
+
+# 驗證 -Order：格式為逗號分隔的編號，且每個 vpnN 都在 swanctl.conf 裡；回傳去重後的「2,1,3」
+function Resolve-Order([string]$raw) {
+    if ($raw -notmatch '^\s*[0-9]{1,4}(\s*,\s*[0-9]{1,4})*\s*$') { throw "閘道順序格式錯誤：$raw（例：2,1,3）" }
+    $names = @{}
+    foreach ($line in Get-Content -LiteralPath (Join-Path $ConfDir 'swanctl.conf') -Encoding UTF8) {
+        if ($line -cmatch '^\s*(vpn[0-9]+)\s*\{') { $names[$Matches[1]] = $true }
+    }
+    $list = New-Object System.Collections.Generic.List[int]
+    foreach ($s in $raw -split ',') {
+        $n = [int]$s.Trim()
+        if (-not $names.ContainsKey("vpn$n")) { throw "閘道編號 $n 不存在" }
+        if (-not $list.Contains($n)) { $list.Add($n) }
+    }
+    return ($list -join ',')
 }
 
 function Split-List([string]$s) {
@@ -250,6 +273,10 @@ function Invoke-Connect {
         (Select-String -Path (Join-Path $env:USERPROFILE '.wslconfig') -Pattern '^\s*networkingMode\s*=\s*mirrored' -Quiet)) {
         throw '.wslconfig 設成 mirrored 網路模式，本腳本只支援預設的 NAT 模式'
     }
+    if ($Order) {
+        $script:OrderArg = Resolve-Order $Order
+        Write-Ok "閘道嘗試順序：$($script:OrderArg)"
+    }
     Write-Ok $ConfDir
 
     Write-Step "2/6 檢查 WSL 與 $Distro"
@@ -324,7 +351,9 @@ function Invoke-Connect {
 
 function Invoke-ConnectSteps($state) {
     Write-Step '4/6 連線 FortiGate'
-    $r = Invoke-Sh @('connect', (ConvertTo-WslPath $ConfDir))
+    $shArgs = @('connect', (ConvertTo-WslPath $ConfDir))
+    if ($script:OrderArg) { $shArgs += $script:OrderArg }
+    $r = Invoke-Sh $shArgs
     if ($r.Code -ne 0) { throw "WSL 內連線失敗（結束碼 $($r.Code)）" }
     $res = Get-Results $r.Lines
     foreach ($k in 'VIP', 'WSLIP', 'HOSTIP', 'TS') {
@@ -375,7 +404,9 @@ function Invoke-ConnectSteps($state) {
     }
 
     $script:ConnectResult = $res
-    Write-Host "`n已連線。斷線請執行 disconnect.cmd。" -ForegroundColor Green
+    # 由托盤 App 呼叫時（SPLITSWAN_HOST=tray）不提 .cmd：App 有自己的「斷線」選單
+    if ($env:SPLITSWAN_HOST -eq 'tray') { Write-Host "`n已連線。" -ForegroundColor Green }
+    else { Write-Host "`n已連線。斷線請執行 disconnect.cmd。" -ForegroundColor Green }
 }
 
 # ── 斷線 ────────────────────────────────────────────────────────────────

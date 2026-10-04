@@ -22,3 +22,22 @@ swiftc -O -o "$T/gen" "$T/main.swift" "$T/ConfigStore.swift" \
 "$T/gen" "$R/windows/tests/SplitSwan.Core.Tests/Fixtures"
 sed -i '' 's#（例：10\.0\.0\.0/8）#（例：192.0.2.0/24）#g' "$R/windows/tests/SplitSwan.Core.Tests/Fixtures/validate-cases.json"
 ```
+
+## gateway-cases.json（F4 閘道排序，對應 Sources/GatewayHistory.swift）
+
+固定種子的亂數產生 200 組歷史，加上 shouldRecord、gateway(fromConnection:) 的邊界輸入，用 Mac 版原始碼實跑出期望值：
+
+```bash
+R=/path/to/SplitSwan
+T=$(mktemp -d)
+cp "$R/windows/tests/SplitSwan.Core.Tests/Fixtures/generate-gateway-fixtures.swift" "$T/main.swift"
+swiftc -O -o "$T/gen" "$T/main.swift" "$R/Sources/GatewayHistory.swift"
+"$T/gen" "$R/windows/tests/SplitSwan.Core.Tests/Fixtures"
+```
+
+## segoe-glyphs-both.json（托盤圖示字碼）
+
+Microsoft Learn 的 Segoe Fluent Icons 與 Segoe MDL2 Assets 兩張官方對照表中，**兩套都有**的字碼與官方名稱（2026-10-04 取得）。
+`TrayIconCatalog` 用到的每個字碼都必須在這張表裡（`TrayIconCatalogTests` 檢查）。來源：
+- https://learn.microsoft.com/en-us/windows/apps/design/iconography/segoe-fluent-icons-font
+- https://learn.microsoft.com/en-us/windows/apps/design/iconography/segoe-ui-symbol-font

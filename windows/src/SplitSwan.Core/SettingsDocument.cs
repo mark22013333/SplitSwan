@@ -15,6 +15,12 @@ public sealed record StoredSettings(
     string DnsServer,
     bool AutoReconnect)
 {
+    /// <summary>托盤圖示樣式（非機密）；舊版 settings.json 沒有這欄時為預設的盾牌鎖（同 Mac 預設）。</summary>
+    public TrayIconStyle IconStyle { get; init; } = TrayIconStyle.Shield;
+
+    /// <summary>已連線時圖示顯示綠色（非機密）；舊版 settings.json 沒有這欄時為關閉（同 Mac 預設）。</summary>
+    public bool GreenWhenConnected { get; init; }
+
     /// <summary>全新安裝的預設值：全部空白、自動重連關閉。</summary>
     public static StoredSettings Empty { get; } = new("", "", "", ["", "", ""], [], "", "", false);
 
@@ -49,6 +55,8 @@ public static class SettingsDocument
             ["domain"] = s.Domain,
             ["dnsServer"] = s.DnsServer,
             ["autoReconnect"] = s.AutoReconnect,
+            ["iconStyle"] = s.IconStyle.ToString(),
+            ["iconGreenWhenConnected"] = s.GreenWhenConnected,
         };
         return o.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
@@ -80,7 +88,12 @@ public static class SettingsDocument
             ReadStringList(o, "remoteSubnets"),
             ReadString(o, "domain"),
             ReadString(o, "dnsServer"),
-            ReadBool(o, "autoReconnect"));
+            ReadBool(o, "autoReconnect"))
+        {
+            // 圖示兩欄是第二階段新增的：舊檔沒有 → 預設值；不認得的樣式名稱 → 盾牌鎖（TrayIconCatalog.Parse）
+            IconStyle = TrayIconCatalog.Parse(o["iconStyle"] is JsonValue sv && sv.TryGetValue<string>(out var st) ? st : null),
+            GreenWhenConnected = ReadBool(o, "iconGreenWhenConnected"),
+        };
         return new(s, warnings);
     }
 

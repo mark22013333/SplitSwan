@@ -28,6 +28,12 @@ if ! grep -q '\[switch\]\$NoInstall' ../tools/windows/splitswan-wsl.ps1; then
     exit 1
 fi
 
+# 托盤的 connect 一律帶 -Order 並讀逐台的 @@ATTEMPT（契約 3）；引擎不支援時每次連線都會失敗，不可打包
+if ! grep -q '\[string\]\$Order' ../tools/windows/splitswan-wsl.ps1 || ! grep -q '@@ATTEMPT=' ../tools/windows/splitswan-wsl.sh; then
+    echo "錯誤：tools/windows 的引擎不支援 -Order／@@ATTEMPT，與托盤 App 不相容" >&2
+    exit 1
+fi
+
 echo "== 1/4 Core 單元測試"
 dotnet test tests/SplitSwan.Core.Tests/SplitSwan.Core.Tests.csproj -c Release --nologo
 
@@ -59,6 +65,9 @@ if [ "$(tr -cd '\r' < "$sh" | wc -c | tr -d ' ')" -ne 0 ]; then
     echo "錯誤：$sh 含 CR（必須是 LF）" >&2; exit 1
 fi
 [ -f ./out/publish/SplitSwan/${NAME}.exe ] || { echo "錯誤：沒有產生 ${NAME}.exe" >&2; exit 1; }
+# 打包進去的引擎要是支援 -Order 的版本（避免複製到舊檔）
+grep -q '\[string\]\$Order' "$ps1" || { echo "錯誤：$ps1 沒有 -Order 參數" >&2; exit 1; }
+grep -q '@@ATTEMPT=' "$sh" || { echo "錯誤：$sh 沒有輸出 @@ATTEMPT" >&2; exit 1; }
 
 echo "== 4/4 打包"
 ZIP="${NAME}-Windows-${VERSION}.zip"
@@ -70,3 +79,9 @@ cp "./out/${ZIP}" "../dist/${ZIP}"
 echo
 echo "完成：dist/${ZIP}"
 unzip -l "../dist/${ZIP}"
+# 從 zip 本身再驗一次：裡面的引擎支援 -Order
+# （先存變數再比對：pipefail 下 grep -q 提早結束會讓 unzip 收到 SIGPIPE 而誤判失敗）
+zipped_ps1=$(unzip -p "../dist/${ZIP}" SplitSwan/engine/splitswan-wsl.ps1)
+grep -q '\[string\]\$Order' <<<"$zipped_ps1" \
+    || { echo "錯誤：zip 內的 splitswan-wsl.ps1 沒有 -Order 參數" >&2; exit 1; }
+echo "zip 內引擎支援 -Order：通過"

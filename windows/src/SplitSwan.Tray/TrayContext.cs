@@ -1,3 +1,4 @@
+using Microsoft.Win32;
 using SplitSwan.Core;
 
 namespace SplitSwan.Tray;
@@ -11,7 +12,13 @@ internal sealed class TrayContext : ApplicationContext
     private readonly ContextMenuStrip _menu = new();
     private readonly ToolStripMenuItem _status = new() { Enabled = false };
     private readonly ToolStripMenuItem _detail = new() { Enabled = false, Visible = false };
-    private readonly ToolStripMenuItem _connect = new("連線");
+    private readonly ToolStripMenuItem _connect = new("連線（自動選擇）");
+    /// <summary>「連線 VPN1／2／3」：只顯示有設定的；已連線的那台打勾。</summary>
+    private readonly ToolStripMenuItem[] _connectGw = [new(), new(), new()];
+    private readonly ToolStripMenuItem _iconMenu = new("圖示樣式");
+    private readonly ToolStripMenuItem _iconGreen = new("已連線時顯示綠色");
+    private readonly Dictionary<TrayIconStyle, ToolStripMenuItem> _iconStyleItems = new();
+    private bool _lightTaskbar = TrayIcons.ReadLightTaskbar();
     private readonly ToolStripMenuItem _disconnect = new("斷線");
     private readonly ToolStripMenuItem _settingsItem = new("設定…");
     private readonly ToolStripMenuItem _import = new("匯入 .splitswan…");
@@ -21,6 +28,8 @@ internal sealed class TrayContext : ApplicationContext
     private readonly ToolStripMenuItem _auto = new("自動重連") { CheckOnClick = false };
     private readonly ToolStripMenuItem _exit = new("斷線並結束");
     private bool _exiting;
+    private bool _disposed;
+    private readonly SynchronizationContext _ui;
     private readonly UiWatchdog _watchdog;
     private LogForm? _logForm;
     private SettingsForm? _settingsForm;
@@ -29,11 +38,33 @@ internal sealed class TrayContext : ApplicationContext
     {
         _vpn = new VpnCoordinator(loaded.Settings, AskOpenInstaller);
         // VpnCoordinator 已確認 SynchronizationContext.Current 存在（UI 執行緒）
-        _watchdog = new UiWatchdog(SynchronizationContext.Current!);
+        _ui = SynchronizationContext.Current!;
+        _watchdog = new UiWatchdog(_ui);
         _vpn.Changed += Redraw;
         _vpn.Notify += (title, body, isError) => Balloon(title, body, isError);
 
         _connect.Click += (_, _) => _vpn.Connect();
+        for (int i = 0; i < _connectGw.Length; i++)
+        {
+            var n = i + 1;
+            _connectGw[i].Click += (_, _) => _vpn.Connect(n);
+        }
+        foreach (var style in Enum.GetValues<TrayIconStyle>())
+        {
+            var item = new ToolStripMenuItem(TrayIconCatalog.Title(style));
+            item.Click += (_, _) => SaveQuick(_vpn.Settings with { IconStyle = style }, $"圖示樣式：{TrayIconCatalog.Title(style)}");
+            _iconStyleItems[style] = item;
+            _iconMenu.DropDownItems.Add(item);
+        }
+        _iconMenu.DropDownItems.Add(new ToolStripSeparator());
+        _iconMenu.DropDownItems.Add(_iconGreen);
+        _iconGreen.Click += (_, _) =>
+        {
+            var on = !_vpn.Settings.GreenWhenConnected;
+            SaveQuick(_vpn.Settings with { GreenWhenConnected = on }, on ? "已連線顯示綠色：開啟" : "已連線顯示綠色：關閉");
+        };
+        // 工作列切換深淺色時重畫（事件在其他執行緒觸發，切回 UI）
+        SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
         _disconnect.Click += (_, _) => _vpn.Disconnect();
         _settingsItem.Click += (_, _) => ShowSettings(importOnShow: false);
         _import.Click += (_, _) => ShowSettings(importOnShow: true);
@@ -46,12 +77,13 @@ internal sealed class TrayContext : ApplicationContext
         _menu.Items.AddRange(
         [
             _status, _detail, new ToolStripSeparator(),
-            _connect, _disconnect, new ToolStripSeparator(),
+            _connect, _connectGw[0], _connectGw[1], _connectGw[2], _disconnect, new ToolStripSeparator(),
             _settingsItem, _import, _install, new ToolStripSeparator(),
-            _showLog, _openLogDir, _auto, new ToolStripSeparator(),
+            _showLog, _openLogDir, _auto, _iconMenu, new ToolStripSeparator(),
             _exit,
         ]);
 
+        _icons.Update(loaded.Settings.IconStyle, loaded.Settings.GreenWhenConnected, _lightTaskbar);
         _icon = new NotifyIcon
         {
             Icon = _icons[TrayState.Disconnected],
@@ -76,6 +108,8 @@ internal sealed class TrayContext : ApplicationContext
     private void Redraw()
     {
         var state = _vpn.State;
+        var s = _vpn.Settings;
+        _icons.Update(s.IconStyle, s.GreenWhenConnected, _lightTaskbar);
         _icon.Icon = _icons[state];
         _icon.Text = _vpn.Tooltip;
         _status.Text = "狀態：" + _vpn.StatusLine;
@@ -92,7 +126,21 @@ internal sealed class TrayContext : ApplicationContext
 
         var busy = _vpn.IsBusy;
         _connect.Enabled = !busy;
-        _connect.Text = state == TrayState.Connected ? "重新連線" : "連線";
+        _connect.Text = state == TrayState.Connected ? "重新連線（自動選擇）" : "連線（自動選擇）";
+        var connected = _vpn.ConnectedGateway;
+        for (int i = 0; i < _connectGw.Length; i++)
+        {
+            var n = i + 1;
+            var item = _connectGw[i];
+            item.Visible = GatewayRecorder.IsConfigured(n, s.Gateways);
+            if (!item.Visible) continue;
+            // 例：「連線 VPN2（203.0.113.2） · 上次 3.2 秒連上」（同 Mac 版選單）
+            item.Text = GatewayRecorder.MenuTitle(n, s.Gateways, _vpn.History);
+            item.Checked = state == TrayState.Connected && connected == n;
+            item.Enabled = !busy;
+        }
+        foreach (var (style, item) in _iconStyleItems) item.Checked = style == s.IconStyle;
+        _iconGreen.Checked = s.GreenWhenConnected;
         _disconnect.Enabled = state == TrayState.Connected || _vpn.WantConnected || busy;
         _install.Enabled = !busy;
         _auto.Checked = _vpn.Settings.AutoReconnect;
@@ -139,7 +187,7 @@ internal sealed class TrayContext : ApplicationContext
             return;
         }
         // 自動重連取最新值：設定視窗開著時也可能從托盤切換
-        _settingsForm = new SettingsForm(_vpn.Settings, () => _vpn.Settings.AutoReconnect, importOnShow);
+        _settingsForm = new SettingsForm(_vpn.Settings, () => _vpn.Settings.AutoReconnect, () => _vpn.Settings, importOnShow);
         _settingsForm.FormClosed += (_, _) =>
         {
             if (_settingsForm?.Saved is { } saved) _vpn.UpdateSettings(saved);
@@ -165,6 +213,12 @@ internal sealed class TrayContext : ApplicationContext
     private void ToggleAuto()
     {
         var s = _vpn.Settings with { AutoReconnect = !_vpn.Settings.AutoReconnect };
+        SaveQuick(s, s.AutoReconnect ? "自動重連：開啟" : "自動重連：關閉");
+    }
+
+    /// <summary>托盤選單直接切換的設定（自動重連、圖示樣式、綠色）：寫入 settings.json 後套用。</summary>
+    private void SaveQuick(StoredSettings s, string log)
+    {
         try
         {
             SettingsStore.Save(s);
@@ -175,8 +229,22 @@ internal sealed class TrayContext : ApplicationContext
             MessageBox.Show($"無法儲存設定：{ex.Message}", "SplitSwan", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
-        AppLog.Info(s.AutoReconnect ? "自動重連：開啟" : "自動重連：關閉");
-        _vpn.UpdateSettings(s);
+        AppLog.Info(log);
+        _vpn.UpdateSettings(s);   // 會觸發 Changed → Redraw 重畫圖示
+    }
+
+    private void OnUserPreferenceChanged(object? sender, UserPreferenceChangedEventArgs e)
+    {
+        // 切換深淺色時 Category 是 General（也可能是 Color／VisualStyle），一律重讀，值沒變就不重畫
+        _ui.Post(_ =>
+        {
+            if (_disposed) return;
+            var light = TrayIcons.ReadLightTaskbar();
+            if (light == _lightTaskbar) return;
+            _lightTaskbar = light;
+            AppLog.Info(light ? "工作列改為淺色，圖示改用黑色" : "工作列改為深色，圖示改用白色");
+            Redraw();
+        }, null);
     }
 
     /// <summary>
@@ -232,6 +300,8 @@ internal sealed class TrayContext : ApplicationContext
     {
         if (disposing)
         {
+            _disposed = true;
+            SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
             _watchdog.Dispose();
             _icon.Visible = false;
             _icon.Dispose();

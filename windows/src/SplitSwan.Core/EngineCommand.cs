@@ -41,11 +41,16 @@ public static class EngineCommand
     /// powershell.exe 的參數清單：-NoProfile -ExecutionPolicy Bypass -File &lt;script&gt; -Action &lt;a&gt; -ConfDir &lt;dir&gt; [-PauseAtEnd]。
     /// </summary>
     /// <param name="noInstall">加 -NoInstall：WSL／Ubuntu 未安裝時引擎只回報、不在背景開始安裝（契約 1；只對 connect 有效，其他動作忽略）。</param>
+    /// <param name="order">
+    /// 加 -Order：connect 依此順序嘗試閘道（契約 3；1 起算的編號，例 [2, 1, 3]）。null＝不帶（引擎照設定檔順序）。
+    /// 只對 connect 有效，其他動作忽略。編號必須是 1～3 且不重複，清單不可為空，否則丟 ArgumentException。
+    /// </param>
     public static IReadOnlyList<string> Arguments(EngineAction action, string scriptPath, string confDir,
-        bool pauseAtEnd = false, bool noInstall = false)
+        bool pauseAtEnd = false, bool noInstall = false, IReadOnlyList<int>? order = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(scriptPath);
         ArgumentException.ThrowIfNullOrEmpty(confDir);
+        var orderText = order is null ? null : FormatOrder(order);
         // 引擎會把 ConfDir 結尾的 \ 去掉；這裡先去掉，免得 "C:\x\" 的結尾反斜線跳脫掉右引號
         var dir = confDir.Length > 3 ? confDir.TrimEnd('\\', '/') : confDir;
         var list = new List<string>
@@ -54,8 +59,19 @@ public static class EngineCommand
             "-Action", ActionName(action), "-ConfDir", dir,
         };
         if (noInstall && action == EngineAction.Connect) list.Add("-NoInstall");
+        if (orderText is not null && action == EngineAction.Connect) list.AddRange(["-Order", orderText]);
         if (pauseAtEnd) list.Add("-PauseAtEnd");
         return list;
+    }
+
+    /// <summary>閘道嘗試順序 → -Order 的值（例 "2,1,3"）。編號限 1～3、不可重複、不可為空。</summary>
+    public static string FormatOrder(IReadOnlyList<int> order)
+    {
+        ArgumentNullException.ThrowIfNull(order);
+        if (order.Count == 0) throw new ArgumentException("閘道嘗試順序不可為空", nameof(order));
+        if (order.Any(n => n is < 1 or > 3)) throw new ArgumentException("閘道編號只能是 1～3", nameof(order));
+        if (order.Distinct().Count() != order.Count) throw new ArgumentException("閘道編號不可重複", nameof(order));
+        return string.Join(",", order.Select(n => n.ToString(System.Globalization.CultureInfo.InvariantCulture)));
     }
 
     /// <summary>

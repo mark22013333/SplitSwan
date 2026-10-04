@@ -7,6 +7,7 @@ namespace SplitSwan.Tray;
 /// 設定視窗：帳號、密碼、PSK、閘道 1–3、內網網段（多行）、選用的內部網域／內部 DNS。
 /// 按「儲存」時用 SettingsValidator 與 DnsOptions 驗證，錯誤逐條列出；通過才寫入 settings.json。
 /// 匯入 .splitswan 只把值填進表單，使用者看過閘道並按「儲存」才寫入。
+/// 「托盤圖示」區塊：樣式下拉（8 種）、四種狀態即時預覽、「已連線時顯示綠色」，一起隨「儲存」寫入。
 /// </summary>
 internal sealed class SettingsForm : Form
 {
@@ -32,6 +33,24 @@ internal sealed class SettingsForm : Form
     };
     private readonly bool _importOnShow;
     private readonly Func<bool> _currentAutoReconnect;
+    private readonly Func<StoredSettings> _latestSettings;
+    // 使用者在表單裡動過圖示控制項沒有；沒動過的欄位儲存時取托盤當下的值（SettingsInput.MergeIconChoice）
+    private bool _iconStyleEdited;
+    private bool _iconGreenEdited;
+    private readonly ComboBox _iconStyle = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
+    private readonly CheckBox _iconGreen = new() { Text = "已連線時顯示綠色", AutoSize = true };
+    private readonly PictureBox[] _previews = [.. Enumerable.Range(0, 4).Select(_ => new PictureBox
+    {
+        Size = new Size(32, 32), SizeMode = PictureBoxSizeMode.CenterImage, BackColor = Color.FromArgb(0x20, 0x20, 0x20),
+    })];
+    /// <summary>預覽的四種狀態（同 Mac 設定頁）。</summary>
+    private static readonly (TrayState State, TrayIconState IconState)[] PreviewStates =
+    [
+        (TrayState.Disconnected, TrayIconState.Disconnected),
+        (TrayState.Connected, TrayIconState.Connected),
+        (TrayState.Busy, TrayIconState.Connecting),
+        (TrayState.Error, TrayIconState.Error),
+    ];
     private readonly Button _importBtn = new() { Text = "匯入 .splitswan…", AutoSize = true };
     private readonly Button _saveBtn = new() { Text = "儲存", AutoSize = true };
     private bool _importing;
@@ -40,10 +59,13 @@ internal sealed class SettingsForm : Form
     public StoredSettings? Saved { get; private set; }
 
     /// <param name="currentAutoReconnect">儲存時取「自動重連」的最新值（視窗開著時可能從托盤切換過）。</param>
-    public SettingsForm(StoredSettings current, Func<bool> currentAutoReconnect, bool importOnShow = false)
+    /// <param name="latestSettings">儲存時取托盤當下的設定：表單裡沒動過的圖示樣式／綠色選項以它為準。</param>
+    public SettingsForm(StoredSettings current, Func<bool> currentAutoReconnect, Func<StoredSettings> latestSettings,
+        bool importOnShow = false)
     {
         _original = current;
         _currentAutoReconnect = currentAutoReconnect;
+        _latestSettings = latestSettings;
         _importOnShow = importOnShow;
 
         Text = "SplitSwan 設定";
@@ -87,6 +109,7 @@ internal sealed class SettingsForm : Form
         Row("內網網段", _subnets, "一行一筆，格式 a.b.c.d/n（單一主機寫 /32），例：192.0.2.0/24");
         Row("內部網域（選填）", _domain, "逗號分隔，填了才會設定 DNS 分流，例：corp.example");
         Row("內部 DNS（選填）", _dns, "逗號分隔的 IPv4；不填就用閘道給的，例：192.0.2.53");
+        Row("托盤圖示", BuildIconPanel());
 
         _show.CheckedChanged += (_, _) =>
         {
@@ -116,7 +139,69 @@ internal sealed class SettingsForm : Form
         CancelButton = cancel;
 
         Fill(current);
+        _iconStyle.SelectedIndex = (int)current.IconStyle;
+        _iconGreen.Checked = current.GreenWhenConnected;
+        // 選「表單沒動過就取托盤當下的值」而不是「托盤切換時同步更新已開的表單」：
+        // 後者要讓托盤反向操作表單，使用者正在表單裡選的值可能被托盤蓋掉；前者只在儲存時合併，兩邊互不干擾。
+        // 事件在設好初始值之後才掛上，開窗時的初始設定不算「動過」。
+        _iconStyle.SelectedIndexChanged += (_, _) => { _iconStyleEdited = true; UpdatePreviews(); };
+        _iconGreen.CheckedChanged += (_, _) => { _iconGreenEdited = true; UpdatePreviews(); };
+        UpdatePreviews();
         Shown += (_, _) => { if (_importOnShow) StartImport(); };
+    }
+
+    private Control BuildIconPanel()
+    {
+        foreach (var style in Enum.GetValues<TrayIconStyle>()) _iconStyle.Items.Add(TrayIconCatalog.Title(style));
+        var panel = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Margin = Padding.Empty };
+        panel.Controls.Add(_iconStyle);
+        var row = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, Margin = new Padding(0, 4, 0, 0) };
+        for (int i = 0; i < _previews.Length; i++)
+        {
+            var cell = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Margin = new Padding(0, 0, 10, 0) };
+            cell.Controls.Add(_previews[i]);
+            cell.Controls.Add(new Label { Text = TrayIconCatalog.StateTitle(PreviewStates[i].IconState), AutoSize = true, ForeColor = SystemColors.GrayText });
+            row.Controls.Add(cell);
+        }
+        panel.Controls.Add(row);
+        panel.Controls.Add(_iconGreen);
+        panel.Controls.Add(new Label
+        {
+            Text = "預覽以深色工作列顯示；實際顏色會跟著工作列深淺色變成白或黑。托盤選單的「圖示樣式」也可以快速切換。",
+            AutoSize = true, MaximumSize = new Size(320, 0), ForeColor = SystemColors.GrayText,
+        });
+        return panel;
+    }
+
+    /// <summary>重畫四種狀態的預覽（背景固定深色，模擬 Windows 預設的深色工作列）。</summary>
+    private void UpdatePreviews()
+    {
+        var style = SelectedIconStyle;
+        var size = Math.Max(16, SystemInformation.SmallIconSize.Width);
+        for (int i = 0; i < _previews.Length; i++)
+        {
+            var (state, iconState) = PreviewStates[i];
+            var color = TrayIcons.InkColor(TrayIconRules.Ink(iconState, _iconGreen.Checked, lightTaskbar: false));
+            var old = _previews[i].Image;
+            _previews[i].Image = TrayIcons.Render(style, state, color, size);
+            old?.Dispose();
+        }
+    }
+
+    private TrayIconStyle SelectedIconStyle =>
+        _iconStyle.SelectedIndex >= 0 ? (TrayIconStyle)_iconStyle.SelectedIndex : TrayIconStyle.Shield;
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            foreach (var p in _previews)
+            {
+                p.Image?.Dispose();
+                p.Image = null;
+            }
+        }
+        base.Dispose(disposing);
     }
 
     private void Fill(StoredSettings s)
@@ -138,7 +223,11 @@ internal sealed class SettingsForm : Form
         SettingsInput.ParseSubnets(_subnets.Text),
         _domain.Text.Trim(),
         _dns.Text.Trim(),
-        _currentAutoReconnect());
+        _currentAutoReconnect())
+    {
+        IconStyle = SelectedIconStyle,
+        GreenWhenConnected = _iconGreen.Checked,
+    };
 
     /// <summary>開始匯入（已在匯入中就不重複開始）。</summary>
     public async void StartImport()
@@ -183,7 +272,7 @@ internal sealed class SettingsForm : Form
 
     private void OnSave()
     {
-        var s = Collect();
+        var s = SettingsInput.MergeIconChoice(Collect(), _latestSettings(), _iconStyleEdited, _iconGreenEdited);
         var errors = SettingsValidator.Validate(s.ToVpnSettings()).Concat(DnsOptions.Validate(s.Domain, s.DnsServer)).ToList();
         if (errors.Count > 0)
         {
