@@ -494,7 +494,7 @@ public class DistroSettingTests
         // 設定表單 Collect() 建新物件時 Distro 是預設值；儲存時要沿用托盤當下的（舊版使用者是 Ubuntu-24.04）
         var collected = StoredSettings.Empty with { Username = "new" };
         var latest = StoredSettings.Empty with { Distro = "Ubuntu-24.04" };
-        var merged = SettingsInput.MergeIconChoice(collected, latest, false, false);
+        var merged = DisplaySettings.MergeForSave(collected, latest);
         Assert.Equal("Ubuntu-24.04", merged.Distro);
         Assert.Equal("new", merged.Username);
     }

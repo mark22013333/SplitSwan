@@ -327,38 +327,84 @@ public class SettingsIconFieldsTests
         Assert.False(r.Settings.GreenWhenConnected);   // 型別不對當成關閉
     }
 
-    // 設定視窗開著時從托盤換了樣式／綠色：表單沒動過的欄位不能把托盤的新值蓋回去
+    // 顯示設定切換即寫入；按儲存時圖示兩欄一律取已儲存的值（設定視窗開著時也可能從托盤換過），不用表單上的
     private static readonly StoredSettings FormSnapshot =
         StoredSettings.Empty with { Username = "alice", IconStyle = TrayIconStyle.Shield, GreenWhenConnected = false };
     private static readonly StoredSettings TrayLatest =
         StoredSettings.Empty with { Username = "old", IconStyle = TrayIconStyle.Nodes, GreenWhenConnected = true };
 
     [Fact]
-    public void MergeIconChoice_NotEdited_KeepsTrayValues()
+    public void MergeForSave_IconFieldsFromSaved()
     {
-        var m = SettingsInput.MergeIconChoice(FormSnapshot, TrayLatest, styleEdited: false, greenEdited: false);
+        var m = DisplaySettings.MergeForSave(FormSnapshot, TrayLatest);
         Assert.Equal(TrayIconStyle.Nodes, m.IconStyle);
         Assert.True(m.GreenWhenConnected);
         Assert.Equal("alice", m.Username);   // 其他欄位一律用表單的
     }
 
-    [Fact]
-    public void MergeIconChoice_Edited_UsesFormValues()
+    // 切換即生效：以已儲存設定為底只改一欄，表單上還沒儲存的欄位（帳密、閘道、網段…）一律不帶進去
+    private static readonly StoredSettings SavedBase = new("saved-user", "saved-pw", "saved-psk",
+        ["203.0.113.10", "", ""], ["192.0.2.0/24"], "corp.example", "192.0.2.53", AutoReconnect: true)
     {
-        var m = SettingsInput.MergeIconChoice(FormSnapshot, TrayLatest, styleEdited: true, greenEdited: true);
-        Assert.Equal(TrayIconStyle.Shield, m.IconStyle);
-        Assert.False(m.GreenWhenConnected);
+        IconStyle = TrayIconStyle.Shield, GreenWhenConnected = false, ShowSubnetList = false, Distro = "Ubuntu-24.04",
+    };
+    private static readonly StoredSettings UnsavedForm = new("typed-user", "typed-pw", "typed-psk",
+        ["198.51.100.7", "198.51.100.8", ""], ["198.51.100.0/24"], "other.example", "198.51.100.53", AutoReconnect: false)
+    {
+        IconStyle = TrayIconStyle.Nodes, GreenWhenConnected = true, ShowSubnetList = true, Distro = WslDistros.SplitSwan,
+    };
+
+    [Theory]
+    [InlineData(DisplaySetting.IconStyle)]
+    [InlineData(DisplaySetting.GreenWhenConnected)]
+    [InlineData(DisplaySetting.ShowSubnetList)]
+    public void DisplayApply_WritesOnlyThatField(DisplaySetting field)
+    {
+        var s = DisplaySettings.Apply(SavedBase, field, UnsavedForm);
+        // 只有這一欄換成表單的值
+        var expected = field switch
+        {
+            DisplaySetting.IconStyle => SavedBase with { IconStyle = TrayIconStyle.Nodes },
+            DisplaySetting.GreenWhenConnected => SavedBase with { GreenWhenConnected = true },
+            _ => SavedBase with { ShowSubnetList = true },
+        };
+        Assert.Equal(expected, s);
+        // 未儲存的欄位逐一確認沒有夾帶
+        Assert.Equal("saved-user", s.Username);
+        Assert.Equal("saved-pw", s.Password);
+        Assert.Equal("saved-psk", s.Psk);
+        Assert.Equal(SavedBase.Gateways, s.Gateways);
+        Assert.Equal(SavedBase.RemoteSubnets, s.RemoteSubnets);
+        Assert.Equal("corp.example", s.Domain);
+        Assert.Equal("192.0.2.53", s.DnsServer);
+        Assert.True(s.AutoReconnect);
+        Assert.Equal("Ubuntu-24.04", s.Distro);
     }
 
     [Fact]
-    public void MergeIconChoice_EachFieldIndependent()
+    public void DisplayApply_OtherDisplayFieldsKeepSavedValues()
     {
-        var a = SettingsInput.MergeIconChoice(FormSnapshot, TrayLatest, styleEdited: true, greenEdited: false);
-        Assert.Equal(TrayIconStyle.Shield, a.IconStyle);
-        Assert.True(a.GreenWhenConnected);
-        var b = SettingsInput.MergeIconChoice(FormSnapshot, TrayLatest, styleEdited: false, greenEdited: true);
-        Assert.Equal(TrayIconStyle.Nodes, b.IconStyle);
-        Assert.False(b.GreenWhenConnected);
+        // 切換圖示樣式時，表單上另外兩個顯示設定（若與已儲存的不同）也不能一起寫入
+        var s = DisplaySettings.Apply(SavedBase, DisplaySetting.IconStyle, UnsavedForm);
+        Assert.False(s.GreenWhenConnected);
+        Assert.False(s.ShowSubnetList);
+    }
+
+    [Fact]
+    public void DisplayApply_SameValue_EqualsSaved()
+    {
+        // 表單值與已儲存的相同時結果等於已儲存（SettingsForm 據此略過寫入）
+        Assert.Equal(SavedBase, DisplaySettings.Apply(SavedBase, DisplaySetting.ShowSubnetList, SavedBase with { Username = "x" }));
+    }
+
+    [Fact]
+    public void DisplayApply_SerializedDocumentHasNoUnsavedValues()
+    {
+        // 寫進 settings.json 的內容（序列化結果）也不含表單上未儲存的帳號、閘道、網段
+        var json = SettingsDocument.Serialize(DisplaySettings.Apply(SavedBase, DisplaySetting.GreenWhenConnected, UnsavedForm), s => s);
+        Assert.DoesNotContain("typed-user", json);
+        Assert.DoesNotContain("198.51.100", json);
+        Assert.Contains("saved-user", json);
     }
 
     [Fact]

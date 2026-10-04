@@ -8,7 +8,7 @@ namespace SplitSwan.Tray;
 /// <summary>
 /// 狀態面板（視覺稿 C）：左鍵托盤圖示彈出，再點一次或失去焦點就關。
 /// 無邊框、最上層、不出現在工作列與 Alt+Tab；Windows 11 圓角。位置由 Core 的 FlyoutPlacement 計算。
-/// 內容：狀態大字＋狀態點、虛擬 IP／已連線時間／建立耗時、通道流量（已連線且引擎有回報時）、狀態更新時間、
+/// 內容：狀態大字＋狀態點、虛擬 IP／已連線時間／握手耗時、通道流量（已連線且引擎有回報時）、狀態更新時間、
 /// 網段摘要一行（設定勾選「顯示完整網段清單」時再加上網段 chips）與「其他所有流量走本機網路」、
 /// 按鈕（設定／改連到…／連線或斷線）。已連線時間與狀態更新時間每秒更新，只在面板開著時計時。
 /// </summary>
@@ -37,6 +37,10 @@ internal sealed class StatusFlyout : ThemedForm
     private readonly ThemedButton _primary = new("斷線", primary: true);
     private readonly ContextMenuStrip _gwMenu = new() { ShowImageMargin = false, ShowCheckMargin = true };
     private readonly System.Windows.Forms.Timer _tick = new() { Interval = 1000 };
+    /// <summary>三欄數值的 tooltip（握手耗時的說明、已連線時間只是下限的說明）。</summary>
+    private readonly ToolTip _tips = new();
+    /// <summary>已連線時間目前是否顯示為下限（tooltip 只在變化時更新，不每秒重設）。</summary>
+    private bool? _sinceApproximateShown;
     private StatusPanelModel? _model;
     private DateTimeOffset? _lastDeactivatedClose;
     private DateTimeOffset? _iconDownAt;
@@ -76,7 +80,7 @@ internal sealed class StatusFlyout : ThemedForm
         _facts.Margin = new Padding(0, 10, 0, 0);
         AddFact(0, "虛擬 IP", _vipValue);
         AddFact(1, "已連線", _sinceValue);
-        AddFact(2, "建立耗時", _buildValue);
+        AddFact(2, StatusPanelText.HandshakeCaption, _buildValue, StatusPanelText.HandshakeTip);
         heroStack.Controls.Add(_facts, 0, 2);
         _traffic.MaximumSize = new Size(PanelWidth - 32, 0);
         _traffic.Margin = new Padding(0, 8, 0, 0);
@@ -130,9 +134,15 @@ internal sealed class StatusFlyout : ThemedForm
         OnThemeApplied();
     }
 
-    private void AddFact(int col, string caption, ThemedLabel value)
+    private void AddFact(int col, string caption, ThemedLabel value, string? tip = null)
     {
         var cap = new ThemedLabel(caption, TextRole.HeroMuted, Theme.Ui(7.5f)) { Margin = Padding.Empty };
+        if (tip is not null)
+        {
+            _tips.SetToolTip(cap, tip);
+            _tips.SetToolTip(value, tip);
+            value.AccessibleDescription = tip;
+        }
         value.Margin = new Padding(0, 1, 0, 0);
         value.AutoEllipsis = true;
         value.AutoSize = false;
@@ -347,9 +357,14 @@ internal sealed class StatusFlyout : ThemedForm
     {
         var now = DateTimeOffset.Now;
         _fresh.Text = StatusPanelText.Freshness(_vpn.LastSureBriefAt, now, _vpn.BriefUnknownNow);
-        if (_vpn.ConnectedSince is not { } c) { _sinceValue.Text = "—"; return; }
-        var text = StatusPanelModel.FormatElapsed(now - c.Since);
-        _sinceValue.Text = c.Approximate ? "≥ " + text : text;
+        var c = _vpn.ConnectedSince;
+        _sinceValue.Text = c is { } v ? StatusPanelText.ConnectedSince(StatusPanelModel.FormatElapsed(now - v.Since), v.Approximate) : "—";
+        var approximate = c is { Approximate: true };
+        if (_sinceApproximateShown == approximate) return;
+        _sinceApproximateShown = approximate;
+        var tip = approximate ? StatusPanelText.ApproximateSinceTip : "";
+        _tips.SetToolTip(_sinceValue, tip);
+        _sinceValue.AccessibleDescription = approximate ? tip : null;
     }
 
     private void OnPrimary()
@@ -413,6 +428,7 @@ internal sealed class StatusFlyout : ThemedForm
         if (disposing)
         {
             _tick.Dispose();
+            _tips.Dispose();
             StopOutsideClickWatch();
             _gwMenu.Dispose();
         }

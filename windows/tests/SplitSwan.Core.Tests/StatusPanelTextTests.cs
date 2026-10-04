@@ -93,13 +93,13 @@ public class StatusPanelTextTests
     private static readonly DateTimeOffset T0 = new(2026, 10, 4, 12, 0, 0, TimeSpan.FromHours(8));
 
     [Theory]
-    [InlineData(0, false, "剛剛確認")]
-    [InlineData(0.5, false, "剛剛確認")]
-    [InlineData(5, false, "5 秒前確認")]
-    [InlineData(59.9, false, "59 秒前確認")]
-    [InlineData(60, false, "1 分鐘前確認")]
-    [InlineData(150, false, "2 分鐘前確認")]
-    [InlineData(3600, false, "1 小時前確認")]
+    [InlineData(0, false, "狀態更新：剛剛")]
+    [InlineData(0.5, false, "狀態更新：剛剛")]
+    [InlineData(5, false, "狀態更新：5 秒前")]
+    [InlineData(59.9, false, "狀態更新：59 秒前")]
+    [InlineData(60, false, "狀態更新：1 分鐘前")]
+    [InlineData(150, false, "狀態更新：2 分鐘前")]
+    [InlineData(3600, false, "狀態更新：1 小時前")]
     [InlineData(30, true, "已 30 秒查不到狀態")]
     [InlineData(60, true, "已 1 分鐘查不到狀態")]
     [InlineData(185, true, "已 3 分鐘查不到狀態")]
@@ -118,7 +118,7 @@ public class StatusPanelTextTests
     [Fact]
     public void Freshness_ClockWentBackwards_TreatedAsZero()
     {
-        Assert.Equal("剛剛確認", StatusPanelText.Freshness(T0, T0.AddSeconds(-30), unknownNow: false));
+        Assert.Equal("狀態更新：剛剛", StatusPanelText.Freshness(T0, T0.AddSeconds(-30), unknownNow: false));
     }
 
     // ── EngineOutput 取 BYTESIN／BYTESOUT
@@ -214,24 +214,30 @@ public class StatusPanelTextTests
     }
 
     [Fact]
-    public void MergeSubnetListChoice_EditedUsesForm_OtherwiseLatest()
+    public void MergeForSave_ShowSubnetListFromSaved_OtherFieldsFromForm()
     {
+        // 完整網段清單切換時已寫入；按儲存時一律取已儲存的值，表單上的（可能是開窗時的舊值）不蓋回去
         var form = Sample with { ShowSubnetList = false, Username = "form" };
-        var latest = Sample with { ShowSubnetList = true, Username = "latest" };
-        // 沒動過：取托盤當下的值（表單開著時從別處改成 true）；其他欄位仍以表單為準
-        var m1 = PanelSettings.MergeSubnetListChoice(form, latest, edited: false);
-        Assert.True(m1.ShowSubnetList);
-        Assert.Equal("form", m1.Username);
-        // 動過：以表單為準
-        Assert.False(PanelSettings.MergeSubnetListChoice(form, latest, edited: true).ShowSubnetList);
+        var saved = Sample with { ShowSubnetList = true, Username = "saved" };
+        var m = DisplaySettings.MergeForSave(form, saved);
+        Assert.True(m.ShowSubnetList);
+        Assert.Equal("form", m.Username);
+    }
+
+    // ── 三欄數值的文字
+
+    [Fact]
+    public void HandshakeCaptionAndTip()
+    {
+        Assert.Equal("握手耗時", StatusPanelText.HandshakeCaption);
+        Assert.Equal("從送出連線請求到 VPN 握手完成的時間", StatusPanelText.HandshakeTip);
     }
 
     [Fact]
-    public void MergeIconChoice_KeepsShowSubnetListFromCollected()
+    public void ConnectedSince_ApproximateGetsLowerBoundMark()
     {
-        // SettingsForm 先跑 MergeIconChoice 再跑 MergeSubnetListChoice：前者不可吃掉 ShowSubnetList
-        var collected = Sample with { ShowSubnetList = true };
-        var merged = SettingsInput.MergeIconChoice(collected, Sample, styleEdited: false, greenEdited: false);
-        Assert.True(merged.ShowSubnetList);
+        Assert.Equal("≥ 12:34", StatusPanelText.ConnectedSince("12:34", approximate: true));
+        Assert.Equal("12:34", StatusPanelText.ConnectedSince("12:34", approximate: false));
+        Assert.Equal("SplitSwan 開啟前就已連線，實際時間更長", StatusPanelText.ApproximateSinceTip);
     }
 }

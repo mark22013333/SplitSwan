@@ -14,7 +14,7 @@ public enum PanelPrimary { Connect, Reconnect, Disconnect }
 /// <param name="Tone">狀態點的色調。</param>
 /// <param name="Headline">狀態大字（例「已連線　VPN1」）。</param>
 /// <param name="Detail">狀態下方的說明（錯誤原因、重試提示、狀態不明的解釋）；沒有為 null。</param>
-/// <param name="ShowFacts">是否顯示「虛擬 IP／已連線／建立耗時」三欄（只有已連線時）。</param>
+/// <param name="ShowFacts">是否顯示「虛擬 IP／已連線／握手耗時」三欄（只有已連線時）。</param>
 /// <param name="Primary">主要按鈕的動作。</param>
 /// <param name="PrimaryText">主要按鈕文字。</param>
 /// <param name="ConnectEnabled">連線類動作（主要按鈕為連線時、閘道子選單的各台）可不可以按：有動作進行中時不行。</param>
@@ -72,13 +72,13 @@ public sealed record StatusPanelModel(
         return string.Create(CultureInfo.InvariantCulture, $"{h}:{t.Minutes:00}:{t.Seconds:00}");
     }
 
-    /// <summary>建立耗時：「2.8 秒」；不知道為「—」。</summary>
+    /// <summary>握手耗時：「2.8 秒」；不知道為「—」。</summary>
     public static string FormatSeconds(double? seconds) =>
         seconds is { } s && s >= 0 && !double.IsNaN(s) && !double.IsInfinity(s)
             ? string.Create(CultureInfo.InvariantCulture, $"{s:0.0} 秒")
             : "—";
 
-    /// <summary>某台最近一次成功的耗時（建立耗時欄）；沒有成功紀錄或耗時未知回 null。</summary>
+    /// <summary>某台最近一次成功的耗時（握手耗時欄）；沒有成功紀錄或耗時未知回 null。</summary>
     public static double? LastSuccessSeconds(IReadOnlyList<GatewayAttempt> records)
     {
         ArgumentNullException.ThrowIfNull(records);

@@ -7,6 +7,19 @@ namespace SplitSwan.Core;
 /// </summary>
 public static class StatusPanelText
 {
+    /// <summary>三欄數值第三欄的標題：最近一次成功連線的耗時。</summary>
+    public const string HandshakeCaption = "握手耗時";
+
+    /// <summary>「握手耗時」的 tooltip。</summary>
+    public const string HandshakeTip = "從送出連線請求到 VPN 握手完成的時間";
+
+    /// <summary>已連線時間只是下限（通道是輪詢時才看到的，例如 SplitSwan 開啟前就連著）時的 tooltip。</summary>
+    public const string ApproximateSinceTip = "SplitSwan 開啟前就已連線，實際時間更長";
+
+    /// <summary>已連線時間欄：approximate（只是下限）時前面加「≥ 」。</summary>
+    public static string ConnectedSince(string elapsed, bool approximate) =>
+        approximate ? "≥ " + elapsed : elapsed;
+
     /// <summary>
     /// 網段摘要一行，例「15 個網段走 VPN（1 段內網、14 台主機）」。
     /// /32（或沒寫前綴長度的單一位址）算主機，其他算網段；先經 <see cref="StatusPanelModel.VpnLanes"/> 去空白與重複。
@@ -62,7 +75,7 @@ public static class StatusPanelText
     /// <summary>
     /// 狀態更新時間。lastSure＝最後一次拿到確定結果（up／down）的時間；unknownNow＝最近一次查詢查不到。
     /// <list type="bullet">
-    /// <item>查得到：「剛剛確認」（未滿 1 秒）、「N 秒前確認」、「N 分鐘前確認」、「N 小時前確認」。</item>
+    /// <item>查得到：「狀態更新：剛剛」（未滿 1 秒）、「狀態更新：N 秒前」「狀態更新：N 分鐘前」「狀態更新：N 小時前」。</item>
     /// <item>查不到：「已 N 秒查不到狀態」「已 N 分鐘查不到狀態」「已 N 小時查不到狀態」（從最後一次確定結果起算）；
     ///   從來沒有確定結果時為「查不到狀態」。</item>
     /// <item>還沒有任何結果、也不是查不到：「正在確認狀態…」。</item>
@@ -76,7 +89,7 @@ public static class StatusPanelText
         if (age < TimeSpan.Zero) age = TimeSpan.Zero;
         var span = Span(age);
         if (unknownNow) return age < TimeSpan.FromSeconds(1) ? "查不到狀態" : $"已 {span}查不到狀態";
-        return age < TimeSpan.FromSeconds(1) ? "剛剛確認" : $"{span}前確認";
+        return age < TimeSpan.FromSeconds(1) ? "狀態更新：剛剛" : $"狀態更新：{span}前";
     }
 
     /// <summary>「5 秒」「3 分鐘」「2 小時」（無條件捨去），後面帶一個空白方便接字。</summary>
@@ -106,19 +119,5 @@ public static class TrafficBytes
         foreach (var c in s)
             if (c is < '0' or > '9') return null;
         return long.TryParse(s, NumberStyles.None, CultureInfo.InvariantCulture, out var v) ? v : null;
-    }
-}
-
-/// <summary>設定頁「在狀態面板顯示完整網段清單」的儲存合併（比照 <see cref="SettingsInput.MergeIconChoice"/>）。</summary>
-public static class PanelSettings
-{
-    /// <summary>
-    /// 表單裡動過開關以表單為準；沒動過就取托盤當下的值（表單開著時可能從別處改過）。其他欄位不動。
-    /// </summary>
-    public static StoredSettings MergeSubnetListChoice(StoredSettings collected, StoredSettings latest, bool edited)
-    {
-        ArgumentNullException.ThrowIfNull(collected);
-        ArgumentNullException.ThrowIfNull(latest);
-        return collected with { ShowSubnetList = edited ? collected.ShowSubnetList : latest.ShowSubnetList };
     }
 }

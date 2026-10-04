@@ -38,12 +38,13 @@ internal sealed class SettingsForm : ThemedForm
     private readonly Func<StoredSettings> _latestSettings;
     private readonly GatewayHistory? _history;
     private readonly Func<int?>? _connectedGateway;
-    // 使用者在表單裡動過圖示控制項沒有；沒動過的欄位儲存時取托盤當下的值（SettingsInput.MergeIconChoice）
-    private bool _iconStyleEdited;
-    private bool _iconGreenEdited;
     private bool _autoEdited;
-    // 同圖示選項：沒動過開關，儲存時取托盤當下的值（PanelSettings.MergeSubnetListChoice）
-    private bool _subnetListEdited;
+    // 顯示設定（圖示樣式、綠色、完整網段清單）切換即寫入 settings.json 並套用，不經「儲存」（DisplaySettings）
+    private readonly Action<StoredSettings>? _displayApplied;
+    /// <summary>程式同步顯示設定控制項（取托盤當下的值）時不觸發寫入。</summary>
+    private bool _syncingDisplay;
+    /// <summary>錯誤卡片目前顯示的是顯示設定寫入失敗的錯誤（之後寫入成功時才清掉）。</summary>
+    private bool _displayErrorShown;
     private readonly ToggleSwitch _subnetList = new("在狀態面板顯示完整網段清單");
     /// <summary>程式同步開關時不算「使用者動過」。</summary>
     private bool _syncingAuto;
@@ -85,12 +86,15 @@ internal sealed class SettingsForm : ThemedForm
     public StoredSettings? Saved { get; private set; }
 
     /// <param name="currentAutoReconnect">儲存時取「自動重連」的最新值（視窗開著時可能從托盤切換過；表單裡動過開關就以表單為準）。</param>
-    /// <param name="latestSettings">儲存時取托盤當下的設定：表單裡沒動過的圖示樣式／綠色選項以它為準。</param>
+    /// <param name="latestSettings">托盤當下（已儲存）的設定：顯示設定切換時以它為底只改一欄；按儲存時顯示設定三欄與 Distro 取它的值。</param>
+    /// <param name="displayApplied">顯示設定切換並寫入 settings.json 後呼叫（套用到 VpnCoordinator，讓托盤圖示與面板立即更新）。</param>
     /// <param name="history">閘道連線紀錄（成功率條）；null 時不顯示紀錄。</param>
     /// <param name="connectedGateway">目前連著哪一台（狀態點）；null 時視為沒有連線。</param>
     public SettingsForm(StoredSettings current, Func<bool> currentAutoReconnect, Func<StoredSettings> latestSettings,
-        bool importOnShow = false, GatewayHistory? history = null, Func<int?>? connectedGateway = null)
+        bool importOnShow = false, GatewayHistory? history = null, Func<int?>? connectedGateway = null,
+        Action<StoredSettings>? displayApplied = null)
     {
+        _displayApplied = displayApplied;
         _original = current;
         _currentAutoReconnect = currentAutoReconnect;
         _latestSettings = latestSettings;
@@ -165,7 +169,8 @@ internal sealed class SettingsForm : ThemedForm
         Span(new ThemedLabel("捷徑", TextRole.Ink, Theme.Ui(9f, FontStyle.Bold)), 14);
         Span(BuildShortcutPanel(), 4);
 
-        Span(new ThemedLabel("新設定在下次連線時生效；已建立的通道不受影響。密碼與 PSK 以 Windows 帳號加密（DPAPI）儲存。",
+        Span(new ThemedLabel("托盤圖示樣式、已連線時顯示綠色、完整網段清單與捷徑切換後立即生效；其他欄位要按「儲存」，" +
+            "新設定在下次連線時生效，已建立的通道不受影響。密碼與 PSK 以 Windows 帳號加密（DPAPI）儲存。",
             TextRole.Muted) { MaximumSize = new Size(ContentWidth, 0) }, 12);
         _errorCard.Controls.Add(_errors);
         _errorCard.MinimumSize = new Size(ContentWidth, 0);
@@ -198,15 +203,15 @@ internal sealed class SettingsForm : ThemedForm
         _iconGreen.Checked = current.GreenWhenConnected;
         _subnetList.Checked = current.ShowSubnetList;
         _auto.Checked = currentAutoReconnect();
-        // 選「表單沒動過就取托盤當下的值」而不是「托盤切換時同步更新已開的表單」：
-        // 後者要讓托盤反向操作表單，使用者正在表單裡選的值可能被托盤蓋掉；前者只在儲存時合併，兩邊互不干擾。
-        // 事件在設好初始值之後才掛上，開窗時的初始設定不算「動過」。
-        _iconStyle.SelectedIndexChanged += (_, _) => { _iconStyleEdited = true; UpdatePreviews(); };
-        _iconGreen.CheckedChanged += (_, _) => { _iconGreenEdited = true; UpdatePreviews(); };
+        // 顯示設定切換即寫入並套用（同捷徑）。事件在設好初始值之後才掛上，開窗時的初始設定不會觸發寫入。
+        _iconStyle.SelectedIndexChanged += (_, _) => { UpdatePreviews(); ApplyDisplay(DisplaySetting.IconStyle); };
+        _iconGreen.CheckedChanged += (_, _) => { UpdatePreviews(); ApplyDisplay(DisplaySetting.GreenWhenConnected); };
+        _subnetList.CheckedChanged += (_, _) => ApplyDisplay(DisplaySetting.ShowSubnetList);
         _auto.CheckedChanged += (_, _) => { if (!_syncingAuto) _autoEdited = true; };
-        _subnetList.CheckedChanged += (_, _) => _subnetListEdited = true;
         // 視窗開著時可能從托盤切換過自動重連：重新取得焦點時，若使用者沒動過開關，就同步顯示托盤的值
         Activated += (_, _) => SyncAutoFromTray();
+        // 視窗開著時也可能從托盤選單切換過圖示樣式／綠色：重新取得焦點時同步顯示托盤當下的值
+        Activated += (_, _) => SyncDisplayFromTray();
         // 捷徑可能在視窗外被刪掉或搬動：打開時與每次重新取得焦點時重新讀取
         Activated += (_, _) => RefreshShortcuts();
         for (int i = 0; i < ShortcutLocations.Length; i++)
@@ -221,6 +226,54 @@ internal sealed class SettingsForm : ThemedForm
         UpdateGatewayRows();
         Shown += (_, _) => { if (_importOnShow) StartImport(); };
         FinishLayout();
+    }
+
+    /// <summary>
+    /// 某個顯示設定切換了：以托盤當下（已儲存）的設定為底只改這一欄，寫入 settings.json 後套用。
+    /// 表單上其他還沒儲存的欄位不帶進去（DisplaySettings.Apply）。寫入失敗時顯示錯誤，控制項回到托盤當下的值。
+    /// </summary>
+    private void ApplyDisplay(DisplaySetting field)
+    {
+        if (_syncingDisplay || IsDisposed) return;
+        var saved = _latestSettings();
+        var s = DisplaySettings.Apply(saved, field, Collect());
+        if (s == saved) return;
+        try
+        {
+            SettingsStore.Save(s);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                       or System.Security.Cryptography.CryptographicException)
+        {
+            AppLog.Error($"顯示設定寫入失敗（{field}）：{ex.GetType().Name}：{ex.Message}");
+            ShowErrors([$"無法儲存設定：{ex.Message}"]);
+            _displayErrorShown = true;
+            SyncDisplayFromTray();
+            return;
+        }
+        if (_displayErrorShown) ShowErrors([]);
+        AppLog.Info(field switch
+        {
+            DisplaySetting.IconStyle => $"圖示樣式：{TrayIconCatalog.Title(s.IconStyle)}",
+            DisplaySetting.GreenWhenConnected => s.GreenWhenConnected ? "已連線顯示綠色：開啟" : "已連線顯示綠色：關閉",
+            _ => s.ShowSubnetList ? "狀態面板顯示完整網段清單：開啟" : "狀態面板顯示完整網段清單：關閉",
+        });
+        _displayApplied?.Invoke(s);
+    }
+
+    /// <summary>顯示設定控制項改成托盤當下的值（不觸發寫入）。</summary>
+    private void SyncDisplayFromTray()
+    {
+        if (IsDisposed) return;
+        var latest = _latestSettings();
+        _syncingDisplay = true;
+        try
+        {
+            if (SelectedIconStyle != latest.IconStyle) _iconStyle.SelectedIndex = (int)latest.IconStyle;
+            if (_iconGreen.Checked != latest.GreenWhenConnected) _iconGreen.Checked = latest.GreenWhenConnected;
+            if (_subnetList.Checked != latest.ShowSubnetList) _subnetList.Checked = latest.ShowSubnetList;
+        }
+        finally { _syncingDisplay = false; }
     }
 
     private void SyncAutoFromTray()
@@ -568,6 +621,7 @@ internal sealed class SettingsForm : ThemedForm
     private void ShowErrors(IReadOnlyList<string> errors, bool validation = false)
     {
         _shortcutErrorShown = false;   // 捷徑的錯誤由 RunShortcutAction 在呼叫後自己標記
+        _displayErrorShown = false;    // 顯示設定的錯誤由 ApplyDisplay 在呼叫後自己標記
         if (errors.Count == 0)
         {
             _errors.Text = "";
@@ -585,9 +639,8 @@ internal sealed class SettingsForm : ThemedForm
 
     private void OnSave()
     {
-        var latest = _latestSettings();
-        var s = PanelSettings.MergeSubnetListChoice(
-            SettingsInput.MergeIconChoice(Collect(), latest, _iconStyleEdited, _iconGreenEdited), latest, _subnetListEdited);
+        // 顯示設定三欄切換時已寫入，這裡取托盤當下的值，不用表單上的（DisplaySettings.MergeForSave）
+        var s = DisplaySettings.MergeForSave(Collect(), _latestSettings());
         var errors = SettingsValidator.Validate(s.ToVpnSettings()).Concat(DnsOptions.Validate(s.Domain, s.DnsServer)).ToList();
         if (errors.Count > 0)
         {
