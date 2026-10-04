@@ -28,7 +28,8 @@ internal static class SettingsStore
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return new(StoredSettings.Empty, [$"讀取設定檔失敗：{ex.Message}"]);
+            // 檔案存在但讀不到：當成舊版使用者（發行版 Ubuntu-24.04），見 SettingsDocument.Deserialize
+            return new(StoredSettings.Empty with { Distro = WslDistros.Legacy }, [$"讀取設定檔失敗：{ex.Message}"]);
         }
     }
 

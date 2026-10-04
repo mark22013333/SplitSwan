@@ -6,7 +6,7 @@ namespace SplitSwan.Tray;
 
 /// <summary>
 /// 唯一的連線協調器（對應 Mac 版 VPNController）：
-/// - 同時只跑一個引擎動作（連線、斷線、首次安裝；輪詢 brief 也不會跟它們同時跑）；
+/// - 同時只跑一個引擎動作（連線、斷線、首次設定精靈的 WSL／引擎步驟；輪詢 brief 也不會跟它們同時跑）；
 /// - 想連線時每 15 秒用 brief 輪詢，App 啟動時跑一次以反映既有通道；
 ///   brief 查不到（unknown／失敗／逾時）時沿用上一次狀態，連續 3 次才當成 down（BriefTracker）；
 /// - DropDetector（30 秒）判斷掉線並發通知；自動重連開啟時才重連（退避 30s→60s→120s→240s→5 分鐘）；
@@ -33,7 +33,7 @@ internal sealed class VpnCoordinator : IDisposable
     private readonly System.Windows.Forms.Timer _addressTimer = new() { Interval = (int)AddressDebounce.TotalMilliseconds };
     private readonly DropDetector _drop = new(DropThreshold);
     private readonly BriefTracker _brief = new();
-    private readonly Func<string, bool> _askOpenInstaller;
+    private readonly Action<string> _openWizard;
 
     private StoredSettings _settings;
     private GatewayHistory _history;
@@ -66,13 +66,13 @@ internal sealed class VpnCoordinator : IDisposable
     /// <summary>要發的通知（標題、內文、是否為錯誤）。</summary>
     public event Action<string, string, bool>? Notify;
 
-    /// <param name="askOpenInstaller">引擎回報 WSL／Ubuntu 尚未安裝時，問使用者要不要開首次安裝視窗（參數是原因）。</param>
-    public VpnCoordinator(StoredSettings settings, Func<string, bool> askOpenInstaller)
+    /// <param name="openWizard">手動連線時引擎回報 WSL／發行版尚未安裝：請 UI 引導使用者開首次設定精靈（參數是原因）。</param>
+    public VpnCoordinator(StoredSettings settings, Action<string> openWizard)
     {
         _ui = SynchronizationContext.Current
               ?? throw new InvalidOperationException("VpnCoordinator 必須在 UI 執行緒建立");
         _settings = settings;
-        _askOpenInstaller = askOpenInstaller;
+        _openWizard = openWizard;
         _history = GatewayHistoryStore.Load();
         PruneHistory();
         _networkFingerprint = NetworkFingerprint.Current();
@@ -172,7 +172,7 @@ internal sealed class VpnCoordinator : IDisposable
         _backoffStep = 0;
         CancelRetry();
         _lastError = null;
-        Guard(() => RunConnectAsync(manual: true));
+        Guard(() => RunConnectAsync(manual: true, fromWizard: false));
     }
 
     /// <summary>選單「斷線」：動作進行中時，等它完成後再斷線（不中途砍掉，避免 WSL 內安裝到一半）。</summary>
@@ -217,7 +217,7 @@ internal sealed class VpnCoordinator : IDisposable
         {
             AppLog.Info("結束前斷線");
             EngineResult r;
-            try { r = await EngineRunner.RunAsync(EngineAction.Disconnect); }
+            try { r = await EngineRunner.RunAsync(EngineAction.Disconnect, _settings.Distro); }
             catch (Exception ex) { r = EngineResult.Failed($"執行連線引擎時發生錯誤：{ex.GetType().Name}：{ex.Message}"); }
             if (r.Ok)
             {
@@ -236,17 +236,44 @@ internal sealed class VpnCoordinator : IDisposable
     }
 
     /// <summary>
-    /// 選單「首次安裝 WSL／Ubuntu」：在可見的 PowerShell 視窗跑 connect（wsl --install 要主控台建立 Ubuntu 帳號）。
-    /// 回傳 null＝已開始；否則是不能開始的原因（給 UI 顯示）。
+    /// 首次設定精靈用：以「一次一個」的機制獨佔執行一段工作（WSL 指令、引擎 setup），期間輪詢與重連都讓路。
+    /// 已有動作在進行中時不執行，回傳 (false, default)。
     /// </summary>
-    public string? StartFirstInstall()
+    public async Task<(bool Started, T? Result)> RunExclusiveAsync<T>(string busyText, Func<Task<T>> work)
     {
-        if (_busy) return "目前有動作在進行中，請稍候再試";
-        // 引擎第一步就檢查 swanctl.conf／secrets.conf，所以設定要先填好
-        var errors = ConfWriter.Validate(_settings);
-        if (errors.Count > 0) return "請先到「設定…」填好或匯入設定：\n" + string.Join("\n", errors);
-        Guard(RunFirstInstallAsync);
-        return null;
+        if (_busy || _disposed) return (false, default);
+        await EnterBusyAsync(busyText);
+        T result;
+        try
+        {
+            result = await work();
+        }
+        finally
+        {
+            LeaveBusy();
+            // 工作進行中使用者按了「斷線」：現在補斷（同一般動作結束後的處理）
+            if (_pendingDown) Guard(AfterOperationAsync);
+        }
+        return (true, result);
+    }
+
+    /// <summary>
+    /// 首次設定精靈步驟 6：跑一次自動選擇的連線（同選單「連線（自動選擇）」），等結束後回報結果。
+    /// 有動作在進行中時回 (false, null, null, 原因)。
+    /// </summary>
+    public async Task<(bool Ok, string? Gateway, string? Vip, string? Error)> ConnectForWizardAsync()
+    {
+        if (_busy) return (false, null, null, "目前有連線／斷線動作在進行中，請稍候再試");
+        _target = null;
+        _wantConnected = true;
+        _pendingDown = false;
+        _drop.Reset();
+        _brief.Reset();
+        _backoffStep = 0;
+        CancelRetry();
+        _lastError = null;
+        await RunConnectAsync(manual: true, fromWizard: true);
+        return _isUp ? (true, _gateway, _vip, null) : (false, null, null, _lastError ?? "連線失敗");
     }
 
     // MARK: 引擎動作
@@ -270,32 +297,34 @@ internal sealed class VpnCoordinator : IDisposable
         RaiseChanged();
     }
 
-    private async Task RunConnectAsync(bool manual)
+    /// <param name="fromWizard">由首次設定精靈呼叫：尚未安裝時不再引導開精靈（精靈本身已開著）。</param>
+    private async Task RunConnectAsync(bool manual, bool fromWizard = false)
     {
         if (_busy) return;
         if (!manual && !_networkAvailable) { _retryNote = "沒有網路，恢復後自動重連"; RaiseChanged(); return; }
         await EnterBusyAsync("連線中…（第一次要安裝 strongSwan，可能要幾分鐘）");
-        var openInstaller = false;
+        var installNeeded = false;
         try
         {
-            openInstaller = await ConnectCoreAsync(manual);
+            installNeeded = await ConnectCoreAsync(manual);
         }
         finally
         {
             LeaveBusy();
         }
 
-        if (openInstaller)
+        if (installNeeded)
         {
             _pendingDown = false;   // 本來就沒連上，不需要補斷線
-            var why = StartFirstInstall();
-            if (why is not null) { _lastError = why; Notify?.Invoke("無法開始首次安裝", why, true); RaiseChanged(); }
+            if (manual && !fromWizard) _openWizard(_lastError ?? "WSL 或發行版尚未安裝");
+            else if (!fromWizard) Notify?.Invoke("需要首次設定", _lastError ?? "", true);
+            RaiseChanged();
             return;
         }
         await AfterOperationAsync();
     }
 
-    /// <summary>執行 connect；回傳 true＝使用者選擇開首次安裝視窗。</summary>
+    /// <summary>執行 connect；回傳 true＝WSL 或發行版尚未安裝（呼叫端引導使用者開首次設定精靈）。</summary>
     private async Task<bool> ConnectCoreAsync(bool manual)
     {
         _retryNote = null;
@@ -352,7 +381,7 @@ internal sealed class VpnCoordinator : IDisposable
         EngineResult r;
         try
         {
-            r = await EngineRunner.RunAsync(EngineAction.Connect, order: order);
+            r = await EngineRunner.RunAsync(EngineAction.Connect, _settings.Distro, order: order);
         }
         catch (Exception ex)
         {
@@ -382,13 +411,11 @@ internal sealed class VpnCoordinator : IDisposable
         AppLog.Error("連線失敗：" + error);
         if (EngineCommand.IsInstallNeeded(r.Error, r.Lines))
         {
-            // 背景沒有主控台可以建立 Ubuntu 帳號：請使用者改用可見視窗
+            // WSL 或發行版還沒裝好：自動重試也沒用，停止想連線，改由首次設定精靈安裝
             _wantConnected = false;
             CancelRetry();
-            _lastError = "WSL／Ubuntu 尚未安裝完成，請用選單的「首次安裝 WSL／Ubuntu…」";
-            if (manual && _askOpenInstaller(_lastError)) return true;
-            Notify?.Invoke("需要首次安裝", _lastError, true);
-            return false;
+            _lastError = $"WSL 或發行版 {_settings.Distro} 尚未安裝完成，請用選單的「首次設定精靈…」";
+            return true;
         }
         if (EngineCommand.IsNotAdministrator(r.Error))
         {
@@ -427,7 +454,7 @@ internal sealed class VpnCoordinator : IDisposable
         {
             AppLog.Info("開始斷線");
             EngineResult r;
-            try { r = await EngineRunner.RunAsync(EngineAction.Disconnect); }
+            try { r = await EngineRunner.RunAsync(EngineAction.Disconnect, _settings.Distro); }
             catch (Exception ex) { r = EngineResult.Failed($"執行連線引擎時發生錯誤：{ex.GetType().Name}：{ex.Message}"); }
             if (r.Ok)
             {
@@ -449,42 +476,6 @@ internal sealed class VpnCoordinator : IDisposable
             LeaveBusy();
         }
         await AfterOperationAsync();
-    }
-
-    private async Task RunFirstInstallAsync()
-    {
-        if (_busy) return;
-        await EnterBusyAsync("首次安裝視窗執行中…（完成後請在視窗按 Enter 關閉）");
-        try
-        {
-            ConfWriter.Write(_settings);
-            AppLog.Info("開啟首次安裝視窗（可見的 PowerShell）");
-            var code = await EngineRunner.RunVisibleAsync(EngineAction.Connect);
-            AppLog.Info($"首次安裝視窗已關閉，結束碼 {code?.ToString() ?? "未知"}");
-            _lastError = null;
-        }
-        catch (Exception ex)
-        {
-            _lastError = "首次安裝無法開始：" + ex.Message;
-            AppLog.Error(_lastError);
-            Notify?.Invoke("首次安裝", _lastError, true);
-        }
-        finally
-        {
-            DeleteSecretsOrWarn();
-            LeaveBusy();
-        }
-        await AfterOperationAsync();
-        if (_isUp)
-        {
-            _wantConnected = true;
-            _lastUpAt = DateTimeOffset.Now;
-            RaiseChanged();
-        }
-        else if (_lastError is null)
-        {
-            Notify?.Invoke("首次安裝", "如果剛裝好 WSL／Ubuntu（或重開過機），請從托盤選單按「連線」", false);
-        }
     }
 
     /// <summary>動作結束後：處理「進行中按了斷線」，再輪詢一次狀態。</summary>
@@ -530,7 +521,7 @@ internal sealed class VpnCoordinator : IDisposable
         {
             EngineResult r;
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            try { r = await EngineRunner.RunAsync(EngineAction.Brief, logOutput: false); }
+            try { r = await EngineRunner.RunAsync(EngineAction.Brief, _settings.Distro, logOutput: false); }
             catch (Exception ex) { r = EngineResult.Failed($"{ex.GetType().Name}：{ex.Message}"); }
             ApplyBrief(r, sw.Elapsed);
         }

@@ -14,7 +14,9 @@ public static class SettingsInput
     /// <summary>
     /// 設定視窗儲存時決定圖示兩欄用誰的值：使用者在表單裡動過的那一欄用表單的值，
     /// 沒動過的用托盤當下的值（latest）——設定視窗開著時，使用者可能從托盤選單切換過樣式或綠色，
-    /// 表單裡的是開窗當時的舊值，不能蓋回去（同「自動重連」取最新值的做法）。其他欄位一律用 collected。
+    /// 表單裡的是開窗當時的舊值，不能蓋回去（同「自動重連」取最新值的做法）。
+    /// WSL 發行版（Distro）表單沒有這欄，一律用 latest（否則新建的設定物件會把舊版使用者的 Ubuntu-24.04 換成預設值）。
+    /// 其他欄位一律用 collected。
     /// </summary>
     public static StoredSettings MergeIconChoice(StoredSettings collected, StoredSettings latest, bool styleEdited, bool greenEdited)
     {
@@ -24,6 +26,7 @@ public static class SettingsInput
         {
             IconStyle = styleEdited ? collected.IconStyle : latest.IconStyle,
             GreenWhenConnected = greenEdited ? collected.GreenWhenConnected : latest.GreenWhenConnected,
+            Distro = latest.Distro,
         };
     }
 

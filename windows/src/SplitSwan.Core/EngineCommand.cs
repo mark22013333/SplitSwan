@@ -2,8 +2,8 @@ using System.Text;
 
 namespace SplitSwan.Core;
 
-/// <summary>連線引擎的動作（契約 1）。</summary>
-public enum EngineAction { Connect, Disconnect, Status, Brief }
+/// <summary>連線引擎的動作（契約 1；Setup 為契約 5：只在 WSL 內安裝 strongSwan，不連線）。</summary>
+public enum EngineAction { Connect, Disconnect, Status, Brief, Setup }
 
 /// <summary>
 /// 組出呼叫連線引擎（splitswan-wsl.ps1）的 powershell.exe 命令列，以及引擎回應的判讀小工具。
@@ -20,6 +20,8 @@ public static class EngineCommand
     /// 留 12 秒讓引擎自己的逾時訊息先出來；仍小於 15 秒的輪詢間隔。
     /// </summary>
     public static readonly TimeSpan BriefTimeout = TimeSpan.FromSeconds(12);
+    /// <summary>setup 的逾時：全新發行版要 apt update＋安裝 strongSwan，慢的網路可能要十幾分鐘。</summary>
+    public static readonly TimeSpan SetupTimeout = TimeSpan.FromMinutes(20);
 
     public static string ActionName(EngineAction a) => a switch
     {
@@ -27,6 +29,7 @@ public static class EngineCommand
         EngineAction.Disconnect => "disconnect",
         EngineAction.Status => "status",
         EngineAction.Brief => "brief",
+        EngineAction.Setup => "setup",
         _ => throw new ArgumentOutOfRangeException(nameof(a)),
     };
 
@@ -34,22 +37,30 @@ public static class EngineCommand
     {
         EngineAction.Connect => ConnectTimeout,
         EngineAction.Brief => BriefTimeout,
+        EngineAction.Setup => SetupTimeout,
         _ => DisconnectTimeout,
     };
 
     /// <summary>
-    /// powershell.exe 的參數清單：-NoProfile -ExecutionPolicy Bypass -File &lt;script&gt; -Action &lt;a&gt; -ConfDir &lt;dir&gt; [-PauseAtEnd]。
+    /// powershell.exe 的參數清單：-NoProfile -ExecutionPolicy Bypass -File &lt;script&gt; -Action &lt;a&gt; -ConfDir &lt;dir&gt;
+    /// [-Distro &lt;名稱&gt;] [-NoInstall] [-Order …] [-PauseAtEnd]。
     /// </summary>
     /// <param name="noInstall">加 -NoInstall：WSL／Ubuntu 未安裝時引擎只回報、不在背景開始安裝（契約 1；只對 connect 有效，其他動作忽略）。</param>
     /// <param name="order">
     /// 加 -Order：connect 依此順序嘗試閘道（契約 3；1 起算的編號，例 [2, 1, 3]）。null＝不帶（引擎照設定檔順序）。
     /// 只對 connect 有效，其他動作忽略。編號必須是 1～3 且不重複，清單不可為空，否則丟 ArgumentException。
     /// </param>
+    /// <param name="distro">
+    /// 加 -Distro：引擎使用的 WSL 發行版（契約 6：App 一律帶設定值）。null＝不帶（引擎預設 Ubuntu-24.04）。
+    /// 名稱只接受英數與 . _ -（WslDistros.IsValidName），否則丟 ArgumentException。所有動作都帶。
+    /// </param>
     public static IReadOnlyList<string> Arguments(EngineAction action, string scriptPath, string confDir,
-        bool pauseAtEnd = false, bool noInstall = false, IReadOnlyList<int>? order = null)
+        bool pauseAtEnd = false, bool noInstall = false, IReadOnlyList<int>? order = null, string? distro = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(scriptPath);
         ArgumentException.ThrowIfNullOrEmpty(confDir);
+        if (distro is not null && !WslDistros.IsValidName(distro))
+            throw new ArgumentException("WSL 發行版名稱只能包含英數與 . _ -", nameof(distro));
         var orderText = order is null ? null : FormatOrder(order);
         // 引擎會把 ConfDir 結尾的 \ 去掉；這裡先去掉，免得 "C:\x\" 的結尾反斜線跳脫掉右引號
         var dir = confDir.Length > 3 ? confDir.TrimEnd('\\', '/') : confDir;
@@ -58,6 +69,7 @@ public static class EngineCommand
             "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath,
             "-Action", ActionName(action), "-ConfDir", dir,
         };
+        if (distro is not null) list.AddRange(["-Distro", distro]);
         if (noInstall && action == EngineAction.Connect) list.Add("-NoInstall");
         if (orderText is not null && action == EngineAction.Connect) list.AddRange(["-Order", orderText]);
         if (pauseAtEnd) list.Add("-PauseAtEnd");
@@ -117,10 +129,10 @@ public static class EngineCommand
     }
 
     /// <summary>
-    /// 是否需要使用者改用「首次安裝」：WSL 或 Ubuntu 尚未安裝。判斷依據（任一成立）：
+    /// 是否需要使用者走首次設定：WSL 或發行版尚未安裝。判斷依據（任一成立）：
     /// - 錯誤訊息含「已開始安裝」（引擎在背景開始了互動式安裝）或「尚未安裝」（引擎帶 -NoInstall 時的回報）；
     /// - 任何一行輸出含「開始安裝」（引擎在安裝前會先印這句；逾時被結束、沒有 @@RESULT 時也抓得到）。
-    /// 背景執行時沒有主控台可以建立 Ubuntu 帳號，所以要改用可見視窗。
+    /// 托盤遇到時改開「首次設定精靈」（契約 6）；setup 動作遇到 WSL／發行版不存在也回「尚未安裝」（契約 5）。
     /// </summary>
     public static bool IsInstallNeeded(string? error, IEnumerable<string>? outputLines = null)
     {

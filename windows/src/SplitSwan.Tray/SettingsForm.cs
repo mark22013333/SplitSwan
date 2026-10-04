@@ -69,6 +69,7 @@ internal sealed class SettingsForm : Form
         _importOnShow = importOnShow;
 
         Text = "SplitSwan 設定";
+        AppIcon.Apply(this);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;

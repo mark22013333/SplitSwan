@@ -89,6 +89,7 @@ internal sealed class PassphraseForm : Form
     private PassphraseForm(string fileName)
     {
         Text = "輸入設定檔密碼";
+        AppIcon.Apply(this);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;

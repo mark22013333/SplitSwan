@@ -11,6 +11,7 @@ internal sealed class LogForm : Form
     public LogForm()
     {
         Text = "SplitSwan － 引擎輸出";
+        AppIcon.Apply(this);
         Size = new Size(860, 520);
         StartPosition = FormStartPosition.CenterScreen;
         ShowInTaskbar = true;

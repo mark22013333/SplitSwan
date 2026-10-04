@@ -34,6 +34,26 @@ if ! grep -q '\[string\]\$Order' ../tools/windows/splitswan-wsl.ps1 || ! grep -q
     exit 1
 fi
 
+# 首次設定精靈跑 -Action setup，所有引擎呼叫都帶 -Distro（契約 5、6）；引擎不支援時精靈與連線都會失敗，不可打包
+if ! grep -q "ValidateSet('connect', 'disconnect', 'status', 'brief', 'setup')" ../tools/windows/splitswan-wsl.ps1 \
+   || ! grep -q '\[string\]\$Distro' ../tools/windows/splitswan-wsl.ps1; then
+    echo "錯誤：tools/windows/splitswan-wsl.ps1 不支援 -Action setup 或 -Distro，與托盤 App 不相容" >&2
+    exit 1
+fi
+
+# exe 圖示（與 Mac 版同圖）：csproj 要設 ApplicationIcon，app.ico 要存在且是 7 張的 ICO（由 tools/make-ico.sh 產生）
+ICO=src/SplitSwan.Tray/app.ico
+grep -q '<ApplicationIcon>app.ico</ApplicationIcon>' src/SplitSwan.Tray/SplitSwan.Tray.csproj \
+    || { echo "錯誤：SplitSwan.Tray.csproj 沒有設定 <ApplicationIcon>app.ico</ApplicationIcon>" >&2; exit 1; }
+[ -f "$ICO" ] || { echo "錯誤：找不到 $ICO，請先執行 bash windows/tools/make-ico.sh" >&2; exit 1; }
+ico_size=$(wc -c < "$ICO" | tr -d ' ')
+ico_head=$(head -c 6 "$ICO" | od -An -tx1 | tr -d ' \n')
+# ICONDIR：reserved 0000、type 0100（圖示）、張數 0700（7 張，little-endian）
+if [ "$ico_head" != "000001000700" ] || [ "$ico_size" -lt 4096 ] || [ "$ico_size" -gt 1048576 ]; then
+    echo "錯誤：$ICO 格式或大小不對（開頭 $ico_head、$ico_size bytes；應為 7 張、4 KB～1 MB）" >&2
+    exit 1
+fi
+
 echo "== 1/4 Core 單元測試"
 dotnet test tests/SplitSwan.Core.Tests/SplitSwan.Core.Tests.csproj -c Release --nologo
 
@@ -65,6 +85,9 @@ if [ "$(tr -cd '\r' < "$sh" | wc -c | tr -d ' ')" -ne 0 ]; then
     echo "錯誤：$sh 含 CR（必須是 LF）" >&2; exit 1
 fi
 [ -f ./out/publish/SplitSwan/${NAME}.exe ] || { echo "錯誤：沒有產生 ${NAME}.exe" >&2; exit 1; }
+# exe 的 PE 資源段要有 App 圖示，且逐張與 app.ico 相同
+python3 tools/check-exe-icon.py ./out/publish/SplitSwan/${NAME}.exe "$ICO" \
+    || { echo "錯誤：${NAME}.exe 沒有帶 App 圖示" >&2; exit 1; }
 # 打包進去的引擎要是支援 -Order 的版本（避免複製到舊檔）
 grep -q '\[string\]\$Order' "$ps1" || { echo "錯誤：$ps1 沒有 -Order 參數" >&2; exit 1; }
 grep -q '@@ATTEMPT=' "$sh" || { echo "錯誤：$sh 沒有輸出 @@ATTEMPT" >&2; exit 1; }

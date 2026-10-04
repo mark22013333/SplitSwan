@@ -3,14 +3,14 @@
 SplitSwan 是公司 VPN 的 split tunnel 用戶端：只有公司網段走 VPN，其他流量照常走自己的網路。Windows 版是一個**通知區域（托盤）App**，背後用 WSL2 裡的 Linux strongSwan 連公司的 FortiGate，再由 Windows 路由把公司網段導進去：
 
 ```
-Windows ──路由──▶ WSL2 Ubuntu（strongSwan）──IKEv2──▶ 公司 FortiGate
+Windows ──路由──▶ WSL2 發行版 SplitSwan（Ubuntu 24.04＋strongSwan）──IKEv2──▶ 公司 FortiGate
 ```
 
 > 這是實驗版：連線引擎已在真機上測過可用，但托盤 App 的畫面還沒在 Windows 真機上完整驗證過。遇到問題請把「顯示引擎輸出」的內容（遮蔽內部位址後）回報給維護者。
 
 ## 需要準備
 
-- Windows 11，或 Windows 10 22H2；BIOS 已開啟虛擬化。
+- x64 的 Windows 11，或 Windows 10 2004（組建 19041）以上（建議 22H2）；BIOS 已開啟虛擬化。首次設定要能連到 GitHub（安裝 WSL）與 releases.ubuntu.com（下載 Ubuntu，約 370 MB）。
 - **必須用本身就是系統管理員的帳號登入 Windows**。SplitSwan 每次啟動都會跳 UAC 提權（要改路由與 DNS 規則），只要按「是」。
   不要用標準使用者登入、再在 UAC 輸入別人的管理員帳密：那樣 SplitSwan 會以那個管理員帳號執行，設定、加密的密碼、WSL 與 Ubuntu 都會放到那個帳號底下，跟你自己帳號裡的對不起來。
 - 同事從 Mac 版匯出的 `.splitswan` 設定檔，以及那個檔案的密碼。
@@ -20,36 +20,38 @@ Windows ──路由──▶ WSL2 Ubuntu（strongSwan）──IKEv2──▶ �
 
 1. 把 `SplitSwan-Windows-0.1.0.zip` 解壓到**自己的使用者目錄底下**，例如 `%UserProfile%\SplitSwan`。`SplitSwan.exe` 旁邊的 `engine` 資料夾是連線引擎，兩者要放在一起，不要只複製 exe。
 2. 雙擊 `SplitSwan.exe`，允許 UAC。exe 沒有程式碼簽章，第一次執行時 SmartScreen 可能顯示「Windows 已保護您的電腦」，按「其他資訊」→「仍要執行」。
-3. 右下角通知區域會出現 SplitSwan 的圖示（預設是盾牌，可能收在「^」裡）。
+3. 右下角通知區域會出現 SplitSwan 的圖示（預設是盾牌，可能收在「^」裡）。第一次執行時會自動開「首次設定精靈」。
 
-## 第一次設定
+## 首次設定精靈
 
-1. 在圖示上按右鍵 →「匯入 .splitswan…」，選設定檔、輸入密碼。
+第一次開 SplitSwan 時（還沒有設定、或連線引擎要用的 WSL 發行版不存在），會自動打開「首次設定精靈」；之後也可以從右鍵選單「首次設定精靈…」再開。按「開始」後精靈會依序執行，**不需要開終端機、也不需要建立 Ubuntu 帳號**：
+
+| 步驟 | 做什麼 |
+|---|---|
+| 1 系統檢查 | Windows 10 2004（組建 19041）以上或 Windows 11、x64、BIOS 已開啟虛擬化。ARM64 Windows 不支援 |
+| 2 安裝 WSL | 沒有 WSL 時執行 `wsl --install --no-distribution --web-download`（從 GitHub 下載、不經 Microsoft Store，內建 Administrator 帳號也能用）。需要重新開機時會提示「立即重新開機／稍後」 |
+| 3 下載並匯入 Ubuntu | 從 `https://releases.ubuntu.com/24.04/` 下載最新的 Ubuntu 24.04 WSL 映像（約 370 MB，可取消），比對官方 SHA256 後以 `wsl --import` 匯入成 SplitSwan 專用的發行版 `SplitSwan`（預設使用者 root），匯入成功後刪除下載檔 |
+| 4 安裝 strongSwan | 在發行版內開啟 systemd、用 apt 安裝 strongSwan（要幾分鐘） |
+| 5 VPN 設定 | 匯入 `.splitswan` 或手動填寫（同下方「設定」） |
+| 6 測試連線 | 實際連線一次，顯示連上的閘道與虛擬 IP |
+
+- 右側的輸出區會顯示每一步執行的指令（`> …`）與完整輸出；同樣的內容也寫進 App 記錄。
+- 已經完成的步驟會自動略過（例如 WSL 早就裝好）。每一步失敗都可以按「重試」；「上一步」可以回去重新執行某一步。
+- **重新開機**：精靈會登記「下次登入時自動開 SplitSwan」（`HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce`），重開後登入會跳 UAC（SplitSwan 需要系統管理員權限），按「是」就從中斷的步驟繼續。沒有自動開啟時，手動開 SplitSwan 一樣會從中斷處繼續（進度存在 `wizard.json`）。
+- 精靈執行 WSL 指令、安裝 strongSwan、測試連線時，會暫停托盤的狀態輪詢與自動重連（同一時間只跑一個動作）。
+- 直接按「連線」時，如果連線引擎回報 WSL 或發行版還沒裝好，SplitSwan 會詢問要不要開精靈。背景連線不會自己開始安裝。
+
+**已經用舊版（0.1.0 第一、二階段）裝好 `Ubuntu-24.04` 的人**：設定檔沒有發行版欄位時沿用 `Ubuntu-24.04`，不會重新下載；精靈的步驟 3 會偵測到它存在而略過。
+
+需要自己更新 WSL 時，請在系統管理員 PowerShell 執行 `wsl --update --web-download`（需要 WSL 2.3.11 以上，`wsl --version` 可以查）。
+
+## 設定
+
+1. 右鍵 →「匯入 .splitswan…」（或精靈步驟 5 的「匯入 .splitswan…」），選設定檔、輸入密碼。
 2. 設定視窗會填好閘道、內網網段與 PSK。**請確認閘道是公司提供的位址**（設定檔加密只能防偷看，不能證明是誰做的），再填上自己的帳號與密碼，按「儲存」。沒按儲存就不會寫入。
 3. 需要用名稱連內部主機時，在「內部網域」填公司網域（例：`corp.example`），「內部 DNS」可留空，會用閘道給的。
 
 沒有設定檔時，也可以在「設定…」手動填：帳號、密碼、PSK、閘道 1–3、內網網段（一行一筆，`192.0.2.0/24` 這種格式，單一主機寫 `/32`）。格式不對時按儲存會逐條列出問題。
-
-## 第一次安裝 WSL 與 Ubuntu
-
-連線引擎需要 WSL2 與 Ubuntu-24.04。還沒裝過的話：
-
-1. 先完成上面的「第一次設定」（安裝流程會用到設定檔）。
-2. 右鍵 →「首次安裝 WSL／Ubuntu…」。會開一個 PowerShell 視窗：
-   - 沒有 WSL 或 Ubuntu 時會開始安裝，**照畫面建立 Ubuntu 的帳號與密碼**（自己設定，跟公司帳號無關）。
-   - 要求重開機就重開。重開後開 SplitSwan，按「連線」。
-   - 已經裝好時會直接連線；第一次連線會在 Ubuntu 裡安裝 strongSwan，要幾分鐘。
-   - 視窗最後會停住，看完按 Enter 關閉。
-3. 直接按「連線」時，如果連線引擎回報還沒裝 WSL／Ubuntu，SplitSwan 會詢問要不要開首次安裝視窗。
-   背景連線不會自己開始安裝，安裝一律在「首次安裝」的視窗裡進行。
-
-**用內建的 Administrator 帳號時**：經過 Microsoft Store 安裝或更新 WSL 會卡住。連線引擎安裝 Ubuntu 時已經用 `--web-download`（從網路下載、不經 Store）；需要自己更新 WSL 時，請在系統管理員 PowerShell 執行：
-
-```
-wsl --update --web-download
-```
-
-需要 WSL 2.3.11 以上（`wsl --version` 可以查）。
 
 ## 日常使用
 
@@ -63,7 +65,7 @@ wsl --update --web-download
 | 斷線 | 移除路由與 DNS 規則、中斷通道。連線動作進行中按下時，會等那個動作完成再斷線 |
 | 設定… | 帳號、密碼、閘道、網段等 |
 | 匯入 .splitswan… | 匯入 Mac 版匯出的設定檔（要按儲存才寫入） |
-| 首次安裝 WSL／Ubuntu… | 見上一節 |
+| 首次設定精靈… | 開啟首次設定精靈（見上方） |
 | 顯示引擎輸出 | 連線過程的完整輸出（雙擊圖示也會打開） |
 | 開啟記錄資料夾 | App 記錄所在的資料夾 |
 | 圖示樣式 | 快速切換托盤圖示的樣式，以及「已連線時顯示綠色」（見下方「托盤圖示」） |
@@ -101,8 +103,11 @@ wsl --update --web-download
 
 | 位置 | 內容 |
 |---|---|
+| `%LOCALAPPDATA%\SplitSwan\wizard.json` | 首次設定精靈的進度（重開機後從中斷處繼續）。刪掉等於從頭偵測 |
+| `%LOCALAPPDATA%\SplitSwan\wsl\` | 精靈匯入的 `SplitSwan` 發行版磁碟（`ext4.vhdx`）。要移除請用 `wsl --unregister SplitSwan`，不要直接刪檔 |
+| `%LOCALAPPDATA%\SplitSwan\download\` | 下載 Ubuntu 映像的暫存處；匯入成功或 SHA256 不符時刪除下載檔，匯入失敗時保留以便重試 |
 | `%LOCALAPPDATA%\SplitSwan\gateway-history.json` | 閘道連線紀錄（編號、位址、成敗、耗時、時間；不含帳密）。刪掉等於清除紀錄 |
-| `%LOCALAPPDATA%\SplitSwan\settings.json` | 設定（含托盤圖示樣式）。密碼與 PSK 用 Windows 帳號加密（DPAPI），只有同一個帳號在同一台電腦上解得開 |
+| `%LOCALAPPDATA%\SplitSwan\settings.json` | 設定（含托盤圖示樣式、連線引擎使用的 WSL 發行版 `distro`）。密碼與 PSK 用 Windows 帳號加密（DPAPI），只有同一個帳號在同一台電腦上解得開 |
 | `%LOCALAPPDATA%\SplitSwan\conf\` | 連線時產生給引擎讀的設定檔。資料夾權限只開放自己、SYSTEM 與 Administrators；含密碼的 `secrets.conf` 在每次連線動作結束後就刪除 |
 | `%LOCALAPPDATA%\SplitSwan\logs\` | App 記錄，保留最近 10 份。不記錄密碼與 PSK，但含內部位址，分享前請遮蔽 |
 | `%LOCALAPPDATA%\SplitSwan-WSL\logs\` | 連線引擎自己的記錄（同樣含內部位址） |
@@ -111,13 +116,14 @@ wsl --update --web-download
 
 ## 已知限制
 
-- **托盤 App 尚未在 Windows 真機上驗證**：程式在 macOS 上交叉編譯，畫面、通知、UAC、資料夾權限、睡眠喚醒等行為還沒實測。連線引擎本身已在真機測過。
+- **首次設定精靈尚未在 Windows 真機上驗證**：程式在 macOS 上交叉編譯，判斷規則有單元測試，但實際的 WSL 安裝、重開機續接、下載匯入、UAC 等行為還沒實測。
 - 只支援 WSL 預設的 NAT 網路模式（`.wslconfig` 設成 `networkingMode=mirrored` 時會拒絕連線）。
 - 內網網段不能跟 WSL 的 NAT 網段（通常在 172.16–31.x）重疊。
-- 不做閘道排序：Mac 版會依連線紀錄調整閘道順序，Windows 版固定依 VPN1 → VPN2 → VPN3 嘗試。
 - 不會開機自動啟動、沒有自動更新、不能匯出 `.splitswan`、不支援 IPv6。
 - 公司端點防護或 Hyper-V 防火牆可能擋 WSL 轉發，只能實測。
-- WSL 只認 Ubuntu-24.04 這個發行版名稱。
+- SplitSwan.exe 的圖示與 Mac 版相同（`windows/tools/make-ico.sh` 由 Mac 版的 `tools/make-icon.swift` 產生）。
+- 連線引擎使用的發行版：新安裝是精靈匯入的 `SplitSwan`，舊版使用者沿用 `Ubuntu-24.04`。
+- 重開機後由 RunOnce 自動開啟：SplitSwan 需要系統管理員權限，Windows 可能不會在登入時自動啟動需要提權的程式；沒有自動開啟時請手動開 SplitSwan。
 - WSL 執行時，Windows 幾乎總是判定為「有網路」（WSL 的虛擬網卡一直是啟用狀態），所以「沒網路時暫停斷線計時與自動重連」在多數情況不會發生：真的斷網時仍可能跳斷線通知，開了自動重連也會照間隔重試（不會造成傷害，只是白試）。
 - **Modern Standby 的筆電**（多數 Windows 11 新筆電）睡眠時，Windows 不一定會通知 App「睡眠／喚醒」。SplitSwan 另外用「兩次狀態檢查間隔超過 90 秒」推定剛喚醒（只在想連線時處理），偵測可能晚十幾秒到一分鐘；若喚醒後內網連不到，直接按「連線」重新建立。
 - 判斷「換了網路」時，名稱以 vEthernet 開頭、或描述含 Hyper-V／Virtual／WSL 的網卡都當成虛擬網卡忽略；若你的實體網卡描述剛好含 Virtual，換網路時不會自動重建。
@@ -125,7 +131,9 @@ wsl --update --web-download
 ## 疑難排解
 
 - **按連線後一直是橘色**：第一次連線要在 Ubuntu 裡安裝 strongSwan，最多要幾分鐘；超過 5 分鐘會自動中止。打開「顯示引擎輸出」看卡在哪一步。
-- **顯示「WSL／Ubuntu 尚未安裝完成」**：用「首次安裝 WSL／Ubuntu…」，在跳出的視窗完成安裝。
+- **顯示「WSL 或發行版尚未安裝完成」**：用右鍵選單的「首次設定精靈…」。
+- **精靈卡在「安裝 WSL」一直要求重新開機**：重開後仍要求時，打開輸出區看「虛擬機器平台」的狀態；若是 Disabled，請確認 BIOS 虛擬化已開啟，或在系統管理員 PowerShell 執行 `wsl --install --no-distribution --web-download` 看錯誤訊息。
+- **精靈的下載失敗或 SHA256 不符**：按「重試」重新下載；公司網路擋 `releases.ubuntu.com` 時請換網路。
 - **顯示「沒有以系統管理員身分執行」**：結束 SplitSwan，重新開啟並允許 UAC。
 - **連上了但內部主機名稱解析不到**：在設定填「內部網域」，必要時填「內部 DNS」，再重新連線。
 - 回報問題時，附上「顯示引擎輸出」的內容，先把公司位址與帳號遮蔽。

@@ -22,8 +22,11 @@ internal static class EngineRunner
     /// <summary>程序結束後，最多再等多久讀到 stdout／stderr 的 EOF。</summary>
     private static readonly TimeSpan EofGrace = TimeSpan.FromSeconds(3);
 
+    /// <param name="distro">WSL 發行版（-Distro，契約 6：一律帶設定值）。</param>
     /// <param name="order">connect 的閘道嘗試順序（契約 3 的 -Order）；null＝不帶。其他動作忽略。</param>
-    public static async Task<EngineResult> RunAsync(EngineAction action, bool logOutput = true, IReadOnlyList<int>? order = null)
+    /// <param name="onLine">每一行輸出（stdout 與 stderr）另外回呼一次（首次設定精靈的輸出區用）；在背景執行緒呼叫。</param>
+    public static async Task<EngineResult> RunAsync(EngineAction action, string distro, bool logOutput = true,
+        IReadOnlyList<int>? order = null, Action<string>? onLine = null)
     {
         var missing = AppPaths.MissingEngineFiles();
         if (missing is not null)
@@ -43,9 +46,22 @@ internal static class EngineRunner
             WorkingDirectory = AppPaths.EngineDir,
         };
         // 背景執行一律帶 -NoInstall（契約 1）：WSL／Ubuntu 未安裝時引擎只回報「尚未安裝」，
-        // 不在沒有主控台的情況下開始互動式安裝；安裝只走「首次安裝」的可見視窗（RunVisibleAsync）
-        var args = EngineCommand.Arguments(action, AppPaths.EnginePs1, AppPaths.ConfDir, noInstall: true, order: order);
+        // 不在沒有主控台的情況下開始互動式安裝；WSL 與發行版只由「首次設定精靈」安裝（契約 6）
+        IReadOnlyList<string> args;
+        try
+        {
+            args = EngineCommand.Arguments(action, AppPaths.EnginePs1, AppPaths.ConfDir, noInstall: true, order: order, distro: distro);
+        }
+        catch (ArgumentException ex)
+        {
+            return EngineResult.Failed("無法組出引擎參數：" + ex.Message);
+        }
         foreach (var a in args) psi.ArgumentList.Add(a);
+        void Forward(string line)
+        {
+            try { onLine?.Invoke(line); } catch (Exception) { /* 視窗已關閉，不影響執行 */ }
+        }
+        if (onLine is not null) Forward("> powershell.exe " + string.Join(" ", args.Skip(4).Select(a => a.Contains(' ') ? $"\"{a}\"" : a)));
 
         var stdout = new List<string>();
         var stderr = new List<string>();
@@ -61,12 +77,14 @@ internal static class EngineRunner
             lock (stdout) stdout.Add(e.Data);
             // brief 每 15 秒一次，只在失敗時才把輸出寫進記錄
             if (logOutput) AppLog.Engine(e.Data);
+            Forward(e.Data);
         };
         p.ErrorDataReceived += (_, e) =>
         {
             if (e.Data is null) { errEof.TrySetResult(); return; }
             lock (stderr) stderr.Add(e.Data);
             if (logOutput) AppLog.Engine("[stderr] " + e.Data);
+            Forward("[stderr] " + e.Data);
         };
         p.Exited += (_, _) => exited.TrySetResult();
 
@@ -151,29 +169,6 @@ internal static class EngineRunner
         {
             AppLog.Error($"結束逾時的引擎程序失敗：{ex.Message}");
         }
-    }
-
-    /// <summary>
-    /// 在可見的 PowerShell 視窗執行引擎（首次安裝用：wsl --install 需要主控台建立 Ubuntu 帳號）。
-    /// 視窗結束時（使用者按 Enter 關閉）才完成；不設逾時，但重開機時程序會被結束，呼叫端要處理殘留的 secrets.conf。
-    /// 不帶 -NoInstall：這條路徑就是要讓引擎安裝。
-    /// </summary>
-    public static async Task<int?> RunVisibleAsync(EngineAction action)
-    {
-        var missing = AppPaths.MissingEngineFiles();
-        if (missing is not null) throw new InvalidOperationException($"找不到連線引擎：{missing}");
-        var psi = new ProcessStartInfo(AppPaths.PowerShellExe)
-        {
-            // UseShellExecute 才會開新的主控台視窗；App 已是管理員，子程序繼承權限，不會再跳 UAC
-            UseShellExecute = true,
-            WorkingDirectory = AppPaths.EngineDir,
-            Arguments = EngineCommand.JoinCommandLine(
-                EngineCommand.Arguments(action, AppPaths.EnginePs1, AppPaths.ConfDir, pauseAtEnd: true)),
-        };
-        using var p = Process.Start(psi) ?? throw new InvalidOperationException("無法開啟 PowerShell 視窗");
-        // 沒有重導向輸出，WaitForExitAsync 不會等管線
-        await p.WaitForExitAsync().ConfigureAwait(false);
-        try { return p.ExitCode; } catch (InvalidOperationException) { return null; }
     }
 
     private static string FormatSpan(TimeSpan t) =>

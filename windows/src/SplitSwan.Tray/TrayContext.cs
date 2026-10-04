@@ -22,7 +22,7 @@ internal sealed class TrayContext : ApplicationContext
     private readonly ToolStripMenuItem _disconnect = new("斷線");
     private readonly ToolStripMenuItem _settingsItem = new("設定…");
     private readonly ToolStripMenuItem _import = new("匯入 .splitswan…");
-    private readonly ToolStripMenuItem _install = new("首次安裝 WSL／Ubuntu…");
+    private readonly ToolStripMenuItem _install = new("首次設定精靈…");
     private readonly ToolStripMenuItem _showLog = new("顯示引擎輸出");
     private readonly ToolStripMenuItem _openLogDir = new("開啟記錄資料夾");
     private readonly ToolStripMenuItem _auto = new("自動重連") { CheckOnClick = false };
@@ -33,10 +33,12 @@ internal sealed class TrayContext : ApplicationContext
     private readonly UiWatchdog _watchdog;
     private LogForm? _logForm;
     private SettingsForm? _settingsForm;
+    private WizardForm? _wizardForm;
 
-    public TrayContext(SettingsLoadResult loaded)
+    /// <param name="wizardRequested">命令列帶 --wizard（重開機後由 RunOnce 開啟）：直接開精靈並自動繼續。</param>
+    public TrayContext(SettingsLoadResult loaded, bool wizardRequested = false)
     {
-        _vpn = new VpnCoordinator(loaded.Settings, AskOpenInstaller);
+        _vpn = new VpnCoordinator(loaded.Settings, OnInstallNeeded);
         // VpnCoordinator 已確認 SynchronizationContext.Current 存在（UI 執行緒）
         _ui = SynchronizationContext.Current!;
         _watchdog = new UiWatchdog(_ui);
@@ -68,7 +70,7 @@ internal sealed class TrayContext : ApplicationContext
         _disconnect.Click += (_, _) => _vpn.Disconnect();
         _settingsItem.Click += (_, _) => ShowSettings(importOnShow: false);
         _import.Click += (_, _) => ShowSettings(importOnShow: true);
-        _install.Click += (_, _) => FirstInstall();
+        _install.Click += (_, _) => ShowWizard(autoStart: false);
         _showLog.Click += (_, _) => ShowLog();
         _openLogDir.Click += (_, _) => LogForm.OpenLogFolder();
         _auto.Click += (_, _) => ToggleAuto();
@@ -99,10 +101,69 @@ internal sealed class TrayContext : ApplicationContext
             AppLog.Info("設定檔提示：" + w);
             Balloon("SplitSwan 設定", w, true);
         }
-        if (SettingsValidator.Validate(loaded.Settings.ToVpnSettings()).Count > 0)
-            Balloon("SplitSwan", "尚未設定：請在托盤圖示按右鍵 →「設定…」或「匯入 .splitswan…」", false);
-
         _vpn.Start();
+        Guard(() => OpenWizardIfNeededAsync(wizardRequested, ConfWriter.Validate(loaded.Settings).Count == 0));
+    }
+
+    /// <summary>
+    /// 啟動時要不要自動開首次設定精靈（契約 6）：重開機後繼續、設定不完整、或設定的發行版不存在。
+    /// 發行版查詢（wsl -l -q）在背景跑，不擋住托盤圖示出現。
+    /// </summary>
+    private async Task OpenWizardIfNeededAsync(bool requested, bool settingsValid)
+    {
+        var state = WizardStore.Load();
+        var resume = requested || state.RebootPending;
+        bool? exists = null;
+        if (!resume && settingsValid)
+        {
+            exists = await WizardSteps.DistroExistsAsync(_vpn, _vpn.Settings.Distro);
+            if (_disposed) return;
+            AppLog.Info(exists switch
+            {
+                true => $"WSL 發行版 {_vpn.Settings.Distro} 存在",
+                false => $"WSL 發行版 {_vpn.Settings.Distro} 不存在，開啟首次設定精靈",
+                null => "查不到 WSL 發行版清單（沒有 Store 版 WSL 或查詢失敗），不自動開精靈",
+            });
+        }
+        if (!WizardTrigger.ShouldAutoOpen(resume, settingsValid, exists)) return;
+        if (resume) AppLog.Info("繼續首次設定精靈（重新開機後）");
+        ShowWizard(autoStart: resume);
+    }
+
+    /// <summary>執行非同步工作；例外寫記錄並通知，不讓 App 結束。</summary>
+    private async void Guard(Func<Task> work)
+    {
+        try { await work(); }
+        catch (Exception ex)
+        {
+            AppLog.Error($"未預期的錯誤：{ex.GetType().Name}：{ex.Message}");
+            if (!_disposed) Balloon("SplitSwan 發生未預期的錯誤", ex.Message, true);
+        }
+    }
+
+    private void ShowWizard(bool autoStart)
+    {
+        if (_wizardForm is { IsDisposed: false })
+        {
+            if (_wizardForm.WindowState == FormWindowState.Minimized) _wizardForm.WindowState = FormWindowState.Normal;
+            _wizardForm.Activate();
+            return;
+        }
+        _wizardForm = new WizardForm(_vpn, ShowSettingsAsync, autoStart);
+        _wizardForm.Finished += () => Balloon("SplitSwan 設定完成", "之後從托盤圖示按右鍵就能連線／斷線", false);
+        _wizardForm.FormClosed += (_, _) => _wizardForm = null;
+        _wizardForm.Show();
+        _wizardForm.Activate();
+    }
+
+    /// <summary>精靈步驟 5：開設定視窗（可直接開始匯入），等它關閉後回傳已儲存的設定（取消為 null）。</summary>
+    private Task<StoredSettings?> ShowSettingsAsync(bool importOnShow)
+    {
+        var tcs = new TaskCompletionSource<StoredSettings?>();
+        var form = ShowSettings(importOnShow);
+        // 視窗已經開著（例如使用者先從托盤開了）：等同一個視窗關閉
+        form.FormClosed += (_, _) => tcs.TrySetResult(form.Saved);
+        return tcs.Task;
     }
 
     private void Redraw()
@@ -142,7 +203,7 @@ internal sealed class TrayContext : ApplicationContext
         foreach (var (style, item) in _iconStyleItems) item.Checked = style == s.IconStyle;
         _iconGreen.Checked = s.GreenWhenConnected;
         _disconnect.Enabled = state == TrayState.Connected || _vpn.WantConnected || busy;
-        _install.Enabled = !busy;
+        // 精靈可隨時開（它自己的步驟遇到忙碌會等使用者重試）
         _auto.Checked = _vpn.Settings.AutoReconnect;
     }
 
@@ -154,37 +215,23 @@ internal sealed class TrayContext : ApplicationContext
         _icon?.ShowBalloonTip(8000, title, body, isError ? ToolTipIcon.Warning : ToolTipIcon.Info);
     }
 
-    private bool AskOpenInstaller(string reason)
+    /// <summary>手動連線時引擎回報 WSL／發行版尚未安裝：問使用者要不要開首次設定精靈。</summary>
+    private void OnInstallNeeded(string reason)
     {
         var r = MessageBox.Show(
-            $"{reason}。\n\n第一次使用要在可見的視窗安裝 WSL 與 Ubuntu（要建立 Ubuntu 帳號，可能要重開機）。\n\n" +
-            "要現在開啟首次安裝視窗嗎？",
-            "SplitSwan － 需要首次安裝", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-        return r == DialogResult.Yes;
+            $"{reason}。\n\n首次設定精靈會自動安裝 WSL、下載並匯入 SplitSwan 專用的 Ubuntu（不需要建立帳號）、安裝 strongSwan，" +
+            "需要重新開機時會提示。\n\n要現在開啟精靈嗎？",
+            "SplitSwan － 需要首次設定", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        if (r == DialogResult.Yes) ShowWizard(autoStart: true);
     }
 
-    private void FirstInstall()
-    {
-        var ok = MessageBox.Show(
-            "會開一個 PowerShell 視窗執行連線引擎：\n\n" +
-            "1. 沒有 WSL 或 Ubuntu 時會開始安裝，請照畫面建立 Ubuntu 帳號（帳號密碼自訂，跟公司帳號無關）。\n" +
-            "2. 要求重開機就重開，重開後開啟 SplitSwan 按「連線」。\n" +
-            "3. 已安裝過時會直接連線。視窗最後會停住，看完按 Enter 關閉。\n\n" +
-            "用內建 Administrator 帳號時，安裝會改從網路下載（--web-download），不經 Microsoft Store。\n\n要開始嗎？",
-            "SplitSwan － 首次安裝", MessageBoxButtons.OKCancel, MessageBoxIcon.Information);
-        if (ok != DialogResult.OK) return;
-        var why = _vpn.StartFirstInstall();
-        if (why is not null)
-            MessageBox.Show(why, "SplitSwan － 首次安裝", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-    }
-
-    private void ShowSettings(bool importOnShow)
+    private SettingsForm ShowSettings(bool importOnShow)
     {
         if (_settingsForm is { IsDisposed: false })
         {
             _settingsForm.Activate();
             if (importOnShow) _settingsForm.StartImport();
-            return;
+            return _settingsForm;
         }
         // 自動重連取最新值：設定視窗開著時也可能從托盤切換
         _settingsForm = new SettingsForm(_vpn.Settings, () => _vpn.Settings.AutoReconnect, () => _vpn.Settings, importOnShow);
@@ -193,8 +240,10 @@ internal sealed class TrayContext : ApplicationContext
             if (_settingsForm?.Saved is { } saved) _vpn.UpdateSettings(saved);
             _settingsForm = null;
         };
-        _settingsForm.Show();
-        _settingsForm.Activate();
+        var form = _settingsForm;
+        form.Show();
+        form.Activate();
+        return form;
     }
 
     private void ShowLog()
@@ -310,6 +359,7 @@ internal sealed class TrayContext : ApplicationContext
             _menu.Dispose();
             _logForm?.Dispose();
             _settingsForm?.Dispose();
+            _wizardForm?.Dispose();
         }
         base.Dispose(disposing);
     }

@@ -6,7 +6,8 @@ internal static class Program
     private const string MutexName = @"Local\SplitSwan.Tray.SingleInstance";
 
     [STAThread]
-    private static void Main()
+    /// <param name="args">--wizard：開首次設定精靈並自動繼續（重開機後由 HKCU RunOnce 帶入，見 WizardStore）。</param>
+    private static void Main(string[] args)
     {
         using var mutex = new Mutex(initiallyOwned: true, MutexName, out var createdNew);
         if (!createdNew)
@@ -41,7 +42,7 @@ internal static class Program
         var loaded = SettingsStore.Load();
         try
         {
-            Application.Run(new TrayContext(loaded));
+            Application.Run(new TrayContext(loaded, SplitSwan.Core.RunOnceCommand.WantsWizard(args)));
         }
         finally
         {

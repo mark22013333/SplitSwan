@@ -12,6 +12,8 @@
     <RootNamespace>SplitSwan.Tray</RootNamespace>
     <AssemblyName>SplitSwan</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- exe 的圖示（檔案總管、工作列、UAC 視窗）：與 Mac 版同圖，由 windows/tools/make-ico.sh 產生 -->
+    <ApplicationIcon>app.ico</ApplicationIcon>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <Version>0.1.0</Version>
     <AssemblyVersion>0.1.0.0</AssemblyVersion>
@@ -20,6 +22,11 @@
     <Description>SplitSwan Windows 托盤 App（WSL2 strongSwan split tunnel）</Description>
     <SatelliteResourceLanguages>zh-Hant</SatelliteResourceLanguages>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 同一個圖示也嵌成資源，給各視窗的 Form.Icon 用（AppIcon.cs） -->
+    <EmbeddedResource Include="app.ico" LogicalName="SplitSwan.app.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\SplitSwan.Core\SplitSwan.Core.csproj" />

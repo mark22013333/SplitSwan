@@ -150,7 +150,8 @@ public class SettingsDocumentTests
     public void Broken_ReturnsEmptyWithWarning(string json)
     {
         var r = SettingsDocument.Deserialize(json, FakeUnprotect);
-        Assert.Equal(StoredSettings.Empty, r.Settings);
+        // 檔案存在但讀不懂＝舊版使用者：空白設定，但發行版沿用 Ubuntu-24.04（第三階段契約 6）
+        Assert.Equal(StoredSettings.Empty with { Distro = "Ubuntu-24.04" }, r.Settings);
         Assert.Single(r.Warnings);
     }
 

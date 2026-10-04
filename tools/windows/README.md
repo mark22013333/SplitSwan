@@ -35,15 +35,17 @@ Windows ──路由──▶ WSL2 Ubuntu（轉發＋SNAT 成虛擬 IP）──�
 ## 給開發者：命令列介面（托盤 App 用）
 
 ```
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File splitswan-wsl.ps1 -Action <connect|disconnect|status|brief> [-ConfDir <路徑>] [-Distro <名稱>] [-Domain <a,b>] [-DnsServer <a,b>] [-Order <n,n…>] [-NoInstall]
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File splitswan-wsl.ps1 -Action <connect|disconnect|status|brief|setup> [-ConfDir <路徑>] [-Distro <名稱>] [-Domain <a,b>] [-DnsServer <a,b>] [-Order <n,n…>] [-NoInstall]
 ```
 
+- `-Distro`：WSL 發行版名稱，所有動作（含保活程序、`wslpath`、`brief` 的執行中比對、重啟發行版）都用它。省略時用 `options.ini` 的 `Distro=`，再沒有就是 `Ubuntu-24.04`（既有安裝維持原樣）。托盤 App 首次設定精靈匯入的專用發行版叫 `SplitSwan`。名稱首字須為英數字（以 `-` 開頭會被 wsl.exe 當成參數），其餘只接受英數字與 `. _ -`、最多 64 字元，其他一律回 `@@RESULT=fail`，不會被拼進任何命令列。
 - `-ConfDir`：設定檔資料夾（`swanctl.conf`、`secrets.conf`、選用的 `options.ini`），省略時用腳本旁的 `conf\`。相對路徑以目前目錄為準。
 - 每個 Action 結束時，stdout 最後一行一定是 `@@RESULT=ok` 或 `@@RESULT=fail:<原因>`，結束碼 ok=0、fail=1。其他行是給人看的進度。
 - `connect` 成功時，在 `@@RESULT` 前多輸出 `@@GATEWAY=vpnN`、`@@VIP=<虛擬 IP>`。
 - `brief`：輪詢用，**不提權、不寫記錄檔、不啟動 WSL**。發行版沒在跑就直接回 `@@STATE=down`；在跑才進去讀 `swanctl --list-sas`，有 ESTABLISHED 的 IKE_SA 且 child `corp` 為 INSTALLED 才算 `@@STATE=up`（並輸出 `@@GATEWAY`、`@@VIP`）。對 WSL 的查詢限時約 6 秒；查詢本身失敗或逾時回 `@@STATE=unknown` 與 `@@RESULT=fail`（不代表斷線）。
 - `-Order`：`connect` 的閘道嘗試順序，1 起算的編號、逗號分隔（例 `2,1,3`、單一 `2`），重複的編號只試一次；省略時依設定檔的 `vpn1..N`。編號不在 `swanctl.conf` 裡時，不做任何事直接回 `@@RESULT=fail:閘道編號 N 不存在`。連上一台就不再試後面的。
 - `connect` 每試完一台就輸出一行 `@@ATTEMPT=<n>|<ok|fail>|<秒數，一位小數>|<摘要>`（在 `@@RESULT` 之前，省略 `-Order` 時也有）。摘要是失敗時 `swanctl --initiate` 最後一行訊息（去掉換行與 `|`，最多 200 字元），沒有輸出時是「swanctl 結束碼 N」；成功時是空字串。同一個 key 會出現多行，要逐行讀。
+- `setup`：只做 WSL 內的準備（開啟 systemd、安裝 strongSwan 套件、載入核心模組、設定 `swanctl.load`），不需要 `swanctl.conf`／`secrets.conf`（`options.ini` 的 `Distro=` 照樣有效）、不連線、不改 Windows 路由；剛開啟 systemd 時會自動重啟發行版再跑一次。WSL 或發行版不存在時直接回 `@@RESULT=fail:尚未安裝…`，**永不**執行 `wsl --install`（不論有沒有 `-NoInstall`）。不提權：在目前的使用者底下執行，才不會操作到別的管理員帳號的發行版。
 - `-NoInstall`：`connect` 遇到 WSL 或發行版未安裝時不啟動安裝，直接回 `@@RESULT=fail:尚未安裝…`。
 - 不是系統管理員時，`connect`／`disconnect`／`status` 會另開 UAC 提權視窗執行，原本的程序回 `@@RESULT=fail`。托盤 App 應以系統管理員身分執行。
 - `setup` 會寫入 WSL 內的 `/etc/strongswan.d/zz-splitswan-swanctl.conf`，讓 `swanctl` 只載入已安裝的外掛（Ubuntu 沒裝 `libstrongswan-extra-plugins` 時，`swanctl` 預設會每次印一串 `failed to load`）。只影響 `swanctl` 指令，不影響 charon。

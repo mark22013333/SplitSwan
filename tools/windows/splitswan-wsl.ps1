@@ -6,12 +6,15 @@ SplitSwan Windows 實驗版：用 WSL2 裡的 Linux strongSwan 連 FortiGate（s
   .\splitswan-wsl.ps1 -Action disconnect
   .\splitswan-wsl.ps1 -Action status
   .\splitswan-wsl.ps1 -Action brief      ← 給托盤 App 輪詢：不提權、不啟動 WSL、不寫記錄檔
+  .\splitswan-wsl.ps1 -Action setup      ← 只在 WSL 內安裝 strongSwan（給首次設定精靈用）：不提權、不連線、不需要設定檔
 
 機讀輸出（給托盤 App）：每個 Action 結束時 stdout 最後一行是 @@RESULT=ok 或 @@RESULT=fail:<原因>，
 結束碼 ok=0、fail=1。connect 成功另外輸出 @@GATEWAY=、@@VIP=。
 brief 輸出 @@STATE=up|down|unknown：up 時加 @@GATEWAY、@@VIP；unknown＝查詢本身失敗或逾時（約 6 秒），
 不代表斷線，此時 @@RESULT=fail。
 -NoInstall：connect 遇到 WSL 或發行版未安裝時不啟動安裝，直接回 @@RESULT=fail:尚未安裝…（托盤 App 用）。
+-Distro <名稱>：WSL 發行版名稱（首字須為英數字，其餘只接受英數字與 . _ -，最多 64 字元），省略時用 options.ini 的 Distro，再沒有就是 Ubuntu-24.04。
+setup：WSL 或發行版不存在時直接回 @@RESULT=fail:尚未安裝…，永不執行 wsl --install。
 -Order 2,1,3：connect 依此順序嘗試閘道（1 起算的編號；省略＝vpn1..N 依編號）。每台嘗試完輸出一行
 @@ATTEMPT=<n>|<ok|fail>|<秒數>|<失敗摘要>（同一 key 多行，要逐行讀）；編號不存在回 @@RESULT=fail:閘道編號 N 不存在。
 
@@ -23,10 +26,10 @@ brief 輸出 @@STATE=up|down|unknown：up 時加 @@GATEWAY、@@VIP；unknown＝�
 限制：只支援 WSL 預設的 NAT 網路模式；睡眠喚醒或換網路後請手動 disconnect 再 connect。
 #>
 param(
-    [ValidateSet('connect', 'disconnect', 'status', 'brief')]
+    [ValidateSet('connect', 'disconnect', 'status', 'brief', 'setup')]
     [string]$Action = 'connect',
     [string]$ConfDir,     # 設定檔資料夾；省略時用本腳本旁的 conf\
-    [string]$Distro,
+    [string]$Distro,      # WSL 發行版名稱；省略時用 options.ini 的 Distro，再沒有就是 $DefaultDistro
     [string]$Domain,      # 內部網域，逗號分隔，例如 corp.example,ad.corp.example
     [string]$DnsServer,   # 內部 DNS，逗號分隔；省略時用 strongSwan 拿到的
     [string]$TestHost,    # 連上後測試的內部主機
@@ -42,6 +45,7 @@ $OutputEncoding = New-Object Text.UTF8Encoding $false
 $env:WSL_UTF8 = '1'
 
 $NrptComment = 'SplitSwan-WSL'
+$DefaultDistro = 'Ubuntu-24.04'
 if ($ConfDir) {
     # 提權重開後工作目錄會變，先轉成絕對路徑；去掉結尾的 \，免得傳參數時跳脫掉結尾的引號
     if (-not [IO.Path]::IsPathRooted($ConfDir)) { $ConfDir = Join-Path (Get-Location).ProviderPath $ConfDir }
@@ -61,12 +65,28 @@ function Write-ResultLine([string]$failReason) {
     }
 }
 
+# 發行版名稱會被拼進 wsl.exe 的命令列（含提權重開與 brief 自組的參數字串），只接受固定字元
+# 首字元限英數字：以 - 開頭的名稱會被 wsl.exe 當成參數（例 -u）
+# 用 -cmatch：不分大小寫比對時 [A-Za-z] 會連 U+212A（克氏溫標符號）也接受；\z 才不會放過結尾換行
+function Test-DistroName([string]$name) {
+    return ($name -cmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z')
+}
+
 # brief 每 15 秒輪詢一次：不提權、不寫記錄檔（其餘 Action 照舊）
 $IsBrief = ($Action -eq 'brief')
 
+# 命令列給的 -Distro 在提權重開之前就檢查，不合法的值不會被轉傳
+if ($Distro -and -not (Test-DistroName $Distro)) {
+    if ($IsBrief) { Write-Host '@@STATE=unknown' }
+    Write-ResultLine '發行版名稱不合法（首字須為英數字，其餘只接受英數字與 . _ -，最多 64 字元）'
+    exit 1
+}
+
 # ── 提權：不是系統管理員就用 UAC 重新啟動自己 ─────────────────────────
+# setup 只動 WSL 內部（以 WSL 的 root 執行），不需要 Windows 管理員；也不能提權：
+# 換成別的管理員帳號執行時，會操作到那個帳號底下的發行版
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-if (-not $IsBrief -and -not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+if (-not $IsBrief -and $Action -ne 'setup' -and -not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-Action', $Action, '-PauseAtEnd')
     foreach ($name in 'ConfDir', 'Distro', 'Domain', 'DnsServer', 'TestHost', 'Order') {
         $v = Get-Variable -Name $name -ValueOnly
@@ -261,6 +281,40 @@ function Remove-SplitSwanNrpt {
     }
 }
 
+# WSL 內的準備：systemd、strongSwan 套件、核心模組、swanctl.load（connect 第 3 步與 setup 共用）
+# 回 10＝剛開啟 systemd，要重啟發行版後再跑一次
+function Invoke-WslSetup {
+    $r = Invoke-Sh @('setup')
+    if ($r.Code -eq 10) {
+        Write-Warn2 '已開啟 systemd，重新啟動 WSL…'
+        Invoke-Wsl -Argv @('--terminate', $Distro) -Quiet | Out-Null
+        Start-Sleep -Seconds 3
+        # WSL 常回 degraded（非 0），只用來等開機完成，結果不判斷
+        Invoke-Wsl -Argv @('-d', $Distro, '-u', 'root', '--exec', 'systemctl', 'is-system-running', '--wait') -Quiet | Out-Null
+        $r = Invoke-Sh @('setup')
+        if ($r.Code -eq 10) { throw 'WSL 重啟後 systemd 仍未啟用。請在 Windows 執行 wsl --update --web-download 後重試' }
+    }
+    if ($r.Code -ne 0) { throw "WSL setup 失敗（結束碼 $($r.Code)）" }
+    if ((Get-Results $r.Lines).MODULES -eq 'fail') { Write-Warn2 '核心模組載入失敗，連線可能在建立 CHILD SA 時失敗（見上方訊息）' }
+    Write-Ok '完成'
+}
+
+# ── 首次設定（setup）──────────────────────────────────────────────────
+# 只做 WSL 內的準備，不讀設定檔、不連線、不改 Windows 路由；WSL 或發行版不存在時永不安裝
+function Invoke-Setup {
+    Write-Step "1/2 檢查 WSL 與 $Distro"
+    switch (Get-WslState) {
+        'nowsl'    { $script:FailReason = "尚未安裝 WSL，請先完成首次設定的「安裝 WSL」步驟"; return }
+        'nodistro' { $script:FailReason = "尚未安裝 $Distro 發行版，請先完成首次設定的「匯入發行版」步驟"; return }
+        'wsl1'     { throw "$Distro 是 WSL1，請先執行：wsl --set-version $Distro 2" }
+    }
+    Write-Ok "$Distro 已安裝（WSL2）"
+
+    Write-Step '2/2 WSL 內安裝 strongSwan（第一次會比較久）'
+    Invoke-WslSetup
+    Write-Host "`nstrongSwan 已就緒。" -ForegroundColor Green
+}
+
 # ── 連線 ────────────────────────────────────────────────────────────────
 function Invoke-Connect {
     Write-Step '1/6 檢查設定檔'
@@ -311,19 +365,7 @@ function Invoke-Connect {
     Write-Ok "$Distro 已安裝（WSL2）"
 
     Write-Step '3/6 WSL 內安裝 strongSwan（第一次會比較久）'
-    $r = Invoke-Sh @('setup')
-    if ($r.Code -eq 10) {
-        Write-Warn2 '已開啟 systemd，重新啟動 WSL…'
-        Invoke-Wsl -Argv @('--terminate', $Distro) -Quiet | Out-Null
-        Start-Sleep -Seconds 3
-        # WSL 常回 degraded（非 0），只用來等開機完成，結果不判斷
-        Invoke-Wsl -Argv @('-d', $Distro, '-u', 'root', '--exec', 'systemctl', 'is-system-running', '--wait') -Quiet | Out-Null
-        $r = Invoke-Sh @('setup')
-        if ($r.Code -eq 10) { throw 'WSL 重啟後 systemd 仍未啟用。請在 Windows 執行 wsl --update --web-download 後重試' }
-    }
-    if ($r.Code -ne 0) { throw "WSL setup 失敗（結束碼 $($r.Code)）" }
-    if ((Get-Results $r.Lines).MODULES -eq 'fail') { Write-Warn2 '核心模組載入失敗，連線可能在建立 CHILD SA 時失敗（見上方訊息）' }
-    Write-Ok '完成'
+    Invoke-WslSetup
 
     Write-Step '清除上一次的連線狀態'
     Clear-Connection
@@ -516,7 +558,9 @@ try {
         $script:Transcribing = $true
     }
     $opt = Read-Options
-    if (-not $Distro)    { $Distro = if ($opt.Distro) { $opt.Distro } else { 'Ubuntu-24.04' } }
+    if (-not $Distro)    { $Distro = if ($opt.Distro) { $opt.Distro } else { $DefaultDistro } }
+    # options.ini 來的值也要過同一道檢查
+    if (-not (Test-DistroName $Distro)) { throw '發行版名稱不合法（首字須為英數字，其餘只接受英數字與 . _ -，最多 64 字元）' }
     if (-not $Domain)    { $Domain = $opt.Domain }
     if (-not $DnsServer) { $DnsServer = $opt.DnsServer }
     if (-not $TestHost)  { $TestHost = $opt.TestHost }
@@ -528,6 +572,7 @@ try {
         'disconnect' { Invoke-Disconnect }
         'status'     { Invoke-Status }
         'brief'      { Invoke-Brief }
+        'setup'      { Invoke-Setup }
     }
 } catch {
     if (-not $script:FailReason) { $script:FailReason = $_.Exception.Message }

@@ -21,6 +21,12 @@ public sealed record StoredSettings(
     /// <summary>已連線時圖示顯示綠色（非機密）；舊版 settings.json 沒有這欄時為關閉（同 Mac 預設）。</summary>
     public bool GreenWhenConnected { get; init; }
 
+    /// <summary>
+    /// 連線引擎使用的 WSL 發行版（-Distro，契約 6）。全新安裝＝精靈匯入的 SplitSwan；
+    /// 舊版 settings.json 沒有這欄＝第一、二階段用 wsl --install 裝的 Ubuntu-24.04。
+    /// </summary>
+    public string Distro { get; init; } = WslDistros.SplitSwan;
+
     /// <summary>全新安裝的預設值：全部空白、自動重連關閉。</summary>
     public static StoredSettings Empty { get; } = new("", "", "", ["", "", ""], [], "", "", false);
 
@@ -57,6 +63,7 @@ public static class SettingsDocument
             ["autoReconnect"] = s.AutoReconnect,
             ["iconStyle"] = s.IconStyle.ToString(),
             ["iconGreenWhenConnected"] = s.GreenWhenConnected,
+            ["distro"] = s.Distro,
         };
         return o.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
@@ -73,10 +80,11 @@ public static class SettingsDocument
         JsonObject? o;
         try { o = JsonNode.Parse(json ?? "") as JsonObject; }
         catch (JsonException) { o = null; }
+        // settings.json 存在但讀不懂：使用者是舊版裝過的人，發行版沿用 Ubuntu-24.04（不要因此重新下載匯入）
         if (o is null)
-            return new(StoredSettings.Empty, ["設定檔已損毀，已改用空白設定，請重新填寫或匯入"]);
+            return new(StoredSettings.Empty with { Distro = WslDistros.Legacy }, ["設定檔已損毀，已改用空白設定，請重新填寫或匯入"]);
         if (ReadInt(o, "version") != Version)
-            return new(StoredSettings.Empty, ["設定檔版本不支援，已改用空白設定，請重新填寫或匯入"]);
+            return new(StoredSettings.Empty with { Distro = WslDistros.Legacy }, ["設定檔版本不支援，已改用空白設定，請重新填寫或匯入"]);
 
         var gateways = ReadStringList(o, "gateways");
         while (gateways.Count < 3) gateways.Add("");
@@ -93,8 +101,21 @@ public static class SettingsDocument
             // 圖示兩欄是第二階段新增的：舊檔沒有 → 預設值；不認得的樣式名稱 → 盾牌鎖（TrayIconCatalog.Parse）
             IconStyle = TrayIconCatalog.Parse(o["iconStyle"] is JsonValue sv && sv.TryGetValue<string>(out var st) ? st : null),
             GreenWhenConnected = ReadBool(o, "iconGreenWhenConnected"),
+            Distro = ReadDistro(o, warnings),
         };
         return new(s, warnings);
+    }
+
+    /// <summary>
+    /// distro 是第三階段新增的：檔案已存在但沒有這欄（舊版使用者）→ Ubuntu-24.04（契約 6）；
+    /// 名稱不合法（只接受英數與 . _ -）→ 同樣改用 Ubuntu-24.04 並提示。
+    /// </summary>
+    private static string ReadDistro(JsonObject o, List<string> warnings)
+    {
+        if (o["distro"] is not JsonValue v || !v.TryGetValue<string>(out var d) || d.Length == 0) return WslDistros.Legacy;
+        if (WslDistros.IsValidName(d)) return d;
+        warnings.Add($"設定檔的 WSL 發行版名稱不正確，已改用 {WslDistros.Legacy}");
+        return WslDistros.Legacy;
     }
 
     private static string ProtectText(string plain, Func<byte[], byte[]> protect) =>
