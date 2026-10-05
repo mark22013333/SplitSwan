@@ -266,7 +266,8 @@ internal sealed class TrayContext : ApplicationContext
         // 自動重連取最新值：設定視窗開著時也可能從托盤切換
         _settingsForm = new SettingsForm(_vpn.Settings, () => _vpn.Settings.AutoReconnect, () => _vpn.Settings, importOnShow,
             history: _vpn.History, connectedGateway: () => _vpn.State == TrayState.Connected ? _vpn.ConnectedGateway : null,
-            displayApplied: s => _vpn.UpdateSettings(s));   // 顯示設定切換即生效：觸發 Changed → 重畫圖示與面板
+            displayApplied: s => _vpn.UpdateSettings(s),   // 顯示設定切換即生效：觸發 Changed → 重畫圖示與面板
+            vpn: _vpn);   // 一鍵檢查：加入網段後由設定頁自己套用並重新連線（不經下面的 Saved）
         _settingsForm.FormClosed += (_, _) =>
         {
             if (_settingsForm?.Saved is { } saved) _vpn.UpdateSettings(saved);
