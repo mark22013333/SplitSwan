@@ -10,6 +10,9 @@ internal sealed class TrayContext : ApplicationContext
     private readonly NotifyIcon _icon;
     private readonly TrayIcons _icons = new();
     private readonly VpnCoordinator _vpn;
+    private readonly UpdateCenter _updates;
+    /// <summary>選單最上方「有新版本 X，前往更新…」：只有檢查到新版本時才顯示。</summary>
+    private readonly ToolStripMenuItem _updateItem = new() { Available = false };
     private readonly ContextMenuStrip _menu = new();
     /// <summary>選單最上方的狀態列（狀態＋閘道，下一行虛擬 IP 或說明）。</summary>
     private readonly MenuHeaderItem _header = new();
@@ -39,9 +42,15 @@ internal sealed class TrayContext : ApplicationContext
     private StatusFlyout? _flyout;
 
     /// <param name="wizardRequested">命令列帶 --wizard（重開機後由 RunOnce 開啟）：直接開精靈並自動繼續。</param>
-    public TrayContext(SettingsLoadResult loaded, bool wizardRequested = false)
+    /// <param name="afterUpdate">命令列帶 --after-update（一鍵更新啟動的新版）：顯示「已更新」通知。</param>
+    public TrayContext(SettingsLoadResult loaded, bool wizardRequested = false, bool afterUpdate = false)
     {
         _vpn = new VpnCoordinator(loaded.Settings, OnInstallNeeded);
+        _updates = new UpdateCenter(_vpn, s => _vpn.UpdateSettings(s), ExitForUpdate);
+        _updates.Changed += Redraw;
+        _updates.NewVersionNotice += v =>
+            Balloon("SplitSwan 有新版本", $"{v} 已發布。從托盤選單最上方的「有新版本 {v}，前往更新…」安裝", false);
+        _updateItem.Click += (_, _) => ShowSettings(importOnShow: false);
         // VpnCoordinator 已確認 SynchronizationContext.Current 存在（UI 執行緒）
         _ui = SynchronizationContext.Current!;
         _watchdog = new UiWatchdog(_ui);
@@ -81,7 +90,7 @@ internal sealed class TrayContext : ApplicationContext
 
         _menu.Items.AddRange(
         [
-            _header, new ToolStripSeparator(),
+            _updateItem, _header, new ToolStripSeparator(),
             _connect, _connectGw[0], _connectGw[1], _connectGw[2], _disconnect, new ToolStripSeparator(),
             _settingsItem, _import, _install, new ToolStripSeparator(),
             _showLog, _openLogDir, _auto, _iconMenu, new ToolStripSeparator(),
@@ -109,6 +118,12 @@ internal sealed class TrayContext : ApplicationContext
             Balloon("SplitSwan 設定", w, true);
         }
         _vpn.Start();
+        _updates.StartAutoCheck();
+        if (afterUpdate)
+        {
+            AppLog.Info($"已更新為 {UpdateCenter.CurrentVersion}");
+            Balloon("SplitSwan 已更新", $"目前版本 {UpdateCenter.CurrentVersion}。VPN 通道若原本連著，會沿用不中斷", false);
+        }
         Guard(() => OpenWizardIfNeededAsync(wizardRequested, ConfWriter.Validate(loaded.Settings).Count == 0));
     }
 
@@ -212,6 +227,9 @@ internal sealed class TrayContext : ApplicationContext
         _disconnect.Enabled = state == TrayState.Connected || _vpn.WantConnected || busy;
         // 精靈可隨時開（它自己的步驟遇到忙碌會等使用者重試）
         _auto.Checked = _vpn.Settings.AutoReconnect;
+        var newer = _updates.NewerVersion;
+        _updateItem.Available = newer is not null;
+        if (newer is not null) _updateItem.Text = $"有新版本 {newer}，前往更新…";
     }
 
     private void ToggleFlyout()
@@ -267,7 +285,8 @@ internal sealed class TrayContext : ApplicationContext
         _settingsForm = new SettingsForm(_vpn.Settings, () => _vpn.Settings.AutoReconnect, () => _vpn.Settings, importOnShow,
             history: _vpn.History, connectedGateway: () => _vpn.State == TrayState.Connected ? _vpn.ConnectedGateway : null,
             displayApplied: s => _vpn.UpdateSettings(s),   // 顯示設定切換即生效：觸發 Changed → 重畫圖示與面板
-            vpn: _vpn);   // 一鍵檢查：加入網段後由設定頁自己套用並重新連線（不經下面的 Saved）
+            vpn: _vpn,    // 一鍵檢查：加入網段後由設定頁自己套用並重新連線（不經下面的 Saved）
+            updates: _updates);
         _settingsForm.FormClosed += (_, _) =>
         {
             if (_settingsForm?.Saved is { } saved) _vpn.UpdateSettings(saved);
@@ -337,6 +356,12 @@ internal sealed class TrayContext : ApplicationContext
     private async void Exit()
     {
         if (_exiting) return;
+        if (_updates.IsInstalling)
+        {
+            MessageBox.Show("正在下載或安裝更新，請等它完成（完成後會自動重新開啟）。",
+                "SplitSwan", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
         if (_vpn.IsBusy)
         {
             MessageBox.Show("目前有連線／斷線動作在進行中，請等它完成再結束（中途結束可能留下一半的設定）。",
@@ -379,11 +404,26 @@ internal sealed class TrayContext : ApplicationContext
         }
     }
 
+    /// <summary>
+    /// 一鍵更新：新版已啟動，結束目前的 App。不斷線——新版啟動後的第一次 brief 會看到既有通道並接手
+    /// （VpnCoordinator.ApplyBrief「啟動時偵測到既有通道」），保活程序是引擎另外啟動的程序，不會跟著本程序結束。
+    /// 「斷線並結束」的先斷線是因為 App 關掉後托盤沒有圖示；更新時新版馬上出現，不會有看不見的通道。
+    /// </summary>
+    private void ExitForUpdate()
+    {
+        if (_exiting) return;
+        _exiting = true;
+        AppLog.Info("為更新而結束（不斷線，新版會接手既有通道）");
+        ConfWriter.DeleteSecrets();
+        ExitThread();
+    }
+
     protected override void Dispose(bool disposing)
     {
         if (disposing)
         {
             _disposed = true;
+            _updates.Dispose();
             SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
             Theme.Changed -= OnThemeChanged;
             _watchdog.Dispose();

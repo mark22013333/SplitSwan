@@ -33,6 +33,9 @@ public sealed record StoredSettings(
     /// </summary>
     public bool ShowSubnetList { get; init; }
 
+    /// <summary>每天自動檢查更新（同 Mac 版 AutoCheckUpdates）；舊版 settings.json 沒有這欄時為關閉。</summary>
+    public bool AutoCheckUpdates { get; init; }
+
     /// <summary>全新安裝的預設值：全部空白、自動重連關閉。</summary>
     public static StoredSettings Empty { get; } = new("", "", "", ["", "", ""], [], "", "", false);
 
@@ -71,6 +74,7 @@ public static class SettingsDocument
             ["iconGreenWhenConnected"] = s.GreenWhenConnected,
             ["distro"] = s.Distro,
             ["showSubnetList"] = s.ShowSubnetList,
+            ["autoCheckUpdates"] = s.AutoCheckUpdates,
         };
         return o.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
@@ -111,6 +115,8 @@ public static class SettingsDocument
             Distro = ReadDistro(o, warnings),
             // 第四階段新增：舊檔沒有這欄（或不是布林）→ 關閉
             ShowSubnetList = ReadBool(o, "showSubnetList"),
+            // 一鍵更新新增：舊檔沒有這欄（或不是布林）→ 關閉（預設不連網檢查）
+            AutoCheckUpdates = ReadBool(o, "autoCheckUpdates"),
         };
         return new(s, warnings);
     }

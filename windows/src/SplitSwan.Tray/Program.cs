@@ -6,11 +6,15 @@ internal static class Program
     private const string MutexName = @"Local\SplitSwan.Tray.SingleInstance";
 
     [STAThread]
-    /// <param name="args">--wizard：開首次設定精靈並自動繼續（重開機後由 HKCU RunOnce 帶入，見 WizardStore）。</param>
+    /// <param name="args">
+    /// --wizard：開首次設定精靈並自動繼續（重開機後由 HKCU RunOnce 帶入，見 WizardStore）。
+    /// --after-update：一鍵更新啟動的新版（UpdateCenter）：先等舊版結束。
+    /// </param>
     private static void Main(string[] args)
     {
+        var afterUpdate = SplitSwan.Core.UpdateRules.IsAfterUpdate(args);
         using var mutex = new Mutex(initiallyOwned: true, MutexName, out var createdNew);
-        if (!createdNew)
+        if (!createdNew && !(afterUpdate && WaitForPreviousInstance(mutex)))
         {
             MessageBox.Show("SplitSwan 已經在執行中，請看工作列右下角的通知區域（可能收在「^」裡）。",
                 "SplitSwan", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -32,6 +36,9 @@ internal static class Program
         // ProductVersion 可能帶「+git 版本」，記錄只留版本號
         AppLog.Info($"SplitSwan {Application.ProductVersion.Split('+')[0]} 啟動");
 
+        // 一鍵更新替換時留下的 *.old／*.new：舊版已結束，現在可以清掉（失敗只記錄，下次啟動再試）
+        CleanupUpdateLeftovers(afterUpdate);
+
         // 上次若在連線中途被結束（當機、重開機），secrets.conf 可能留著：一律先清掉
         if (File.Exists(AppPaths.SecretsConf))
         {
@@ -42,13 +49,54 @@ internal static class Program
         var loaded = SettingsStore.Load();
         try
         {
-            Application.Run(new TrayContext(loaded, SplitSwan.Core.RunOnceCommand.WantsWizard(args)));
+            Application.Run(new TrayContext(loaded, SplitSwan.Core.RunOnceCommand.WantsWizard(args), afterUpdate));
         }
         finally
         {
             ConfWriter.DeleteSecrets();
             AppLog.Close();
             mutex.ReleaseMutex();
+        }
+    }
+
+    /// <summary>
+    /// 一鍵更新：舊版啟動新版後才結束，新版要等它釋放 mutex（最多 60 秒）。
+    /// 舊版異常結束時 mutex 會變成 abandoned，視同已取得。回傳是否已取得 mutex。
+    /// </summary>
+    private static bool WaitForPreviousInstance(Mutex mutex)
+    {
+        try { return mutex.WaitOne(TimeSpan.FromSeconds(60)); }
+        catch (AbandonedMutexException) { return true; }
+    }
+
+    private static void CleanupUpdateLeftovers(bool afterUpdate)
+    {
+        try
+        {
+            var (removed, failed) = SplitSwan.Core.UpdatePackage.CleanupLeftovers(AppContext.BaseDirectory);
+            if (removed.Count > 0) AppLog.Info($"已清除更新留下的舊檔：{string.Join("、", removed)}");
+            if (failed.Count > 0) AppLog.Info($"更新留下的舊檔清除失敗（下次啟動再試）：{string.Join("、", failed)}");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            AppLog.Info($"清除更新留下的舊檔失敗：{ex.Message}");
+        }
+        if (!afterUpdate) return;
+        // 解壓用的暫存資料夾（%TEMP%\SplitSwan-update-*）：舊版結束後才刪得掉
+        try
+        {
+            foreach (var d in Directory.EnumerateDirectories(Path.GetTempPath(), "SplitSwan-update-*"))
+            {
+                try { Directory.Delete(d, recursive: true); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    AppLog.Info($"更新暫存資料夾清除失敗：{d}：{ex.Message}");
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            AppLog.Info($"列出更新暫存資料夾失敗：{ex.Message}");
         }
     }
 }

@@ -18,6 +18,8 @@ internal static class AppPaths
     public static string SettingsFile { get; } = Path.Combine(DataDir, "settings.json");
     /// <summary>F4 閘道連線紀錄（非機密：只有編號、位址、成敗、耗時、時間）。</summary>
     public static string GatewayHistoryFile { get; } = Path.Combine(DataDir, "gateway-history.json");
+    /// <summary>檢查更新的紀錄（上次檢查時間、已通知過的版本；非機密）。</summary>
+    public static string UpdateCheckFile { get; } = Path.Combine(DataDir, "update-check.json");
     /// <summary>首次設定精靈的進度（重開機後從中斷處繼續）。</summary>
     public static string WizardFile { get; } = Path.Combine(DataDir, "wizard.json");
     /// <summary>精靈匯入的 SplitSwan 發行版位置（ext4.vhdx 放這裡，契約 6）。</summary>
