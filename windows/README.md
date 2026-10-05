@@ -1,4 +1,4 @@
-# SplitSwan for Windows（0.1.0，實驗版）
+# SplitSwan for Windows（0.1.1，實驗版）
 
 SplitSwan 是公司 VPN 的 split tunnel 用戶端：只有公司網段走 VPN，其他流量照常走自己的網路。Windows 版是一個**通知區域（托盤）App**，背後用 WSL2 裡的 Linux strongSwan 連公司的 FortiGate，再由 Windows 路由把公司網段導進去：
 
@@ -18,7 +18,7 @@ Windows ──路由──▶ WSL2 發行版 SplitSwan（Ubuntu 24.04＋strongSw
 
 ## 安裝
 
-1. 把 `SplitSwan-Windows-0.1.0.zip` 解壓到**自己的使用者目錄底下**，例如 `%UserProfile%\SplitSwan`。`SplitSwan.exe` 旁邊的 `engine` 資料夾是連線引擎，兩者要放在一起，不要只複製 exe。
+1. 把 `SplitSwan-Windows-0.1.1.zip` 解壓到**自己的使用者目錄底下**，例如 `%UserProfile%\SplitSwan`。`SplitSwan.exe` 旁邊的 `engine` 資料夾是連線引擎，兩者要放在一起，不要只複製 exe。
 2. 雙擊 `SplitSwan.exe`，允許 UAC。exe 沒有程式碼簽章，第一次執行時 SmartScreen 可能顯示「Windows 已保護您的電腦」，按「其他資訊」→「仍要執行」。
 3. 右下角通知區域會出現 SplitSwan 的圖示（預設是盾牌，可能收在「^」裡）。第一次執行時會自動開「首次設定精靈」。
 

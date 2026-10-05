@@ -15,9 +15,9 @@
     <!-- exe 的圖示（檔案總管、工作列、UAC 視窗）：與 Mac 版同圖，由 windows/tools/make-ico.sh 產生 -->
     <ApplicationIcon>app.ico</ApplicationIcon>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
-    <Version>0.1.0</Version>
-    <AssemblyVersion>0.1.0.0</AssemblyVersion>
-    <FileVersion>0.1.0.0</FileVersion>
+    <Version>0.1.1</Version>
+    <AssemblyVersion>0.1.1.0</AssemblyVersion>
+    <FileVersion>0.1.1.0</FileVersion>
     <Product>SplitSwan</Product>
     <Description>SplitSwan Windows 托盤 App（WSL2 strongSwan split tunnel）</Description>
     <SatelliteResourceLanguages>zh-Hant</SatelliteResourceLanguages>
