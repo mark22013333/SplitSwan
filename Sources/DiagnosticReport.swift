@@ -85,7 +85,7 @@ enum DiagnosticReport {
         return Array(out.prefix(maxTargets))
     }
 
-    private static func ipv4(_ s: String) -> UInt32? {
+    static func ipv4(_ s: String) -> UInt32? {
         let p = s.split(separator: ".", omittingEmptySubsequences: false)
         guard p.count == 4 else { return nil }
         var v: UInt32 = 0
@@ -98,7 +98,7 @@ enum DiagnosticReport {
         return v
     }
 
-    private static func ipv4String(_ v: UInt32) -> String {
+    static func ipv4String(_ v: UInt32) -> String {
         "\(v >> 24 & 255).\(v >> 16 & 255).\(v >> 8 & 255).\(v & 255)"
     }
 
