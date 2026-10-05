@@ -10,7 +10,7 @@ set -euo pipefail
 # 以本腳本所在的 windows/ 為工作目錄，下面的路徑都是固定的相對路徑
 cd "$(dirname "$0")"
 
-VERSION=0.1.1
+VERSION=0.1.2
 NAME=SplitSwan
 
 # 版本號要跟 csproj 一致（App 的「關於」與檔案內容都讀 csproj）

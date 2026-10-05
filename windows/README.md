@@ -1,4 +1,4 @@
-# SplitSwan for Windows（0.1.1，實驗版）
+# SplitSwan for Windows（0.1.2，實驗版）
 
 SplitSwan 是公司 VPN 的 split tunnel 用戶端：只有公司網段走 VPN，其他流量照常走自己的網路。Windows 版是一個**通知區域（托盤）App**，背後用 WSL2 裡的 Linux strongSwan 連公司的 FortiGate，再由 Windows 路由把公司網段導進去：
 
@@ -18,7 +18,7 @@ Windows ──路由──▶ WSL2 發行版 SplitSwan（Ubuntu 24.04＋strongSw
 
 ## 安裝
 
-1. 把 `SplitSwan-Windows-0.1.1.zip` 解壓到**自己的使用者目錄底下**，例如 `%UserProfile%\SplitSwan`。`SplitSwan.exe` 旁邊的 `engine` 資料夾是連線引擎，兩者要放在一起，不要只複製 exe。
+1. 把 `SplitSwan-Windows-0.1.2.zip` 解壓到**自己的使用者目錄底下**，例如 `%UserProfile%\SplitSwan`。`SplitSwan.exe` 旁邊的 `engine` 資料夾是連線引擎，兩者要放在一起，不要只複製 exe。
 2. 雙擊 `SplitSwan.exe`，允許 UAC。exe 沒有程式碼簽章，第一次執行時 SmartScreen 可能顯示「Windows 已保護您的電腦」，按「其他資訊」→「仍要執行」。
 3. 右下角通知區域會出現 SplitSwan 的圖示（預設是盾牌，可能收在「^」裡）。第一次執行時會自動開「首次設定精靈」。
 
@@ -139,7 +139,7 @@ SplitSwan 是解壓縮即用的單一 exe，沒有安裝程式，所以預設沒
 - **VPN 不會中斷**：為更新而結束時不斷線。保活程序與通道不屬於 App 程序，新版啟動後第一次查詢就會看到既有通道並接手（同「App 啟動時偵測到既有的通道」）。一般的「斷線並結束」仍會先斷線。
 - **每天自動檢查更新**：預設不勾選；勾選後每小時看一次是否已滿 24 小時（時鐘被往回調也會重新檢查），才連到 GitHub 查詢。有新版本時托盤選單最上方會出現「有新版本 X，前往更新…」，並跳一次通知；**不會自動安裝**。
 - 需要寫入 exe 所在的資料夾。資料夾沒有寫入權限（或不是從 `SplitSwan.exe` 執行）時會提示改用「前往下載」手動更新：下載 zip、結束 SplitSwan、整個 `SplitSwan` 資料夾覆蓋過去。
-- 目前版本 0.1.1 還沒有這個功能，要先手動更新一次到有一鍵更新的版本。
+- 0.1.1 以前的版本還沒有這個功能，要先手動更新一次到 0.1.2（含一鍵更新），之後的版本就能在 App 內更新。
 
 ## 檔案與安全
 
