@@ -39,6 +39,7 @@ SplitSwan.app ──sudo -n──▶ /usr/local/libexec/splitswan-helper (root) 
 - **`ConfigExport`**：`.splitswan` 加密設定檔（AES-256-GCM＋PBKDF2-SHA256 600,000 次），只含閘道、網段、PSK，不含個人帳密。
 - **F2 斷線通知**：`VPNController.swift` 的 `DropDetector`（純邏輯）在每次 `refresh` 判定「想連線但沒連上 ≥ 30 秒」；沒網路或 `helperMissing` 時暫停計時，睡眠喚醒時重新計時。實際發送在 `DropNotifier.swift`（`UNUserNotificationCenter`，第一次要發時才請求權限）。
 - **F4 閘道排序**：`GatewayHistory.swift` 存每台最近 10 筆 `up N` 結果（UserDefaults JSON），`order` 決定自動輪替順序（冷卻 10 分鐘排最後 → 上次成功 → 成功率／平均耗時 → 無紀錄 → 從未成功）。只有 helper 輸出 `fail vpnN` 才記失敗；連上不到 60 秒被踢、卡在連線中 30 秒會補記失敗。
+- **一鍵主機檢查**：設定頁「某台公司主機連不上？」由 `HostCheckPanel.swift`（UI 流程）、`HostCheck.swift`（輸入解析、網段涵蓋、結果文字的純函式，有 `Tests/HostCheckTests.swift`）、`HostCheckRunner.swift`（`dscacheutil`／`route -n get`／`nc -z`，不需 root）組成。確認後走 `SettingsTab.persist()` 存檔，再呼叫 `VPNController.reconnect(reason:)`（先 helper `reload` 再斷線重連）。表單有未儲存修改時一律擋下（`SettingsTab.isDirty`）。
 - **F3 診斷報告**：`DiagnosticReport.swift` 是組字與遮蔽的純函式（有 `Tests/DiagnosticTests.swift`），`DiagnosticRunner.swift` 限時執行外部指令並寫出報告（600）。charon 的 filelog 設定由 `ConfigStore` 寫進 `strongswan.d/splitswan.conf`，等級固定 1。
 
 ## 輸入驗證（改 ConfigStore／CompanyPreset／ConfigExport 時必守）
@@ -84,5 +85,5 @@ SplitSwan.app ──sudo -n──▶ /usr/local/libexec/splitswan-helper (root) 
 - 用 AppleScript（System Events）自動點按鈕時，SwiftUI 按鈕沒有可讀的標籤（name 為 missing value），要用 `position`／`size` 辨認，點之前先截圖確認是哪一顆。
 - **通知只在 App 位於 Applications 資料夾時有效**（ad-hoc 簽章也可以）；從 `build/` 或 `/tmp` 執行會直接回 `Notifications are not allowed`。測通知要用 `build.sh --install`。
 - `build.sh --install` 會結束執行中的 App，但 charon 的通道不會斷；新 App 啟動後依 `WantConnected` 決定要不要自動連線。
-- `Tests/run-tests.sh` 共 5 組（reconnect、export、security、settings、diagnostic），完整跑一次要數分鐘，主要花在 settings 組的編譯；有其他程序同時改 Sources 時會出現「input file was modified during the build」，那不是測試失敗。
+- `Tests/run-tests.sh` 共 7 組（reconnect、export、security、settings、diagnostic、hostcheck、about），完整跑一次要數分鐘，主要花在 settings 組的編譯；有其他程序同時改 Sources 時會出現「input file was modified during the build」，那不是測試失敗。
 - 狀態列的 `gitstatusd` 會在 `.git/` 留下 0 byte 的殘留 `index.lock`，git 寫入失敗時先用 stat 連續取樣確認 mtime 不動、已是過去式，再清除。

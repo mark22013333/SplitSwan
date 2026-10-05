@@ -261,6 +261,20 @@ final class VPNController: ObservableObject {
         }
     }
 
+    /// 設定頁一鍵加入網段後呼叫：確定 strongSwan 已載入新設定，再斷線重連讓新網段生效。
+    /// 沒在連線、或已有連線動作在跑時不做事，回傳 false
+    @discardableResult
+    func reconnect(reason: String) -> Bool {
+        guard wantConnected, state.isConnected, opTask == nil else { return false }
+        cancelRetry()
+        backoffStep = 0
+        Task {
+            _ = await Self.runHelper(["reload"])
+            self.rebuild(reason: reason)
+        }
+        return true
+    }
+
     // MARK: 狀態輪詢
 
     func refresh() {

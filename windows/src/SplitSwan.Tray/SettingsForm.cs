@@ -9,6 +9,7 @@ namespace SplitSwan.Tray;
 /// 「在狀態面板顯示完整網段清單」開關、選用的內部網域／內部 DNS、托盤圖示樣式（四種狀態預覽、已連線顯示綠色）、自動重連。
 /// 按「儲存」時用 SettingsValidator 與 DnsOptions 驗證，錯誤逐條列在紅色卡片；通過才寫入 settings.json。
 /// 匯入 .splitswan 只把值填進表單，使用者看過閘道並按「儲存」才寫入。
+/// 「某台公司主機連不上？」一鍵檢查：查 IP → 使用者確認 → 加入網段、存檔（不關閉視窗）並重新連線 → 驗證路由與連接埠。
 /// </summary>
 internal sealed class SettingsForm : ThemedForm
 {
@@ -16,7 +17,8 @@ internal sealed class SettingsForm : ThemedForm
     private const int ContentWidth = 520;
     private const int HalfWidth = (ContentWidth - 12) / 2;
 
-    private readonly StoredSettings _original;
+    /// <summary>已儲存的設定（開窗時的值；一鍵檢查加入網段並存檔後更新）。</summary>
+    private StoredSettings _original;
     private readonly TextBox _user = new();
     private readonly TextBox _password = new() { UseSystemPasswordChar = true };
     private readonly TextBox _psk = new() { UseSystemPasswordChar = true };
@@ -81,6 +83,15 @@ internal sealed class SettingsForm : ThemedForm
     private readonly ThemedButton _saveBtn = new("儲存", primary: true);
     private readonly ThemedButton _cancelBtn = new("取消");
     private bool _importing;
+    // 「某台公司主機連不上？」一鍵檢查（同 Mac 版 HostCheckPanel）；沒有 VpnCoordinator 時不顯示
+    private readonly VpnCoordinator? _vpn;
+    private readonly TextBox _hcInput = new() { PlaceholderText = "主機網域或網址，例：intranet.example.com:8443" };
+    private readonly ThemedButton _hcCheck = new("檢查");
+    private readonly CardPanel _hcCard = new() { Visible = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
+    private readonly TableLayoutPanel _hcBody = UiLayout.Table(1);
+    /// <summary>視窗關閉時取消進行中的檢查（DNS、路由查詢、TCP、等待連線）。</summary>
+    private readonly CancellationTokenSource _hcCts = new();
+    private bool _hcWorking;
 
     /// <summary>按下儲存並寫入成功後的設定；取消為 null。</summary>
     public StoredSettings? Saved { get; private set; }
@@ -90,11 +101,13 @@ internal sealed class SettingsForm : ThemedForm
     /// <param name="displayApplied">顯示設定切換並寫入 settings.json 後呼叫（套用到 VpnCoordinator，讓托盤圖示與面板立即更新）。</param>
     /// <param name="history">閘道連線紀錄（成功率條）；null 時不顯示紀錄。</param>
     /// <param name="connectedGateway">目前連著哪一台（狀態點）；null 時視為沒有連線。</param>
+    /// <param name="vpn">一鍵檢查加入網段後套用設定並重新連線用；null 時不顯示一鍵檢查。</param>
     public SettingsForm(StoredSettings current, Func<bool> currentAutoReconnect, Func<StoredSettings> latestSettings,
         bool importOnShow = false, GatewayHistory? history = null, Func<int?>? connectedGateway = null,
-        Action<StoredSettings>? displayApplied = null)
+        Action<StoredSettings>? displayApplied = null, VpnCoordinator? vpn = null)
     {
         _displayApplied = displayApplied;
+        _vpn = vpn;
         _original = current;
         _currentAutoReconnect = currentAutoReconnect;
         _latestSettings = latestSettings;
@@ -159,6 +172,7 @@ internal sealed class SettingsForm : ThemedForm
         Pair(Field("預設共享金鑰（PSK）", _psk), pskRow);
         Span(Field("內網網段（一行一筆）", _subnets, "格式 a.b.c.d/n（單一主機寫 /32），例：192.0.2.0/24", ContentWidth, mono: true, height: 76), 10);
         Span(BuildSubnetListPanel(), 6);
+        if (_vpn is not null) Span(BuildHostCheckPanel(), 12);
         Pair(Field("內部網域（選填）", _domain, "逗號分隔，填了才設定 DNS 分流，例：corp.example"),
              Field("內部 DNS（選填）", _dns, "逗號分隔的 IPv4；不填用閘道給的，例：192.0.2.53"));
 
@@ -225,6 +239,7 @@ internal sealed class SettingsForm : ThemedForm
         UpdatePreviews();
         UpdateGatewayRows();
         Shown += (_, _) => { if (_importOnShow) StartImport(); };
+        FormClosed += (_, _) => _hcCts.Cancel();
         FinishLayout();
     }
 
@@ -399,6 +414,326 @@ internal sealed class SettingsForm : ThemedForm
         return panel;
     }
 
+    // MARK: 某台公司主機連不上？（一鍵檢查）
+
+    private Control BuildHostCheckPanel()
+    {
+        var panel = UiLayout.Table(1);
+        panel.Controls.Add(new ThemedLabel("某台公司主機連不上？", TextRole.Ink, Theme.Ui(9f, FontStyle.Bold)) { Margin = Padding.Empty }, 0, 0);
+        var row = UiLayout.Flow();
+        row.Margin = new Padding(0, 4, 0, 0);
+        var frame = new InputFrame(_hcInput, mono: true) { Width = ContentWidth - 76, Margin = new Padding(0, 0, 8, 0) };
+        _hcInput.AccessibleName = "要檢查的主機";
+        _hcCheck.Margin = Padding.Empty;
+        _hcCheck.Anchor = AnchorStyles.Left;
+        row.Controls.Add(frame);
+        row.Controls.Add(_hcCheck);
+        panel.Controls.Add(row, 0, 1);
+        panel.Controls.Add(new ThemedLabel(
+            "會查出主機的 IP，確認後自動加入內網網段、儲存並重新連線，再檢查是否走 VPN；有填連接埠會一併測試能否連線。",
+            TextRole.Muted, Theme.Ui(8.25f)) { MaximumSize = new Size(ContentWidth, 0), Margin = new Padding(0, 3, 0, 0) }, 0, 2);
+        _hcBody.Margin = Padding.Empty;
+        _hcCard.Controls.Add(_hcBody);
+        _hcCard.MinimumSize = new Size(ContentWidth, 0);
+        _hcCard.Margin = new Padding(0, 6, 0, 0);
+        panel.Controls.Add(_hcCard, 0, 3);
+
+        _hcCheck.Click += (_, _) => HcStart();
+        _hcInput.TextChanged += (_, _) => UpdateHcCheckEnabled();
+        // 輸入框裡按 Enter 是「檢查」，不是「儲存」：取得焦點時暫時把 AcceptButton 換成「檢查」
+        _hcInput.Enter += (_, _) => AcceptButton = _hcCheck;
+        _hcInput.Leave += (_, _) => AcceptButton = _saveBtn;
+        UpdateHcCheckEnabled();
+        return panel;
+    }
+
+    private void UpdateHcCheckEnabled() => _hcCheck.Enabled = !_hcWorking && _hcInput.Text.Trim().Length > 0;
+
+    /// <summary>目前是否已連線（未連線時加入網段只存檔，等使用者按「連線並驗證」）。</summary>
+    private bool HcConnected => _vpn?.State == TrayState.Connected;
+
+    /// <summary>已儲存的內網網段（判斷涵蓋用；表單上還沒儲存的修改不算）。</summary>
+    private IReadOnlyList<string> HcSavedSubnets => _latestSettings().RemoteSubnets;
+
+    /// <summary>表單有沒有還沒按「儲存」的修改。自動重連沒動過時取托盤當下的值，兩邊一致。</summary>
+    private bool HasUnsavedChanges() =>
+        SettingsInput.HasUnsavedChanges(_original with { AutoReconnect = _currentAutoReconnect() }, Collect());
+
+    /// <summary>執行一段檢查工作：期間停用「檢查」與結果區的按鈕；視窗關閉時取消；例外寫記錄並顯示。</summary>
+    private async Task HcRunAsync(Func<CancellationToken, Task> work)
+    {
+        if (_hcWorking || IsDisposed) return;
+        _hcWorking = true;
+        UpdateHcCheckEnabled();
+        try
+        {
+            await work(_hcCts.Token);
+        }
+        catch (OperationCanceledException) when (_hcCts.IsCancellationRequested)
+        {
+            // 視窗已關閉
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"一鍵檢查發生錯誤：{ex.GetType().Name}：{ex.Message}");
+            HcFailed($"檢查時發生錯誤：{ex.Message}");
+        }
+        finally
+        {
+            _hcWorking = false;
+            if (!IsDisposed) UpdateHcCheckEnabled();
+        }
+    }
+
+    private async void HcStart()
+    {
+        if (_hcWorking || IsDisposed) return;
+        if (HostCheck.ParseTarget(_hcInput.Text) is not { } target)
+        {
+            HcFailed("格式不正確：請輸入主機網域、IP、主機:連接埠或網址");
+            return;
+        }
+        await HcRunAsync(async ct =>
+        {
+            HcWorking($"查詢 {target.Host} 的 IP…");
+            var ips = await HostCheckRunner.ResolveAsync(target.Host, ct);
+            ct.ThrowIfCancellationRequested();
+            if (ips.Count == 0)
+            {
+                HcFailed($"查不到 {target.Host} 的 IPv4 位址。若這是公司內部網域，可能要先連上 VPN，或請管理者提供 IP。");
+                return;
+            }
+            var add = HostCheck.Proposal(ips, HcSavedSubnets);
+            if (add.Count > 0) { HcConfirm(target, ips, add); return; }
+            if (HcConnected) await HcVerifyAsync(target, ips, [], ct);
+            else HcNeedConnect(target, ips, []);
+        });
+    }
+
+    /// <summary>確認後：表單沒有未儲存的修改才加入網段並存檔（不關閉視窗），已連線時重新連線並驗證。</summary>
+    private async void HcAddAndApply(HostTarget target, IReadOnlyList<string> ips, IReadOnlyList<string> add)
+    {
+        if (_hcWorking || IsDisposed || _vpn is null) return;
+        // 一鍵加入會整份存檔，表單有改到一半的內容就先擋下
+        if (HasUnsavedChanges())
+        {
+            HcFailed("設定表單有還沒儲存的修改：請先按「儲存」，或按「取消」放棄修改後重新開啟設定，再試一次。");
+            return;
+        }
+        var current = Collect();
+        var subnets = current.RemoteSubnets.Concat(add.Where(a => !current.RemoteSubnets.Contains(a, StringComparer.Ordinal))).ToList();
+        var (errors, _) = SaveSettings(current with { RemoteSubnets = subnets }, out var saved);
+        if (errors.Count > 0)
+        {
+            HcFailed("無法加入網段：" + string.Join("；", errors));
+            return;
+        }
+        _original = saved;
+        _subnets.Text = SettingsInput.FormatSubnets(saved.RemoteSubnets);
+        AppLog.Info($"一鍵檢查：已加入網段 {string.Join(", ", add)} 並儲存設定");
+        // 之後的連線使用新設定；關窗時 TrayContext 只在按「儲存」（Saved）時才再套用一次，不會重複重連
+        _vpn.UpdateSettings(saved);
+        if (!HcConnected)
+        {
+            HcNeedConnect(target, ips, add);
+            return;
+        }
+        await HcRunAsync(ct => HcConnectAndVerifyAsync(target, ips, add, "重新連線中…", ct));
+    }
+
+    private async void HcConnectThenVerify(HostTarget target, IReadOnlyList<string> ips, IReadOnlyList<string> added) =>
+        await HcRunAsync(ct => HcConnectAndVerifyAsync(target, ips, added, "連線中…", ct));
+
+    /// <summary>
+    /// 用新設定連線（已連線時引擎 connect 會先清掉上一次的狀態，等於重建通道），最多等 60 秒，再驗證。
+    /// 用 ConnectForWizardAsync：可 await 到連線動作結束，且跟選單的連線共用「一次一個」的機制。
+    /// </summary>
+    private async Task HcConnectAndVerifyAsync(HostTarget target, IReadOnlyList<string> ips, IReadOnlyList<string> added,
+        string text, CancellationToken ct)
+    {
+        if (_vpn is null) return;
+        HcWorking(text);
+        var connect = _vpn.ConnectForWizardAsync();
+        // 等太久放棄等待時，連線動作仍在背景完成；例外由這裡觀察掉，不讓它變成未觀察的例外
+        _ = connect.ContinueWith(t => AppLog.Error($"一鍵檢查的連線發生錯誤：{t.Exception?.GetBaseException().Message}"),
+            CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+        var done = await Task.WhenAny(connect, Task.Delay(TimeSpan.FromSeconds(60), ct));
+        ct.ThrowIfCancellationRequested();
+        if (done != connect)
+        {
+            HcFailed("60 秒內沒有連上 VPN，請看狀態面板或托盤選單的「顯示引擎輸出」。");
+            return;
+        }
+        var (ok, _, _, error) = await connect;
+        if (!ok)
+        {
+            HcFailed((added.Count > 0 ? "已加入網段，但" : "") + $"連線失敗：{error ?? "原因不明"}");
+            return;
+        }
+        await HcVerifyAsync(target, ips, added, ct);
+    }
+
+    private async Task HcVerifyAsync(HostTarget target, IReadOnlyList<string> ips, IReadOnlyList<string> added, CancellationToken ct)
+    {
+        if (!HcConnected)
+        {
+            HcFailed("目前沒有連上 VPN，請看狀態面板或托盤選單的「顯示引擎輸出」。");
+            return;
+        }
+        HcWorking("檢查路由" + (target.Port is { } p ? $"與連接埠 {p}" : "") + "…");
+        var results = await HostCheckRunner.VerifyAsync(ips, target.Port, ct);
+        ct.ThrowIfCancellationRequested();
+        HcDone(target, results, added);
+    }
+
+    // 結果區的各種畫面（同 Mac 版 HostCheckPanel.Phase）
+
+    private void HcWorking(string text)
+    {
+        if (!HcBegin(StatusTone.Idle)) return;
+        HcText(text, TextRole.Muted);
+        HcEnd();
+    }
+
+    private void HcFailed(string text)
+    {
+        if (!HcBegin(StatusTone.Warn)) return;
+        HcText(text, TextRole.Warn);
+        HcEnd();
+    }
+
+    private void HcConfirm(HostTarget target, IReadOnlyList<string> ips, IReadOnlyList<string> add)
+    {
+        var publicIps = ips.Where(ip => !HostCheck.IsPrivate(ip)).ToList();
+        if (!HcBegin(publicIps.Count > 0 ? StatusTone.Warn : StatusTone.Idle)) return;
+        var saved = HcSavedSubnets;
+        HcText($"{target.Host} 解析到：", TextRole.Ink);
+        foreach (var ip in ips)
+        {
+            var cover = HostCheck.CoveringSubnet(ip, saved);
+            HcText($"• {ip}　" + (cover is null ? $"將新增 {ip}/32" : $"已在網段 {cover} 內"), TextRole.Ink, mono: true);
+        }
+        if (publicIps.Count > 0)
+            HcText($"{string.Join(", ", publicIps)} 是公網位址，可能是 DNS 沒有走公司端。加入後，連到這個位址的流量都會改走 VPN。", TextRole.Warn);
+        var connected = HcConnected;
+        HcText(connected ? "按下後會儲存設定並重新連線，目前的 VPN 連線會中斷約數秒。"
+                         : "按下後會儲存設定；目前沒有連線，連線後新網段才會生效。", TextRole.Muted);
+        HcButtons((connected ? "加入並重新連線" : "加入網段", true, () => HcAddAndApply(target, ips, add)),
+                  ("取消", false, HcHide));
+        HcEnd();
+    }
+
+    private void HcNeedConnect(HostTarget target, IReadOnlyList<string> ips, IReadOnlyList<string> added)
+    {
+        if (!HcBegin(StatusTone.Idle)) return;
+        HcText(added.Count == 0 ? "這台主機已在內網網段內。目前沒有連線，連線後即可驗證。"
+                                : $"已加入 {string.Join(", ", added)} 並儲存。目前沒有連線，連線後新網段才會生效。", TextRole.Ink);
+        HcButtons(("連線並驗證", true, () => HcConnectThenVerify(target, ips, added)));
+        HcEnd();
+    }
+
+    private void HcDone(HostTarget target, IReadOnlyList<IpResult> results, IReadOnlyList<string> added)
+    {
+        var routeOk = results.All(r => r.ViaTunnel);
+        var portOk = results.All(r => r.PortOk ?? true);
+        if (!HcBegin(routeOk && portOk ? StatusTone.Idle : StatusTone.Warn)) return;
+        var report = HostCheck.Report(target, results, added, HcConnected ? _vpn?.Vip : null);
+        foreach (var r in results)
+        {
+            HcRow(r.ViaTunnel, $"{r.Ip} 路由：{r.Interface ?? "查不到"}（{(r.ViaTunnel ? "有走 VPN" : "沒走 VPN")}）");
+            if (r.PortOk is { } ok && target.Port is { } p) HcRow(ok, $"{r.Ip} 連接埠 {p}：{(ok ? "可連線" : "連不上")}");
+        }
+        HcText(!routeOk ? "還沒走 VPN：確認網段已儲存且已重新連線；若剛重連，稍等幾秒再按一次「再檢查一次」。"
+               : !portOk ? "已走 VPN 但連不上，可能是公司端沒有開放。請按「複製結果」交給管理者。"
+               : target.Port is null ? "已走 VPN。若仍連不上，可填上連接埠（例：主機:443）再檢查一次。"
+               : "已走 VPN，連接埠也能連線。", TextRole.Muted);
+        HcButtons(("複製結果", false, () => HcCopy(report)), ("再檢查一次", false, HcStart));
+        HcEnd();
+    }
+
+    private void HcCopy(string report)
+    {
+        try
+        {
+            Clipboard.SetText(report);
+        }
+        catch (System.Runtime.InteropServices.ExternalException ex)
+        {
+            // 剪貼簿被其他程式占用
+            AppLog.Error($"一鍵檢查：複製結果失敗：{ex.Message}");
+            ShowErrors([$"無法複製到剪貼簿：{ex.Message}"]);
+        }
+    }
+
+    private void HcHide()
+    {
+        if (IsDisposed) return;
+        _hcCard.Visible = false;
+        HcClear();
+    }
+
+    /// <summary>開始重畫結果區（清空舊內容、設定色調）；視窗已關閉回 false。</summary>
+    private bool HcBegin(StatusTone tone)
+    {
+        if (IsDisposed) return false;
+        _hcCard.SuspendLayout();
+        HcClear();
+        _hcCard.Tone = tone;
+        return true;
+    }
+
+    private void HcEnd()
+    {
+        _hcCard.Visible = true;
+        _hcCard.ResumeLayout(true);
+        _hcCard.AccessibleName = "檢查結果";
+        _hcCard.AccessibleDescription = string.Join("\n", _hcBody.Controls.OfType<ThemedLabel>().Select(l => l.Text));
+    }
+
+    private void HcClear()
+    {
+        var old = _hcBody.Controls.Cast<Control>().ToList();
+        _hcBody.Controls.Clear();
+        _hcBody.RowCount = 0;
+        foreach (var c in old) c.Dispose();
+    }
+
+    private void HcAdd(Control c)
+    {
+        _hcBody.Controls.Add(c, 0, _hcBody.Controls.Count);
+    }
+
+    /// <summary>結果區的一段文字。執行期新增的控制項不會被表單的 DPI 縮放，尺寸一律用 Px 換算。</summary>
+    private void HcText(string text, TextRole role, bool mono = false) =>
+        HcAdd(new ThemedLabel(text, role, mono ? Theme.Mono(8.25f) : Theme.Ui(9f))
+        {
+            MaximumSize = new Size(Px(ContentWidth - 26), 0),
+            Margin = new Padding(0, _hcBody.Controls.Count == 0 ? 0 : Px(4), 0, 0),
+        });
+
+    /// <summary>✓／✗ 一列（可選取複製的文字在「複製結果」，這裡只顯示）。</summary>
+    private void HcRow(bool ok, string text) =>
+        HcAdd(new ThemedLabel((ok ? "✓ " : "✗ ") + text, ok ? TextRole.Ok : TextRole.Bad, Theme.Mono(8.25f))
+        {
+            MaximumSize = new Size(Px(ContentWidth - 26), 0),
+            Margin = new Padding(0, _hcBody.Controls.Count == 0 ? 0 : Px(2), 0, 0),
+        });
+
+    private void HcButtons(params (string Text, bool Primary, Action Click)[] buttons)
+    {
+        var row = UiLayout.Flow();
+        row.Margin = new Padding(0, Px(8), 0, 0);
+        foreach (var (text, primary, click) in buttons)
+        {
+            var b = new ThemedButton(text, primary) { Margin = new Padding(0, 0, Px(8), 0) };
+            // 延到 Click 處理完才執行：動作會重畫結果區、把這顆按鈕本身 Dispose 掉。
+            // 檢查進行中不接受第二次操作（HcRunAsync 期間 _hcWorking 為 true）
+            b.Click += (_, _) => BeginInvoke(new Action(() => { if (!_hcWorking && !IsDisposed) click(); }));
+            row.Controls.Add(b);
+        }
+        HcAdd(row);
+    }
+
     private Control BuildShortcutPanel()
     {
         // 每個控制項都指定 (欄, 列)：提示列隱藏時，TableLayoutPanel 自動排列會跳過它、讓後面的列往前遞補
@@ -539,6 +874,7 @@ internal sealed class SettingsForm : ThemedForm
         if (disposing)
         {
             _shortcutTips.Dispose();
+            _hcCts.Dispose();
             foreach (var p in _previews)
             {
                 p.Image?.Dispose();
@@ -639,27 +975,37 @@ internal sealed class SettingsForm : ThemedForm
 
     private void OnSave()
     {
-        // 顯示設定三欄切換時已寫入，這裡取托盤當下的值，不用表單上的（DisplaySettings.MergeForSave）
-        var s = DisplaySettings.MergeForSave(Collect(), _latestSettings());
-        var errors = SettingsValidator.Validate(s.ToVpnSettings()).Concat(DnsOptions.Validate(s.Domain, s.DnsServer)).ToList();
+        var (errors, validation) = SaveSettings(Collect(), out var s);
         if (errors.Count > 0)
         {
-            ShowErrors(errors, validation: true);
-            return;
-        }
-        try
-        {
-            SettingsStore.Save(s);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
-                                       or System.Security.Cryptography.CryptographicException)
-        {
-            ShowErrors([$"儲存失敗：{ex.Message}"]);
+            ShowErrors(errors, validation);
             return;
         }
         AppLog.Info("設定已儲存");
         Saved = s;
         DialogResult = DialogResult.OK;
         Close();
+    }
+
+    /// <summary>
+    /// 「儲存」與一鍵檢查共用的存檔路徑：驗證（SettingsValidator、DnsOptions）通過才寫入 settings.json。
+    /// 顯示設定三欄切換時已寫入，這裡取托盤當下的值，不用表單上的（DisplaySettings.MergeForSave）。
+    /// 回傳錯誤清單（空＝已寫入）與是否為驗證錯誤。
+    /// </summary>
+    private (IReadOnlyList<string> Errors, bool Validation) SaveSettings(StoredSettings collected, out StoredSettings saved)
+    {
+        saved = DisplaySettings.MergeForSave(collected, _latestSettings());
+        var errors = SettingsValidator.Validate(saved.ToVpnSettings()).Concat(DnsOptions.Validate(saved.Domain, saved.DnsServer)).ToList();
+        if (errors.Count > 0) return (errors, true);
+        try
+        {
+            SettingsStore.Save(saved);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                       or System.Security.Cryptography.CryptographicException)
+        {
+            return ([$"儲存失敗：{ex.Message}"], false);
+        }
+        return ([], false);
     }
 }

@@ -228,7 +228,11 @@ struct SettingsTab: View {
                         }
                         Text(preset.map { "公司設定：\($0.name)（\($0.source == CompanyPresetStore.path ? "~/.config/splitswan/company.env" : $0.source)）" } ?? "尚未匯入公司設定檔")
                             .font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
-                        DisclosureGroup("某台公司主機連不上？", isExpanded: $showHelp) {
+                        HostCheckPanel(vpn: vpn,
+                                       savedTS: { ConfigStore.load().remoteTS },
+                                       isDirty: { isDirty },
+                                       apply: { add in try addSubnets(add) })
+                        DisclosureGroup("手動排查步驟", isExpanded: $showHelp) {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("1. 查出主機的 IP：終端機執行 `dig +short 主機網域`")
                                 Text("2. 在上面的通道網段加一行 `IP/32`，按「儲存」")
@@ -453,16 +457,43 @@ struct SettingsTab: View {
     }
 
     private func save() {
-        draft.remoteTS = Self.commaList(tsText)
         do {
-            try ConfigStore.save(draft, psk: psk.isEmpty ? nil : psk, password: password.isEmpty ? nil : password)
-            vpn.reloadConfig()
-            env.check()
-            loadDraft()
+            try persist()
             message = ("已儲存；目前的連線不受影響，下次連線時套用", false)
         } catch {
             message = (error.localizedDescription, true)
         }
+    }
+
+    /// 「儲存」與一鍵加入網段共用：寫入設定、重新載入、重讀表單
+    private func persist() throws {
+        draft.remoteTS = Self.commaList(tsText)
+        try ConfigStore.save(draft, psk: psk.isEmpty ? nil : psk, password: password.isEmpty ? nil : password)
+        vpn.reloadConfig()
+        env.check()
+        loadDraft()
+    }
+
+    /// 一鍵檢查確認後：把網段加在編輯框尾端再存檔，失敗就還原編輯框
+    private func addSubnets(_ add: [String]) throws {
+        let before = tsText
+        tsText = Self.lines(([tsText] + add).joined(separator: "\n"))
+        do { try persist() } catch { tsText = before; throw error }
+        message = ("已加入 \(add.joined(separator: ", "))", false)
+    }
+
+    private var isDirty: Bool {
+        Self.isDirty(draft: draft, tsText: tsText, psk: psk, password: password, saved: ConfigStore.load())
+    }
+
+    /// 表單是否有還沒儲存的修改（一鍵加入網段會整份存檔，有未儲存的修改時要先擋下）
+    static func isDirty(draft: VPNSettings, tsText: String, psk: String, password: String, saved: VPNSettings) -> Bool {
+        if !psk.isEmpty || !password.isEmpty { return true }
+        var d = draft
+        d.remoteTS = commaList(tsText)
+        var s = saved
+        s.remoteTS = commaList(saved.remoteTS)
+        return ConfigStore.normalized(d) != ConfigStore.normalized(s)
     }
 
     private func setLaunchAtLogin(_ on: Bool) {
