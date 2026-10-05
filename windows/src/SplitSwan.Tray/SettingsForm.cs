@@ -102,9 +102,10 @@ internal sealed class SettingsForm : ThemedForm
     /// <param name="history">閘道連線紀錄（成功率條）；null 時不顯示紀錄。</param>
     /// <param name="connectedGateway">目前連著哪一台（狀態點）；null 時視為沒有連線。</param>
     /// <param name="vpn">一鍵檢查加入網段後套用設定並重新連線用；null 時不顯示一鍵檢查。</param>
+    /// <param name="updates">檢查更新與一鍵更新；null 時不顯示「更新」區塊。</param>
     public SettingsForm(StoredSettings current, Func<bool> currentAutoReconnect, Func<StoredSettings> latestSettings,
         bool importOnShow = false, GatewayHistory? history = null, Func<int?>? connectedGateway = null,
-        Action<StoredSettings>? displayApplied = null, VpnCoordinator? vpn = null)
+        Action<StoredSettings>? displayApplied = null, VpnCoordinator? vpn = null, UpdateCenter? updates = null)
     {
         _displayApplied = displayApplied;
         _vpn = vpn;
@@ -182,6 +183,12 @@ internal sealed class SettingsForm : ThemedForm
 
         Span(new ThemedLabel("捷徑", TextRole.Ink, Theme.Ui(9f, FontStyle.Bold)), 14);
         Span(BuildShortcutPanel(), 4);
+
+        if (updates is not null)
+        {
+            Span(new ThemedLabel("更新", TextRole.Ink, Theme.Ui(9f, FontStyle.Bold)), 14);
+            Span(new UpdatePanel(updates, ContentWidth, HasUnsavedChanges, e => ShowErrors([e])), 4);
+        }
 
         Span(new ThemedLabel("托盤圖示樣式、已連線時顯示綠色、完整網段清單與捷徑切換後立即生效；其他欄位要按「儲存」，" +
             "新設定在下次連線時生效，已建立的通道不受影響。密碼與 PSK 以 Windows 帳號加密（DPAPI）儲存。",

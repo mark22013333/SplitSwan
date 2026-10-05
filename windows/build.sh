@@ -3,7 +3,7 @@
 #   1. 跑 Core 單元測試
 #   2. dotnet publish 托盤 App（win-x64、自含、單一 exe）
 #   3. 附上連線引擎 engine\splitswan-wsl.ps1／.sh（原樣複製，保留 BOM＋CRLF 與 LF）與 README
-#   4. 打包成 <repo>/dist/SplitSwan-Windows-<版本>.zip
+#   4. 打包成 <repo>/dist/SplitSwan-Windows-<版本>.zip，有發版私鑰時另產生 .zip.sig（一鍵更新用）
 # 中間產物在 windows/out/（已 gitignore），每次重建。
 set -euo pipefail
 
@@ -98,6 +98,17 @@ ZIP="${NAME}-Windows-${VERSION}.zip"
 (cd ./out/publish && zip -q -X -r "../${ZIP}" SplitSwan)
 mkdir -p ../dist
 cp "./out/${ZIP}" "../dist/${ZIP}"
+
+# 一鍵更新的 Ed25519 簽章（與 Mac 版共用金鑰與工具）：有私鑰才簽，沒有只警告（開發機照樣能打包）。
+# 私鑰內容只由 release-sign.swift 讀取，本腳本不讀也不印
+SIGN_KEY="$HOME/.config/splitswan-release/update-ed25519.key"
+if [ -f "$SIGN_KEY" ]; then
+    echo "== 簽署 ${ZIP}"
+    swift ../tools/release-sign.swift sign "../dist/${ZIP}"
+    swift ../tools/release-sign.swift verify "../dist/${ZIP}"
+else
+    echo "警告：找不到 $SIGN_KEY，沒有產生 ${ZIP}.sig；沒有 .sig 的版本，App 的「下載並安裝」會拒絕安裝" >&2
+fi
 
 echo
 echo "完成：dist/${ZIP}"

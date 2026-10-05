@@ -91,6 +91,7 @@ SplitSwan 是解壓縮即用的單一 exe，沒有安裝程式，所以預設沒
 | 連線（自動選擇） | 依連線紀錄排序，逐台嘗試各閘道，連上一台就停（見下方「閘道選擇」）。已連線時會先清掉舊通道再重建 |
 | 連線 VPN1／VPN2／VPN3 | 只連指定的那一台。只列出有設定位址的閘道，後面附上次結果（例：「上次 3.2 秒連上」「最近 2 次失敗」）；已連線的那台會打勾。已連線時點另一台＝換到那台 |
 | 斷線 | 移除路由與 DNS 規則、中斷通道。連線動作進行中按下時，會等那個動作完成再斷線 |
+| 有新版本 X，前往更新… | 只有檢查到新版本時才出現在最上方，開啟設定視窗的「更新」區塊（見下方「更新」） |
 | 設定… | 帳號、密碼、閘道、網段等 |
 | 匯入 .splitswan… | 匯入 Mac 版匯出的設定檔（要按儲存才寫入） |
 | 首次設定精靈… | 開啟首次設定精靈（見上方） |
@@ -129,6 +130,17 @@ SplitSwan 是解壓縮即用的單一 exe，沒有安裝程式，所以預設沒
 - 圖示用系統內建的圖示字型（Windows 11 的 Segoe Fluent Icons，Windows 10 的 Segoe MDL2 Assets），兩種 Windows 的造型可能略有不同；都沒有時改畫「VPN」字樣。
 - 暫時查不到狀態時，圖示會顯示成半透明的異常圖形（「VPN 字樣」是 VPN?）：不代表斷線，會繼續查。把滑鼠移到圖示上可以看原因。
 
+## 更新
+
+「設定…」視窗最下方的「更新」區塊（同 Mac 版「關於」頁）：
+
+- **檢查更新**：查 GitHub 上版本最高的 Windows 版發布（tag `windows-vX.Y.Z`，Mac 版的發布會略過）。有新版本時顯示「下載並安裝」與「前往下載」。
+- **下載並安裝**：下載 `SplitSwan-Windows-X.Y.Z.zip` 與 `.zip.sig`，用 App 內建的公鑰驗證發行者的 Ed25519 簽章，解壓到暫存資料夾檢查內容（必須有 `SplitSwan.exe` 與 `engine\`，exe 的版本必須等於發布版本且比目前新，防止被換成舊版），再逐一把舊檔改名為 `*.old`、放入新檔（任一步失敗就還原），最後啟動新版並結束目前的 App；新版啟動時會清掉 `*.old`。簽章不符、內容不對或版本不對都會停止，不會動到目前的檔案。
+- **VPN 不會中斷**：為更新而結束時不斷線。保活程序與通道不屬於 App 程序，新版啟動後第一次查詢就會看到既有通道並接手（同「App 啟動時偵測到既有的通道」）。一般的「斷線並結束」仍會先斷線。
+- **每天自動檢查更新**：預設不勾選；勾選後每小時看一次是否已滿 24 小時（時鐘被往回調也會重新檢查），才連到 GitHub 查詢。有新版本時托盤選單最上方會出現「有新版本 X，前往更新…」，並跳一次通知；**不會自動安裝**。
+- 需要寫入 exe 所在的資料夾。資料夾沒有寫入權限（或不是從 `SplitSwan.exe` 執行）時會提示改用「前往下載」手動更新：下載 zip、結束 SplitSwan、整個 `SplitSwan` 資料夾覆蓋過去。
+- 目前版本 0.1.1 還沒有這個功能，要先手動更新一次到有一鍵更新的版本。
+
 ## 檔案與安全
 
 | 位置 | 內容 |
@@ -137,8 +149,9 @@ SplitSwan 是解壓縮即用的單一 exe，沒有安裝程式，所以預設沒
 | `%LOCALAPPDATA%\SplitSwan\wsl\` | 精靈匯入的 `SplitSwan` 發行版磁碟（`ext4.vhdx`）。要移除請用 `wsl --unregister SplitSwan`，不要直接刪檔 |
 | `%LOCALAPPDATA%\SplitSwan\download\` | 下載 Ubuntu 映像的暫存處；匯入成功或 SHA256 不符時刪除下載檔，匯入失敗時保留以便重試 |
 | `%LOCALAPPDATA%\SplitSwan\gateway-history.json` | 閘道連線紀錄（編號、位址、成敗、耗時、時間；不含帳密）。刪掉等於清除紀錄 |
-| `%LOCALAPPDATA%\SplitSwan\settings.json` | 設定（含托盤圖示樣式、連線引擎使用的 WSL 發行版 `distro`）。密碼與 PSK 用 Windows 帳號加密（DPAPI），只有同一個帳號在同一台電腦上解得開 |
+| `%LOCALAPPDATA%\SplitSwan\settings.json` | 設定（含托盤圖示樣式、連線引擎使用的 WSL 發行版 `distro`、每天自動檢查更新 `autoCheckUpdates`）。密碼與 PSK 用 Windows 帳號加密（DPAPI），只有同一個帳號在同一台電腦上解得開 |
 | `%LOCALAPPDATA%\SplitSwan\conf\` | 連線時產生給引擎讀的設定檔。資料夾權限只開放自己、SYSTEM 與 Administrators；含密碼的 `secrets.conf` 在每次連線動作結束後就刪除 |
+| `%LOCALAPPDATA%\SplitSwan\update-check.json` | 上次檢查更新的時間與已通知過的版本（不含個人資料）。刪掉等於從沒檢查過 |
 | `%LOCALAPPDATA%\SplitSwan\logs\` | App 記錄，保留最近 10 份。不記錄密碼與 PSK，但含內部位址，分享前請遮蔽 |
 | `%LOCALAPPDATA%\SplitSwan-WSL\logs\` | 連線引擎自己的記錄（同樣含內部位址） |
 

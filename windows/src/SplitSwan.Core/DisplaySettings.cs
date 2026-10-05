@@ -51,6 +51,8 @@ public static class DisplaySettings
             GreenWhenConnected = saved.GreenWhenConnected,
             ShowSubnetList = saved.ShowSubnetList,
             Distro = saved.Distro,
+            // 「每天自動檢查更新」在更新區塊切換時就寫入，按「儲存」時沿用已儲存的值
+            AutoCheckUpdates = saved.AutoCheckUpdates,
         };
     }
 }

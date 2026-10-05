@@ -8,4 +8,9 @@
     <RootNamespace>SplitSwan.Core</RootNamespace>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- 一鍵更新驗證 Ed25519 簽章：.NET 10 沒有內建獨立的 Ed25519（只有 ML-DSA 複合演算法），用 BouncyCastle 的實作 -->
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
+  </ItemGroup>
+
 </Project>
