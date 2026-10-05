@@ -18,6 +18,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let statusLine = NSMenuItem(title: "檢查中…", action: nil, keyEquivalent: "")
     private var connectItems: [NSMenuItem] = []
     private var disconnectItem: NSMenuItem!
+    private let updateItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private let updateSeparator = NSMenuItem.separator()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMainMenu()
@@ -39,6 +41,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.showWindow()
             }
             .store(in: &bag)
+        // 有新版本時在選單最上面提示（每日自動檢查或手動檢查的結果）
+        UpdateCenter.shared.$check.receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.renderUpdateItem() }
+            .store(in: &bag)
+        UpdateCenter.shared.startAutoCheck()
         // 連線紀錄在 App 內顯示（連線頁），啟動時就開始收，才看得到之前發生的事
         LogStore.shared.startStreaming()
         // 設定頁換了圖示樣式 → 立刻更新狀態列
@@ -136,6 +143,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: 狀態列選單
 
     private func buildMenu() {
+        updateItem.action = #selector(openAbout)
+        updateItem.isHidden = true
+        updateSeparator.isHidden = true
+        menu.addItem(updateItem)
+        menu.addItem(updateSeparator)
         statusLine.isEnabled = false
         menu.addItem(statusLine)
         menu.addItem(.separator())
@@ -204,6 +216,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showWindow()
     }
     @objc private func quit() { NSApp.terminate(nil) }
+    @objc private func openAbout() {
+        windowModel.tab = .about
+        showWindow()
+    }
+
+    private func renderUpdateItem() {
+        let v = UpdateCenter.shared.newerVersion
+        updateItem.title = v.map { "有新版本 \($0)，前往更新…" } ?? ""
+        updateItem.isHidden = v == nil
+        updateSeparator.isHidden = v == nil
+    }
 }
 
 // 程式進入點本來就在主執行緒，明確宣告給編譯器

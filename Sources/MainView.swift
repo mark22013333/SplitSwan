@@ -738,11 +738,8 @@ struct EnvironmentTab: View {
 // MARK: - 關於
 
 struct AboutTab: View {
-    private enum UpdateState: Equatable {
-        case idle, checking
-        case done(AboutInfo.Outcome)
-    }
-    @State private var update = UpdateState.idle
+    @ObservedObject private var updates = UpdateCenter.shared
+    @AppStorage(UpdateCenter.autoCheckKey) private var autoCheck = false   // 預設不每日檢查
     @State private var copied = false
 
     var body: some View {
@@ -775,14 +772,19 @@ struct AboutTab: View {
 
                 SettingsCard("檢查更新") {
                     HStack(spacing: 10) {
-                        Button(update == .checking ? "檢查中…" : "檢查更新") { checkUpdate() }
-                            .disabled(update == .checking)
-                        if update == .checking { ProgressView().controlSize(.small) }
+                        Button(updates.check == .checking ? "檢查中…" : "檢查更新") { updates.checkNow() }
+                            .disabled(updates.check == .checking || updates.isInstalling)
+                        if updates.check == .checking { ProgressView().controlSize(.small) }
                         Spacer()
                     }
                     updateResult
-                    Text("只有按下「檢查更新」時才會連到 GitHub；不會自動下載或安裝。")
+                    Toggle("每天自動檢查更新", isOn: $autoCheck)
+                        .toggleStyle(.checkbox)
+                        .onChange(of: autoCheck) { _, on in if on { updates.autoCheckIfDue() } }
+                    Text(autoCheck ? "每天連到 GitHub 檢查一次，有新版本會顯示在這裡與狀態列選單；不會自動安裝。"
+                                   : "只有按下「檢查更新」時才會連到 GitHub；不會自動下載或安裝。")
                         .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 SettingsCard("授權與致謝") {
@@ -804,13 +806,29 @@ struct AboutTab: View {
     }
 
     @ViewBuilder private var updateResult: some View {
-        if case .done(let outcome) = update {
+        if case .done(let outcome) = updates.check {
             switch outcome {
             case .newer(let v, let url):
-                HStack(spacing: 10) {
-                    Label("有新版本 \(v)", systemImage: "arrow.up.circle.fill").foregroundStyle(.orange)
-                    Button("前往下載") { NSWorkspace.shared.open(url) }.buttonStyle(.borderedProminent)
-                    Spacer()
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 10) {
+                        Label("有新版本 \(v)", systemImage: "arrow.up.circle.fill").foregroundStyle(.orange)
+                        Button("下載並安裝") { updates.installLatest() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(updates.isInstalling)
+                        Button("前往下載") { NSWorkspace.shared.open(url) }
+                        Spacer()
+                    }
+                    switch updates.install {
+                    case .idle:
+                        Text("會下載並驗證簽章，再取代目前的 App 並重新開啟；VPN 連線不會中斷。")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    case .working(let text):
+                        HStack(spacing: 8) { ProgressView().controlSize(.small); Text(text).font(.callout) }
+                    case .failed(let reason):
+                        Label(reason, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                            .font(.callout).fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             case .upToDate(let v):
                 Label("已是最新版本（\(v)）", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
@@ -840,15 +858,6 @@ struct AboutTab: View {
         Task {
             try? await Task.sleep(for: .seconds(1.5))
             copied = false
-        }
-    }
-
-    /// 按下才連網；View 的 Task 跑在主執行緒，回來後直接更新狀態
-    private func checkUpdate() {
-        update = .checking
-        Task { @MainActor in
-            let outcome = await AboutInfo.fetchLatest()
-            update = .done(outcome)
         }
     }
 }
