@@ -50,7 +50,8 @@ internal sealed class TrayContext : ApplicationContext
         _updates.Changed += Redraw;
         _updates.NewVersionNotice += v =>
             Balloon("SplitSwan 有新版本", $"{v} 已發布。從托盤選單最上方的「有新版本 {v}，前往更新…」安裝", false);
-        _updateItem.Click += (_, _) => ShowSettings(importOnShow: false);
+        // 「有新版本 X，前往更新…」直接落在設定視窗的「更新」分頁
+        _updateItem.Click += (_, _) => ShowSettings(importOnShow: false, SettingsPage.Updates);
         // VpnCoordinator 已確認 SynchronizationContext.Current 存在（UI 執行緒）
         _ui = SynchronizationContext.Current!;
         _watchdog = new UiWatchdog(_ui);
@@ -81,7 +82,7 @@ internal sealed class TrayContext : ApplicationContext
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
         _disconnect.Click += (_, _) => _vpn.Disconnect();
         _settingsItem.Click += (_, _) => ShowSettings(importOnShow: false);
-        _import.Click += (_, _) => ShowSettings(importOnShow: true);
+        _import.Click += (_, _) => ShowSettings(importOnShow: true, SettingsPage.Connection);
         _install.Click += (_, _) => ShowWizard(autoStart: false);
         _showLog.Click += (_, _) => ShowLog();
         _openLogDir.Click += (_, _) => LogForm.OpenLogFolder();
@@ -273,10 +274,12 @@ internal sealed class TrayContext : ApplicationContext
         if (r == DialogResult.Yes) ShowWizard(autoStart: true);
     }
 
-    private SettingsForm ShowSettings(bool importOnShow)
+    /// <param name="page">要顯示的分頁；null＝新開時顯示「連線」，視窗已開著時維持目前的分頁。</param>
+    private SettingsForm ShowSettings(bool importOnShow, SettingsPage? page = null)
     {
         if (_settingsForm is { IsDisposed: false })
         {
+            if (page is { } p) _settingsForm.ShowPage(p);
             _settingsForm.Activate();
             if (importOnShow) _settingsForm.StartImport();
             return _settingsForm;
@@ -286,7 +289,8 @@ internal sealed class TrayContext : ApplicationContext
             history: _vpn.History, connectedGateway: () => _vpn.State == TrayState.Connected ? _vpn.ConnectedGateway : null,
             displayApplied: s => _vpn.UpdateSettings(s),   // 顯示設定切換即生效：觸發 Changed → 重畫圖示與面板
             vpn: _vpn,    // 一鍵檢查：加入網段後由設定頁自己套用並重新連線（不經下面的 Saved）
-            updates: _updates);
+            updates: _updates,
+            initialPage: page ?? SettingsPage.Connection);
         _settingsForm.FormClosed += (_, _) =>
         {
             if (_settingsForm?.Saved is { } saved) _vpn.UpdateSettings(saved);
