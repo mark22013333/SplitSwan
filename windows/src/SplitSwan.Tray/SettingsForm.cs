@@ -5,9 +5,13 @@ using SplitSwan.Tray.Controls;
 namespace SplitSwan.Tray;
 
 /// <summary>
-/// 設定視窗（視覺稿 C 的設定頁）：閘道清單（狀態點、位址、成功率條與 x/n）、帳號、密碼、PSK、內網網段（多行）、
-/// 「在狀態面板顯示完整網段清單」開關、選用的內部網域／內部 DNS、托盤圖示樣式（四種狀態預覽、已連線顯示綠色）、自動重連。
-/// 按「儲存」時用 SettingsValidator 與 DnsOptions 驗證，錯誤逐條列在紅色卡片；通過才寫入 settings.json。
+/// 設定視窗（視覺稿 C 的設定頁）：左側分類清單（NavList）＋右側分頁（ScrollPage）＋底部固定的「匯入／取消／儲存」，
+/// 類似 Windows 11 設定 App。分頁（SettingsPages）：
+/// 「連線」閘道清單（狀態點、位址、成功率條與 x/n）、帳號、密碼、PSK、自動重連；
+/// 「網段」內網網段（多行）、「在狀態面板顯示完整網段清單」開關、選用的內部網域／內部 DNS、一鍵檢查；
+/// 「外觀」托盤圖示樣式（四種狀態預覽、已連線顯示綠色）、捷徑；「更新」檢查更新與自動檢查（UpdatePanel）。
+/// 按「儲存」時用 SettingsValidator 與 DnsOptions 驗證，錯誤逐條列在底部的紅色卡片，並切到第一個錯誤欄位所在的分頁、
+/// 把焦點放到該欄位（SettingsPages.First）；通過才寫入 settings.json。
 /// 匯入 .splitswan 只把值填進表單，使用者看過閘道並按「儲存」才寫入。
 /// 「某台公司主機連不上？」一鍵檢查：查 IP → 使用者確認 → 加入網段、存檔（不關閉視窗）並重新連線 → 驗證路由與連接埠。
 /// </summary>
@@ -16,6 +20,23 @@ internal sealed class SettingsForm : ThemedForm
     /// <summary>表單內容寬度（96 DPI 的邏輯像素；兩欄各半）。</summary>
     private const int ContentWidth = 520;
     private const int HalfWidth = (ContentWidth - 12) / 2;
+    /// <summary>左側分類清單的寬度。</summary>
+    private const int NavWidth = 168;
+    /// <summary>分頁內容離分頁左上角的距離。</summary>
+    private static readonly Size PageInset = new(24, 18);
+    /// <summary>右側分頁的寬度：內容＋左右留白＋垂直捲軸的位置（捲軸出現時不必再出水平捲軸）。</summary>
+    private const int PageWidth = 24 + ContentWidth + 24 + 18;
+    /// <summary>視窗工作區高度：最長的「連線」「網段」兩頁在一般情況下不需捲動。</summary>
+    private const int WindowHeight = 510;
+    /// <summary>底部列（錯誤卡片）的內容寬度：整個視窗寬度扣掉左右 16。</summary>
+    private const int FooterContentWidth = NavWidth + PageWidth - 32;
+
+    /// <summary>左側分類清單與各分頁。</summary>
+    private readonly NavList _nav = new();
+    private readonly IReadOnlyList<SettingsPage> _pageOrder;
+    private readonly Dictionary<SettingsPage, ScrollPage> _pages = new();
+    /// <summary>目前顯示的分頁（建構前為 null）。</summary>
+    private SettingsPage? _currentPage;
 
     /// <summary>已儲存的設定（開窗時的值；一鍵檢查加入網段並存檔後更新）。</summary>
     private StoredSettings _original;
@@ -34,7 +55,7 @@ internal sealed class SettingsForm : ThemedForm
     private readonly CardPanel _importCard = new() { Tone = StatusTone.Warn, Visible = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
     private readonly ThemedLabel _importNote = new("", TextRole.Ink) { MaximumSize = new Size(ContentWidth - 26, 0) };
     private readonly CardPanel _errorCard = new() { Tone = StatusTone.Bad, Visible = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
-    private readonly ThemedLabel _errors = new("", TextRole.Bad) { MaximumSize = new Size(ContentWidth - 26, 0) };
+    private readonly ThemedLabel _errors = new("", TextRole.Bad) { MaximumSize = new Size(FooterContentWidth - 26, 0) };
     private readonly bool _importOnShow;
     private readonly Func<bool> _currentAutoReconnect;
     private readonly Func<StoredSettings> _latestSettings;
@@ -102,10 +123,12 @@ internal sealed class SettingsForm : ThemedForm
     /// <param name="history">閘道連線紀錄（成功率條）；null 時不顯示紀錄。</param>
     /// <param name="connectedGateway">目前連著哪一台（狀態點）；null 時視為沒有連線。</param>
     /// <param name="vpn">一鍵檢查加入網段後套用設定並重新連線用；null 時不顯示一鍵檢查。</param>
-    /// <param name="updates">檢查更新與一鍵更新；null 時不顯示「更新」區塊。</param>
+    /// <param name="updates">檢查更新與一鍵更新；null 時不顯示「更新」分頁。</param>
+    /// <param name="initialPage">開窗時顯示的分頁（例：托盤選單「有新版本…」直接開「更新」）；不存在的分頁退回「連線」。</param>
     public SettingsForm(StoredSettings current, Func<bool> currentAutoReconnect, Func<StoredSettings> latestSettings,
         bool importOnShow = false, GatewayHistory? history = null, Func<int?>? connectedGateway = null,
-        Action<StoredSettings>? displayApplied = null, VpnCoordinator? vpn = null, UpdateCenter? updates = null)
+        Action<StoredSettings>? displayApplied = null, VpnCoordinator? vpn = null, UpdateCenter? updates = null,
+        SettingsPage initialPage = SettingsPage.Connection)
     {
         _displayApplied = displayApplied;
         _vpn = vpn;
@@ -121,34 +144,15 @@ internal sealed class SettingsForm : ThemedForm
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        AutoSize = true;
-        AutoSizeMode = AutoSizeMode.GrowAndShrink;
-        Padding = new Padding(16);
+        // 固定大小（96 DPI 的邏輯像素，隨 DPI 縮放）：左側分類清單＋右側分頁＋底部固定的按鈕列。
+        // 每頁在這個大小下不需捲動；一鍵檢查結果、匯入提示等臨時內容較多時由該頁自己捲動，底部按鈕不跟著捲。
+        ClientSize = new Size(NavWidth + PageWidth, WindowHeight);
         ShowInTaskbar = true;
 
-        // 每個控制項都指定 (欄, 列)：TableLayoutPanel 自動排列時會跳過 Visible=false 的控制項，
-        // 隱藏的匯入提示／錯誤卡片會讓後面全部往前遞補一格（標籤跑到右欄、輸入框錯一列）。
-        var grid = UiLayout.Table(2);
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, HalfWidth + 12));
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, HalfWidth));
-        var row = 0;
-        void Span(Control c, int top = 0)
-        {
-            c.Margin = new Padding(0, top, 0, 0);
-            grid.Controls.Add(c, 0, row);
-            grid.SetColumnSpan(c, 2);
-            row++;
-        }
-        void Pair(Control left, Control right, int top = 10)
-        {
-            left.Margin = new Padding(0, top, 12, 0);
-            right.Margin = new Padding(0, top, 0, 0);
-            grid.Controls.Add(left, 0, row);
-            grid.Controls.Add(right, 1, row);
-            row++;
-        }
+        _pageOrder = SettingsPages.Order(updates is not null);
 
-        // 閘道
+        // 連線：閘道、帳號、密碼、PSK、自動重連
+        var conn = new PageGrid(SettingsPages.Title(SettingsPage.Connection));
         var gwHead = UiLayout.Table(2);
         gwHead.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         gwHead.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -158,53 +162,107 @@ internal sealed class SettingsForm : ThemedForm
         {
             Anchor = AnchorStyles.Right, Margin = Padding.Empty,
         }, 1, 0);
-        Span(gwHead);
-        Span(BuildGatewayCard(), 6);
-
+        conn.Span(gwHead, 10);
+        conn.Span(BuildGatewayCard(), 6);
         // 匯入提示（隱藏時不佔位但仍佔有自己的列）
         _importCard.Controls.Add(_importNote);
         _importCard.MinimumSize = new Size(ContentWidth, 0);
-        Span(_importCard, 8);
-
-        Pair(Field("帳號", _user), Field("密碼", _password));
+        conn.Span(_importCard, 8);
+        conn.Pair(Field("帳號", _user), Field("密碼", _password));
         var pskRow = UiLayout.Table(1);
         pskRow.Controls.Add(_show, 0, 0);
         _show.Margin = new Padding(0, 22, 0, 0);
-        Pair(Field("預設共享金鑰（PSK）", _psk), pskRow);
-        Span(Field("內網網段（一行一筆）", _subnets, "格式 a.b.c.d/n（單一主機寫 /32），例：192.0.2.0/24", ContentWidth, mono: true, height: 76), 10);
-        Span(BuildSubnetListPanel(), 6);
-        if (_vpn is not null) Span(BuildHostCheckPanel(), 12);
-        Pair(Field("內部網域（選填）", _domain, "逗號分隔，填了才設定 DNS 分流，例：corp.example"),
-             Field("內部 DNS（選填）", _dns, "逗號分隔的 IPv4；不填用閘道給的，例：192.0.2.53"));
+        conn.Pair(Field("預設共享金鑰（PSK）", _psk), pskRow);
+        conn.Span(BuildAutoPanel(), 10);
+        conn.Span(PageNote("「自動重連」以外的欄位要按「儲存」，新設定在下次連線時生效，已建立的通道不受影響。" +
+            "密碼與 PSK 以 Windows 帳號加密（DPAPI）儲存。"), 12);
 
-        Span(new ThemedLabel("托盤圖示", TextRole.Ink, Theme.Ui(9f, FontStyle.Bold)), 14);
-        Span(BuildIconPanel(), 4);
-        Span(BuildAutoPanel(), 10);
+        // 網段：內網網段、完整網段清單、內部網域／DNS、一鍵檢查（結果可能很長，放最後，展開時只往下長）
+        var nets = new PageGrid(SettingsPages.Title(SettingsPage.Subnets));
+        nets.Span(Field("內網網段（一行一筆）", _subnets, "格式 a.b.c.d/n（單一主機寫 /32），例：192.0.2.0/24", ContentWidth, mono: true, height: 76), 6);
+        nets.Span(BuildSubnetListPanel(), 6);
+        nets.Pair(Field("內部網域（選填）", _domain, "逗號分隔，填了才設定 DNS 分流，例：corp.example"),
+                  Field("內部 DNS（選填）", _dns, "逗號分隔的 IPv4；不填用閘道給的，例：192.0.2.53"), 12);
+        nets.Span(PageNote("網段與 DNS 分流要按「儲存」，下次連線時生效；完整網段清單的開關切換後立即生效。"), 8);
+        if (_vpn is not null) nets.Span(BuildHostCheckPanel(), 14);
 
-        Span(new ThemedLabel("捷徑", TextRole.Ink, Theme.Ui(9f, FontStyle.Bold)), 14);
-        Span(BuildShortcutPanel(), 4);
+        // 外觀：托盤圖示、捷徑（全部切換即生效）
+        var look = new PageGrid(SettingsPages.Title(SettingsPage.Appearance));
+        look.Span(new ThemedLabel("托盤圖示", TextRole.Ink, Theme.Ui(9f, FontStyle.Bold)), 10);
+        look.Span(BuildIconPanel(), 4);
+        look.Span(new ThemedLabel("捷徑", TextRole.Ink, Theme.Ui(9f, FontStyle.Bold)), 14);
+        look.Span(BuildShortcutPanel(), 4);
+        look.Span(PageNote("這一頁的設定切換後立即生效，不必按「儲存」。"), 12);
 
+        _pages[SettingsPage.Connection] = new ScrollPage(conn.Grid, PageInset);
+        _pages[SettingsPage.Subnets] = new ScrollPage(nets.Grid, PageInset);
+        _pages[SettingsPage.Appearance] = new ScrollPage(look.Grid, PageInset);
         if (updates is not null)
         {
-            Span(new ThemedLabel("更新", TextRole.Ink, Theme.Ui(9f, FontStyle.Bold)), 14);
-            Span(new UpdatePanel(updates, ContentWidth, HasUnsavedChanges, e => ShowErrors([e])), 4);
+            // 更新：目前版本、檢查更新、下載並安裝、每天自動檢查更新（切換即寫入）
+            var upd = new PageGrid(SettingsPages.Title(SettingsPage.Updates));
+            upd.Span(new UpdatePanel(updates, ContentWidth, HasUnsavedChanges, e => ShowErrors([e])), 10);
+            _pages[SettingsPage.Updates] = new ScrollPage(upd.Grid, PageInset);
         }
 
-        Span(new ThemedLabel("托盤圖示樣式、已連線時顯示綠色、完整網段清單與捷徑切換後立即生效；其他欄位要按「儲存」，" +
-            "新設定在下次連線時生效，已建立的通道不受影響。密碼與 PSK 以 Windows 帳號加密（DPAPI）儲存。",
-            TextRole.Muted) { MaximumSize = new Size(ContentWidth, 0) }, 12);
-        _errorCard.Controls.Add(_errors);
-        _errorCard.MinimumSize = new Size(ContentWidth, 0);
-        Span(_errorCard, 8);
+        // 右側：所有分頁疊在同一個容器，一次只顯示一頁
+        var host = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty, BackColor = Color.Transparent, TabIndex = 1 };
+        var tab = 0;
+        foreach (var p in _pageOrder)
+        {
+            _pages[p].Visible = false;
+            _pages[p].TabIndex = tab++;
+            host.Controls.Add(_pages[p]);
+        }
 
+        // 左側：分類清單
+        _nav.Items = [.. _pageOrder.Select(SettingsPages.Title)];
+        _nav.Dock = DockStyle.Left;
+        _nav.Width = NavWidth;
+        _nav.TabIndex = 0;
+        _nav.SelectedIndexChanged += (_, _) =>
+        {
+            if (_nav.SelectedIndex >= 0 && _nav.SelectedIndex < _pageOrder.Count) ShowPage(_pageOrder[_nav.SelectedIndex]);
+        };
+
+        // 底部（固定，任何分頁都看得到）：錯誤卡片、匯入／取消／儲存
+        var footer = UiLayout.Table(2);
+        footer.Dock = DockStyle.Bottom;
+        footer.Padding = new Padding(16, 10, 16, 12);
+        footer.TabIndex = 2;
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        // 上緣一條分隔線（與左側清單的分隔線同色）
+        footer.Paint += (_, e) =>
+        {
+            using var pen = new Pen(Theme.Line);
+            e.Graphics.DrawLine(pen, 0, 0, footer.Width, 0);
+        };
+        _errorCard.Controls.Add(_errors);
+        _errorCard.MinimumSize = new Size(FooterContentWidth, 0);
+        _errorCard.Margin = new Padding(0, 0, 0, 10);
+        footer.Controls.Add(_errorCard, 0, 0);
+        footer.SetColumnSpan(_errorCard, 2);
+        _importBtn.Anchor = AnchorStyles.Left;
+        _importBtn.Margin = Padding.Empty;
+        _importBtn.TabIndex = 0;
+        footer.Controls.Add(_importBtn, 0, 1);
         var buttons = UiLayout.Flow(FlowDirection.RightToLeft);
-        buttons.Controls.AddRange([_saveBtn, _cancelBtn, _importBtn]);
+        buttons.Controls.AddRange([_saveBtn, _cancelBtn]);
+        _saveBtn.Margin = Padding.Empty;
+        _cancelBtn.Margin = new Padding(0, 0, 8, 0);
+        _cancelBtn.TabIndex = 0;
+        _saveBtn.TabIndex = 1;
         buttons.Anchor = AnchorStyles.Right;
-        Span(buttons, 14);
-        // 要 Dock 才會套用 Form.Padding(16)：沒 Dock 的子控制項停在 Location (0,0)，Padding 只影響停駐版面與
-        // AutoSize 的右下延伸，結果「閘道」那列緊貼標題列（左緣也貼邊）。同 WizardForm／LogForm 的做法。
-        grid.Dock = DockStyle.Fill;
-        Controls.Add(grid);
+        buttons.TabIndex = 1;
+        footer.Controls.Add(buttons, 1, 1);
+
+        // 停駐順序：最後加入的最先停駐——底部列先佔滿整個寬度，左側清單再佔左邊，剩下的給分頁
+        Controls.Add(host);
+        Controls.Add(_nav);
+        Controls.Add(footer);
+        ActiveControl = _nav;
+        ShowPage(SettingsPages.Resolve(initialPage, _pageOrder));
 
         _importBtn.Click += (_, _) => StartImport();
         _saveBtn.Click += (_, _) => OnSave();
@@ -212,6 +270,10 @@ internal sealed class SettingsForm : ThemedForm
         _cancelBtn.Click += (_, _) => Close();
         AcceptButton = _saveBtn;
         CancelButton = _cancelBtn;
+
+        // 驗證錯誤時框線變紅；改了內容就恢復
+        foreach (var box in ValidatedBoxes)
+            box.TextChanged += (_, _) => { if (box.Parent is InputFrame { Invalid: true } f) f.Invalid = false; };
 
         _show.CheckedChanged += (_, _) =>
         {
@@ -306,6 +368,119 @@ internal sealed class SettingsForm : ThemedForm
         _syncingAuto = true;
         try { _auto.Checked = v; }
         finally { _syncingAuto = false; }
+    }
+
+    // MARK: 分頁
+
+    /// <summary>
+    /// 一個分頁的內容表格（兩欄各半）：頁首標題，之後逐列加入。
+    /// 每個控制項都指定 (欄, 列)：TableLayoutPanel 自動排列時會跳過 Visible=false 的控制項，
+    /// 隱藏的匯入提示會讓後面全部往前遞補一格（標籤跑到右欄、輸入框錯一列）。
+    /// </summary>
+    private sealed class PageGrid
+    {
+        private int _row;
+
+        public PageGrid(string title)
+        {
+            Grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, HalfWidth + 12));
+            Grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, HalfWidth));
+            Span(new ThemedLabel(title, TextRole.Ink, Theme.Ui(12f, FontStyle.Bold)) { AccessibleRole = AccessibleRole.StaticText });
+        }
+
+        public TableLayoutPanel Grid { get; } = UiLayout.Table(2);
+
+        public void Span(Control c, int top = 0)
+        {
+            c.Margin = new Padding(0, top, 0, 0);
+            Grid.Controls.Add(c, 0, _row);
+            Grid.SetColumnSpan(c, 2);
+            _row++;
+        }
+
+        public void Pair(Control left, Control right, int top = 10)
+        {
+            left.Margin = new Padding(0, top, 12, 0);
+            right.Margin = new Padding(0, top, 0, 0);
+            Grid.Controls.Add(left, 0, _row);
+            Grid.Controls.Add(right, 1, _row);
+            _row++;
+        }
+    }
+
+    /// <summary>分頁底部的一行說明（哪些即時生效、哪些要按「儲存」）。</summary>
+    private static ThemedLabel PageNote(string text) =>
+        new(text, TextRole.Muted, Theme.Ui(8.25f)) { MaximumSize = new Size(ContentWidth, 0) };
+
+    /// <summary>
+    /// 切到指定分頁（左側清單同步選取）。沒有的分頁（例如沒有更新功能時的「更新」）退回「連線」。
+    /// 托盤選單「有新版本…」等入口在視窗已開著時也呼叫這裡。
+    /// </summary>
+    public void ShowPage(SettingsPage page)
+    {
+        if (IsDisposed) return;
+        page = SettingsPages.Resolve(page, _pageOrder);
+        if (_currentPage == page) return;
+        _currentPage = page;
+        // 一鍵檢查的輸入框在「網段」頁：離開時 Enter 一律回到「儲存」（輸入框隱藏時不一定收到 Leave）
+        if (page != SettingsPage.Subnets) AcceptButton = _saveBtn;
+        var host = _pages[page].Parent;
+        host?.SuspendLayout();
+        foreach (var (p, c) in _pages) c.Visible = p == page;
+        host?.ResumeLayout(true);
+        _nav.SelectedIndex = _pageOrder.ToList().IndexOf(page);
+        _nav.AccessibleDescription = SettingsPages.Title(page);
+    }
+
+    /// <summary>Ctrl+Tab／Ctrl+PageDown 下一頁，Ctrl+Shift+Tab／Ctrl+PageUp 上一頁（同 Windows 的分頁慣例）。</summary>
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        var step = keyData switch
+        {
+            Keys.Control | Keys.Tab or Keys.Control | Keys.PageDown => 1,
+            Keys.Control | Keys.Shift | Keys.Tab or Keys.Control | Keys.PageUp => -1,
+            _ => 0,
+        };
+        if (step != 0 && _currentPage is { } cur && _pageOrder.Count > 0)
+        {
+            var list = _pageOrder.ToList();
+            ShowPage(list[(list.IndexOf(cur) + step + list.Count) % list.Count]);
+            return true;
+        }
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
+
+    /// <summary>會被驗證的輸入框（驗證錯誤時框線變紅）。</summary>
+    private IEnumerable<TextBox> ValidatedBoxes => [.. _gw, _user, _password, _psk, _subnets, _domain, _dns];
+
+    private TextBox BoxOf(SettingsErrorTarget t) => t.Field switch
+    {
+        SettingsField.Gateway => _gw[Math.Clamp(t.Index, 0, _gw.Length - 1)],
+        SettingsField.Username => _user,
+        SettingsField.Password => _password,
+        SettingsField.Psk => _psk,
+        SettingsField.Subnets => _subnets,
+        SettingsField.Domain => _domain,
+        _ => _dns,
+    };
+
+    /// <summary>
+    /// 驗證錯誤：有錯的欄位框線變紅，切到第一個錯誤欄位（依表單由上往下）所在的分頁並把焦點放上去。
+    /// 錯誤清單本身顯示在底部的錯誤卡片（任何分頁都看得到）。
+    /// </summary>
+    private void FocusValidationErrors(IReadOnlyList<string> errors)
+    {
+        var gws = _gw.Select(t => t.Text).ToList();
+        foreach (var box in ValidatedBoxes)
+            if (box.Parent is InputFrame f) f.Invalid = false;
+        foreach (var e in errors)
+            if (SettingsPages.Locate(e, gws) is { } t && BoxOf(t).Parent is InputFrame f) f.Invalid = true;
+        if (SettingsPages.First(errors, gws) is not { } first) return;
+        ShowPage(first.Page);
+        var target = BoxOf(first);
+        if (!target.CanFocus) return;
+        target.Focus();
+        if (!target.Multiline) target.SelectAll();
     }
 
     /// <summary>標籤＋輸入框＋（選用）說明，直向排列。</summary>
@@ -956,6 +1131,8 @@ internal sealed class SettingsForm : ThemedForm
             "。請確認閘道是公司提供的位址，再按「儲存」；不確定就按「取消」。";
         _importCard.Visible = true;
         ShowErrors([]);
+        // 匯入的閘道、PSK 在「連線」頁：停在那裡讓使用者確認閘道
+        ShowPage(SettingsPage.Connection);
         UiWatchdog.Mark("匯入：完成");
     }
 
@@ -986,6 +1163,7 @@ internal sealed class SettingsForm : ThemedForm
         if (errors.Count > 0)
         {
             ShowErrors(errors, validation);
+            if (validation) FocusValidationErrors(errors);
             return;
         }
         AppLog.Info("設定已儲存");
