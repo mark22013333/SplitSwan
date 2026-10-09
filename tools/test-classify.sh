@@ -128,8 +128,8 @@ for spec in "--initiate|up 1" "--terminate|down" "--list-sas|status" "--load-all
   [ -z "$(ls -A "$RUN/tmp")" ]; check "${cmd}：中斷後不留暫存檔" $?
 done
 
-# 正對照：main 上的舊版 helper（前景執行／命令替換）同樣情境應該留下孤兒，證明這個測試抓得到問題
-if git -C "$(dirname "$SRC")" show main:splitswan-helper >"$RUN/old-src" 2>/dev/null && [ -s "$RUN/old-src" ]; then
+# 正對照：修正前（692281d）的舊版 helper（前景執行／命令替換）同樣情境應該留下孤兒，證明這個測試抓得到問題
+if git -C "$(dirname "$SRC")" show 692281d:splitswan-helper >"$RUN/old-src" 2>/dev/null && [ -s "$RUN/old-src" ]; then
   sed -e "s#^SWANCTL=.*#SWANCTL=$RUN/bin/swanctl#" -e "s#^CHARON=.*#CHARON=$RUN/bin/charon#" \
       -e 's/^charon_running() .*/charon_running() { true; }/' "$RUN/old-src" >"$RUN/old-helper"
   hang_test "$RUN/old-helper" "--initiate" up 1
