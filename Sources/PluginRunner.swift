@@ -92,6 +92,9 @@ final class PluginRunner: ObservableObject {
     private var epoch = 0
     private var everActivated = false
     private var idleWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+    /// 要求執行時該外掛還在跑（例：關閉後立刻重開、暫停中途恢復，舊的那次結果會被丟棄），
+    /// 等它結束後補跑一次，不重疊、不必等到下一個間隔
+    private var rerunAfter: Set<String> = []
     /// 正在跑或排隊中的外掛（排程執行或點擊動作）。關閉開關不會清掉，
     /// 所以關閉後立刻重開也不會和還沒結束的那次重疊執行
     private var inFlight: Set<String> = []
@@ -130,6 +133,7 @@ final class PluginRunner: ObservableObject {
         guard isActive else { return }
         isActive = false
         epoch += 1
+        rerunAfter = []
         paused = []
         removeObservers()
         stopWatcher()
@@ -402,7 +406,8 @@ final class PluginRunner: ObservableObject {
     nonisolated static let stderrLimit = 4096
 
     func run(_ id: String) async {
-        guard let p = plugins.first(where: { $0.id == id }), !inFlight.contains(id) else { return }
+        guard let p = plugins.first(where: { $0.id == id }) else { return }
+        if inFlight.contains(id) { rerunAfter.insert(id); return }
         let myEpoch = epoch
         setInFlight(id, true)
         await acquireSlot()
@@ -492,6 +497,10 @@ final class PluginRunner: ObservableObject {
         if r != runningIDs { runningIDs = r }
         if !on, let waiters = idleWaiters.removeValue(forKey: id) {
             for w in waiters { w.resume() }
+        }
+        // 補跑：只在目前可以執行（已開啟或測試直接呼叫、且沒有暫停）時；暫停期間由 resume 的 refreshAll 負責
+        if !on, rerunAfter.remove(id) != nil, isActiveOrDirect, paused.isEmpty {
+            Task { await run(id) }
         }
     }
 

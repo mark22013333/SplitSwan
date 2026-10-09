@@ -206,6 +206,8 @@ enum PluginLogic {
     static func sanitize(_ s: String) -> String {
         var out = String.UnicodeScalarView()
         for u in s.unicodeScalars {
+            // 放行 ZWJ（U+200D，組合 emoji 如 👨‍💻）與 tag 字元（U+E0020–E007F，旗幟 emoji）；其他格式字元照濾
+            if u.value == 0x200D || (0xE0020...0xE007F).contains(u.value) { out.append(u); continue }
             switch u.properties.generalCategory {
             case .control, .format, .lineSeparator, .paragraphSeparator: continue
             default: out.append(u)

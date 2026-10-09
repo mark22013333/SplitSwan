@@ -11,10 +11,21 @@ enum ProcessRunner {
         private var data = Data()
         private(set) var dropped = false
         let limit: Int?
-        init(limit: Int?) { self.limit = limit }
+        let keepTail: Bool       // true：超過上限時丟掉最前面的資料，只保留最後 limit bytes
+        init(limit: Int?, keepTail: Bool = false) { self.limit = limit; self.keepTail = keepTail }
         func append(_ d: Data) {
             lock.lock(); defer { lock.unlock() }
             guard let limit else { data.append(d); return }
+            if keepTail {
+                if d.count >= limit {
+                    data = Data(d.suffix(limit))
+                    dropped = true
+                } else {
+                    data.append(d)
+                    if data.count > limit { data.removeFirst(data.count - limit); dropped = true }
+                }
+                return
+            }
             let room = limit - data.count
             if room >= d.count { data.append(d); return }
             if room > 0 { data.append(d.prefix(room)) }
@@ -31,14 +42,14 @@ enum ProcessRunner {
         var timedOut: Bool
         var launchError: String?
         var truncated = false     // 輸出超過 maxBytes，後面的資料已丟棄
-        var errorOutput = ""      // stderrLimit 不為 nil 時，另外收集的 stderr（最多 stderrLimit bytes）
+        var errorOutput = ""      // stderrLimit 不為 nil 時，另外收集的 stderr（最後 stderrLimit bytes）
     }
 
     /// 執行外部指令，超過 timeout 秒先送 SIGTERM，termGrace 秒後仍在就 SIGKILL。
     /// 輸出（stdout 與 stderr 合併）用 readabilityHandler 持續讀取，輸出很多也不會因為 pipe 滿了而卡住。
     /// 逾時時 code 是子程序被終止後的結束狀態（理論上不會還在跑，萬一還在則為 -1），由呼叫者決定要不要改寫
     /// maxBytes：最多保留多少 bytes 的輸出，nil（預設）表示不限；qos：等待子程序的背景 queue 優先權（外掛用 .utility）。
-    /// stderrLimit：不為 nil 時 stderr 改用另一條 pipe 收集到 errorOutput（最多這麼多 bytes，其餘丟棄），
+    /// stderrLimit：不為 nil 時 stderr 改用另一條 pipe 收集到 errorOutput（只保留最後這麼多 bytes），
     /// 不再混進 output；nil（預設）維持 stdout／stderr 合併
     static func execute(_ exe: String, _ args: [String], env: [String: String]? = nil,
                         timeout: TimeInterval, termGrace: TimeInterval = 1, maxBytes: Int? = nil,
@@ -59,7 +70,7 @@ enum ProcessRunner {
                     if d.isEmpty { h.readabilityHandler = nil; eof.signal() } else { buf.append(d) }
                 }
                 let errPipe: Pipe? = stderrLimit == nil ? nil : Pipe()
-                let errBuf = Buffer(limit: stderrLimit)
+                let errBuf = Buffer(limit: stderrLimit, keepTail: true)
                 let errEOF = DispatchSemaphore(value: 0)
                 if let errPipe {
                     p.standardError = errPipe

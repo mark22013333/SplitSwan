@@ -134,6 +134,9 @@ check("控制／格式／分隔字元全部移除", !allScalars.contains { [.con
 check("移除後的文字", ctl.items.map(\.text) == ["AB 結束", "XYZW", "NUL", "moc.elppa", "[31mesc", "iso"] && ctl.title == "Tx")
 let zal = L.parseOutput("T\n---\nZ" + String(repeating: "\u{0301}", count: 30000)).items[0].text
 check("單一字元帶 3 萬個組合符號：截到 \(zal.utf8.count) bytes", zal.utf8.count <= L.maxTextBytes + 3)
+check("組合 emoji（ZWJ）與旗幟（tag 字元）保留", L.sanitize("👨\u{200D}💻") == "👨\u{200D}💻"
+      && L.sanitize("🏴\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}") == "🏴\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}")
+check("U+202E、U+200E、U+2066 仍被濾掉", L.sanitize("a\u{202E}b\u{200E}c\u{2066}d") == "abcd")
 check("檔名含控制字元不當外掛", L.parseFileName("a\u{202E}.1m.sh") == nil && L.parseFileName("a\r.1m.sh") == nil)
 
 var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(identifier: "Asia/Taipei")!
@@ -512,15 +515,19 @@ check("a.1m.sh 與 a.5m.py 各自的狀態資料夾", dupR.plugins.first { $0.id
       && dupR.plugins.first { $0.id == "a.5m.py" }?.output?.title == dupState + "/a.5m.py")
 // stderr 有上限、不寫檔
 let errDir = mkPluginDir("stderr"), errState = root + "/sec-stderr/state"
-put("e.1m.sh", "#!/bin/bash\nhead -c 3000000 /dev/zero | tr '\\0' 'e' >&2\necho\necho 最後一行 >&2\nexit 2\n", dir: errDir)
+put("e.1m.sh", "#!/bin/bash\nhead -c 3000000 /dev/zero | tr '\\0' 'e' >&2\necho >&2\necho 最後一行 >&2\nexit 2\n", dir: errDir)
 let errR = PluginRunner(directory: URL(fileURLWithPath: errDir), stateRoot: URL(fileURLWithPath: errState))
 errR.timeout = 5
 await errR.refreshAll()
 let errMsg = errR.plugins.first?.error ?? ""
 check("大量 stderr：錯誤訊息有上限（\(errMsg.utf8.count) bytes）", errMsg.hasPrefix("結束碼 2") && errMsg.utf8.count < 700)
+check("大量 stderr 之後的最後一行仍顯示（保留最後 4 KB）", errMsg == "結束碼 2：最後一行")
 check("stderr 不再寫進狀態資料夾", !fm.fileExists(atPath: errState + "/e.1m.sh/.stderr"))
 let rawErr = await ProcessRunner.execute("/bin/sh", ["-c", "head -c 100000 /dev/zero >&2; echo out"], timeout: 5, stderrLimit: 4096)
 check("ProcessRunner stderrLimit：stderr 分開且 ≤ 4 KB、stdout 不混入", rawErr.errorOutput.utf8.count == 4096 && rawErr.output == "out\n")
+let tailErr = await ProcessRunner.execute("/bin/sh", ["-c", "echo FIRST >&2; head -c 100000 /dev/zero | tr '\\0' x >&2; echo; echo LAST >&2"], timeout: 5, stderrLimit: 4096)
+check("stderr 保留最後 4 KB：有 LAST、沒有 FIRST", tailErr.errorOutput.hasSuffix("LAST\n") && !tailErr.errorOutput.contains("FIRST")
+      && tailErr.errorOutput.utf8.count == 4096)
 // 關閉／暫停的完整性（M1）
 let m1Dir = mkPluginDir("m1"), m1Log = root + "/sec-m1/ran.log"
 for n in ["s1", "s2", "s3"] {
@@ -549,6 +556,44 @@ m1.resume(.locked)
 for _ in 0..<60 where m1Sent < 3 { try? await Task.sleep(nanoseconds: 100_000_000) }
 check("正對照：解除暫停後照常執行並發通知（\(m1Sent) 則）", m1Sent == 3 && m1.plugins.allSatisfy { $0.output != nil })
 m1.setEnabled(false)
+
+// 關閉後立刻重開、暫停中途恢復：舊的那次結果丟棄後要補跑，不可等到下一個間隔
+/// 同一支外掛的最大同時執行數
+func m1Depth() -> Int {
+    var d: [String: Int] = [:], mx = 0
+    for l in ((try? String(contentsOfFile: m1Log + ".depth", encoding: .utf8)) ?? "").split(separator: "\n") {
+        let name = String(l.dropFirst()); d[name, default: 0] += l.hasPrefix("+") ? 1 : -1; mx = max(mx, d[name]!)
+    }
+    return mx
+}
+let rDir = mkPluginDir("rerun"), rState = root + "/sec-rerun/state"
+for n in ["r1", "r2"] {
+    put("\(n).1m.sh", "#!/bin/bash\necho +\(n) >> \"\(m1Log).depth\"\nsleep 1\necho -\(n) >> \"\(m1Log).depth\"\necho T\(n)\necho ---\necho \"hi | notify=true notify_id=\(n)\"\n", dir: rDir)
+}
+let rr = PluginRunner(directory: URL(fileURLWithPath: rDir), stateRoot: URL(fileURLWithPath: rState))
+rr.timeout = 5
+var rrSent = 0
+rr.notifier = { _, _, _, _ in rrSent += 1 }
+rr.setEnabled(true)
+try? await Task.sleep(nanoseconds: 400_000_000)
+rr.setEnabled(false); rr.setEnabled(true)
+for _ in 0..<40 where !(rr.plugins.count == 2 && rr.plugins.allSatisfy({ $0.output != nil })) { try? await Task.sleep(nanoseconds: 100_000_000) }
+check("關閉後立刻重開：舊的結束後補跑，約 2 秒內都有輸出（\(rr.plugins.map { $0.output?.title ?? "nil" })，通知 \(rrSent)）", rr.plugins.count == 2 && rr.plugins.allSatisfy { $0.output != nil } && rrSent == 2)
+rr.setEnabled(false)
+let rr2 = PluginRunner(directory: URL(fileURLWithPath: rDir), stateRoot: URL(fileURLWithPath: rState + "2"))
+rr2.timeout = 5
+var rr2Sent = 0
+rr2.notifier = { _, _, _, _ in rr2Sent += 1 }
+rr2.setEnabled(true)
+try? await Task.sleep(nanoseconds: 400_000_000)
+rr2.pause(.locked)
+try? await Task.sleep(nanoseconds: 200_000_000)
+rr2.resume(.locked)                                   // 舊的那次還在跑
+check("暫停中途恢復：舊的那次結果不採用（M1）", rr2.plugins.allSatisfy { $0.output == nil } && rr2Sent == 0)
+for _ in 0..<40 where !(rr2.plugins.count == 2 && rr2.plugins.allSatisfy({ $0.output != nil })) { try? await Task.sleep(nanoseconds: 100_000_000) }
+check("暫停中途恢復：舊的結束後補跑並發通知", rr2.plugins.count == 2 && rr2.plugins.allSatisfy { $0.output != nil } && rr2Sent == 2)
+rr2.setEnabled(false)
+check("補跑期間同一外掛不重疊（同一支最大同時 \(m1Depth())）", m1Depth() == 1)
 
 print("整合測試目錄：\(root)")
 

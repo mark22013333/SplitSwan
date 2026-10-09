@@ -158,6 +158,7 @@ App 取得閘道與網段的順序：
 ### 放在哪裡
 
 - 外掛資料夾：`~/.config/splitswan/plugins/`。App 不會自己建立，按設定頁的「開啟外掛資料夾」才建立（權限 700）。
+- 外掛直接執行（不經 shell），所以**第一行必須是 shebang**，例如 `#!/bin/bash` 或 `#!/usr/bin/env python3`；沒有 shebang 的腳本會顯示「無法執行」。
 - 資料夾內每個**可執行的一般檔案**就是一個外掛；隱藏檔、不可執行的檔案、子資料夾都略過。最多 10 個，超過的依檔名排序後略過，設定頁會列出來。
 - 檔名格式同 SwiftBar：`<名稱>.<間隔>.<副檔名>`，例如 `punch-reminder.1m.sh`。間隔可寫 `30s`、`1m`、`5m`、`1h`、`1d`，最短 30 秒（寫更短也當 30 秒）；沒寫間隔就是 5 分鐘。
 - App 啟動、打開設定頁、按「立即重新整理」時各跑一次，之後依間隔執行；同一個外掛上一次還沒跑完不會重複執行，同時最多執行 2 個外掛，其餘排隊。
@@ -206,10 +207,11 @@ App 取得閘道與網段的順序：
   - 外掛資料夾以上每一層直到 `/` 都必須屬於你或 root，且不可被他人寫入（設了 sticky bit 的 `/tmp` 這類例外），也不可有允許他人寫入的 ACL。
   - 帶有下載隔離標記（`com.apple.quarantine`）的檔案不執行。確認內容沒問題後，可以自行執行 `xattr -d com.apple.quarantine <檔案>` 移除標記。
 - 直接執行檔案本身，不把任何內容拼進 shell 指令。每次限時 10 秒，逾時先送 SIGTERM、1 秒後 SIGKILL。只會結束外掛本身：外掛另外啟動、而且忽略 SIGTERM 的子程序，逾時後可能留在背景。
-- 環境變數只給：`PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`、`HOME`、`SPLITSWAN=1`、`SPLITSWAN_PLUGIN_STATE`（`~/.config/splitswan/plugin-state/<完整檔名>`，App 建立，權限 700，可放外掛自己的狀態）。不傳 VPN 設定或任何秘密。stderr 另外收集，最多保留 4 KB，只用來顯示錯誤原因、不寫檔。
+- 環境變數只給：`PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`、`HOME`、`SPLITSWAN=1`、`SPLITSWAN_PLUGIN_STATE`（`~/.config/splitswan/plugin-state/<完整檔名>`，App 建立，權限 700，可放外掛自己的狀態）。不傳 VPN 設定或任何秘密。stderr 另外收集，只保留最後 4 KB，用來顯示錯誤原因（最後一行）、不寫檔。
 - 外掛輸出視為不受信任的資料：讀取時最多保留 64 KB，之後的輸出直接丟棄（仍持續讀取，外掛不會卡住），最多顯示 30 個項目；每個項目的文字最多 200 字、600 bytes，並去掉控制字元、方向控制字元與換行類字元；`href` 只接受 http／https 且不可含帳密，`bash=` 只接受外掛本身。
 - 每日通知去重紀錄每個外掛一份，存在 `~/.config/splitswan/plugin-state/.notified/<完整檔名>.json`（600），只保留當天、最多 20 個鍵。
-- 關閉外掛或進入睡眠／鎖定後，排隊中的外掛不會開始，執行到一半的結果直接丟棄（不更新選單、不發通知）。
+- 關閉外掛或進入睡眠／鎖定後，排隊中的外掛不會開始，執行到一半的結果直接丟棄（不更新選單、不發通知）；之後重新開啟或解鎖時，若那次還沒結束，會等它結束後立刻補跑一次。
+- 文字過濾保留 ZWJ（U+200D）與 tag 字元（U+E0020–E007F），組合 emoji（例：👨‍💻、旗幟）可以正常顯示。
 
 ### 範例：打卡提醒
 
