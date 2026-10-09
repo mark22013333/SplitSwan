@@ -45,6 +45,104 @@ struct HelperStatus: Equatable {
     }
 }
 
+/// 輔助程式 `up N` 失敗時回報的原因。新版輔助程式在「fail vpnN」之前多印一行「reason vpnN <代碼>」，
+/// 舊版沒有這一行（解析結果為 nil，畫面維持原本的文字）
+enum ConnectFailReason: String, Equatable, CaseIterable {
+    case auth, proposal, ts, timeout, unreachable, unknown
+    /// App 端判定：輔助程式超過時限沒有回應、已中止（不是輔助程式印的代碼）
+    case helperTimeout = "helper-timeout"
+
+    /// 畫面上顯示的短句
+    var text: String {
+        switch self {
+        case .auth: return "帳號、密碼或預先共用金鑰（PSK）錯誤"
+        case .proposal: return "加密參數與閘道不符"
+        case .ts: return "通道網段不被閘道接受"
+        case .timeout: return "協商逾時"
+        case .unreachable: return "閘道沒有回應或連不到"
+        case .unknown: return "原因不明，請開啟連線紀錄查看"
+        case .helperTimeout: return "輔助程式沒有回應，已逾時中止"
+        }
+    }
+
+    /// 從 `up N` 的輸出找「reason vpnN <代碼>」。沒有這一行（舊版輔助程式、sudo 失敗）回傳 nil；
+    /// 代碼認不得（例：更新版輔助程式新增的代碼）回傳 .unknown
+    static func parse(_ output: String, gateway n: Int) -> ConnectFailReason? {
+        for line in output.split(whereSeparator: \.isNewline) {
+            let p = line.split(separator: " ").map(String.init)
+            guard p.count >= 3, p[0] == "reason", p[1] == "vpn\(n)" else { continue }
+            guard let r = ConnectFailReason(rawValue: p[2]), r != .helperTimeout else { return .unknown }
+            return r
+        }
+        return nil
+    }
+
+    /// 一次 runHelper(["up", N]) 的結果 → 原因。App 端逾時優先；其餘交給 parse
+    static func from(code: Int32, output: String, gateway n: Int) -> ConnectFailReason? {
+        guard code != 0 else { return nil }
+        if HelperRun.isTimeout(code: code, output: output) { return .helperTimeout }
+        return parse(output, gateway: n)
+    }
+
+    /// 一輪連線都失敗後顯示的訊息。reasons 只放有原因的閘道；全部沒有原因（舊版輔助程式）時維持原本的文字
+    static func message(order: [Int], reasons: [Int: ConnectFailReason], isSingle: Bool) -> String {
+        if isSingle, let n = order.first {
+            guard let r = reasons[n] else { return "VPN\(n) 連線失敗，將自動重試同一台；請開啟連線 log 查看原因" }
+            return "VPN\(n) 連線失敗：\(r.text)。將自動重試同一台"
+        }
+        let known = order.compactMap { n in reasons[n].map { (n, $0) } }
+        if known.isEmpty { return "所有閘道都連不上，將自動重試" }
+        let kinds = Set(known.map(\.1))
+        if kinds.count == 1, known.count == order.count, let r = kinds.first {
+            return "所有閘道都連不上：\(r.text)。將自動重試"
+        }
+        let detail = known.map { "VPN\($0.0)：\($0.1.text)" }.joined(separator: "；")
+        return "所有閘道都連不上（\(detail)），將自動重試"
+    }
+}
+
+/// 呼叫輔助程式的時限（A2）。值依子命令與 splitswan-helper 內部的 swanctl --timeout 推得
+enum HelperRun {
+    /// 逾時時 run 回傳的結束代碼（跟 coreutils timeout 相同）
+    static let timeoutCode: Int32 = 124
+    /// 逾時時附加在輸出最後的說明，用來跟「輔助程式自己回 124」區分
+    static let timeoutMarker = "（逾時：超過"
+
+    /// 子命令的時限；nil 代表不限時（log 是長時間串流）
+    static func timeout(for args: [String]) -> TimeInterval? {
+        switch args.first {
+        case "log":
+            return nil
+        case "up":
+            // 啟動 charon 最多等 5 秒、terminate_all 3 台各 5 秒、每台 initiate 20 秒＋失敗後 terminate 5 秒；
+            // up auto 輪完三台約 95 秒，再留餘裕
+            return 120
+        case "down":
+            return 30      // terminate_all：3 台各 5 秒
+        case "status", "sas":
+            return 15      // 只有 swanctl --list-sas
+        default:
+            return 30      // reload、reload-settings、logtrim
+        }
+    }
+
+    static func isTimeout(code: Int32, output: String) -> Bool {
+        code == timeoutCode && output.contains(timeoutMarker)
+    }
+
+    static func timeoutNote(_ seconds: TimeInterval) -> String {
+        "\(timeoutMarker) \(Int(seconds)) 秒沒有完成，已中止）"
+    }
+}
+
+/// run 收集輸出的緩衝區（在 readabilityHandler 的背景執行緒寫入）
+private final class RunOutputBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+    func append(_ d: Data) { lock.lock(); data.append(d); lock.unlock() }
+    var value: Data { lock.lock(); defer { lock.unlock() }; return data }
+}
+
 /// 自動重連用到的純邏輯，不碰系統狀態，方便單獨測試
 enum ReconnectPolicy {
     /// 一整輪都失敗後，第 n 次（從 0 起）重試前要等的秒數：5、15、30、60，之後固定 60
@@ -149,6 +247,7 @@ final class VPNController: ObservableObject {
     private var timer: Timer?
     private var logTrimTimer: Timer?
     private var refreshing = false
+    private var statusTimedOut = false                // 上一次 status 逾時（只在剛發生時記一筆）
     private var status = HelperStatus(state: .disconnected, localIP: nil, establishedSeconds: nil)
     private var firstRefreshDone = false
 
@@ -283,6 +382,13 @@ final class VPNController: ObservableObject {
         Task {
             defer { refreshing = false }
             let (code, out) = await Self.runHelper(["status"])
+            if HelperRun.isTimeout(code: code, output: out) {
+                // charon 卡住時 status 會逾時：保留上一次的狀態，不當成「輔助程式未安裝」，也不觸發重連判斷
+                if !statusTimedOut { note("讀取連線狀態逾時（charon 可能沒有回應）") }
+                statusTimedOut = true
+                return
+            }
+            statusTimedOut = false
             let new = code == 0 ? HelperStatus.parse(out) : HelperStatus(state: .helperMissing, localIP: nil, establishedSeconds: nil)
             apply(new)
         }
@@ -469,6 +575,7 @@ final class VPNController: ObservableObject {
             // F3：每次連線嘗試前控制 charon log 大小（規格 §5.3）；舊版輔助程式不認得，結果一律不管
             await Self.trimCharonLog()
             var ok = false
+            var reasons: [Int: ConnectFailReason] = [:]   // A1：各台的失敗原因（舊版輔助程式沒有）
             for n in order {
                 if self.pendingDown || !self.wantConnected || !self.networkUp { break }
                 self.busyText = "連線 VPN\(n)…"
@@ -477,7 +584,12 @@ final class VPNController: ObservableObject {
                 let (code, out) = await Self.runHelper(["up", "\(n)"])
                 self.recordAttempt(n, address: address, success: code == 0, output: out, started: started)
                 if code == 0 { ok = true; self.lastUpAt = Date(); self.note("VPN\(n) 已連線"); break }
-                note("VPN\(n) 連線失敗")
+                if let r = ConnectFailReason.from(code: code, output: out, gateway: n) {
+                    reasons[n] = r
+                    note("VPN\(n) 連線失敗：\(r.text)")
+                } else {
+                    note("VPN\(n) 連線失敗")
+                }
             }
             self.finishOp()
             if self.pendingDown || !self.wantConnected {
@@ -493,9 +605,7 @@ final class VPNController: ObservableObject {
             } else if !self.networkUp {
                 self.retryNote = "沒有網路，恢復後自動重連"
             } else {
-                self.lastError = isSingle
-                    ? "VPN\(order[0]) 連線失敗，將自動重試同一台；請開啟連線 log 查看原因"
-                    : "所有閘道都連不上，將自動重試"
+                self.lastError = ConnectFailReason.message(order: order, reasons: reasons, isSingle: isSingle)
                 if soon { self.scheduleRetry(after: 1) } else { self.scheduleRetry() }
             }
             self.afterOpRecheck()
@@ -605,8 +715,9 @@ final class VPNController: ObservableObject {
 
     // MARK: 呼叫輔助程式
 
+    /// 依子命令限時（HelperRun.timeout）。逾時回 HelperRun.timeoutCode，連線動作會照常結束、釋放協調器
     nonisolated static func runHelper(_ args: [String]) async -> (Int32, String) {
-        await run("/usr/bin/sudo", ["-n", helperPath] + args)
+        await run("/usr/bin/sudo", ["-n", helperPath] + args, timeout: HelperRun.timeout(for: args))
     }
 
     /// 輔助程式 logtrim：charon log 太大時就地截斷。舊版輔助程式會回 usage 錯誤，
@@ -615,8 +726,14 @@ final class VPNController: ObservableObject {
         _ = await runHelper(["logtrim"])
     }
 
-    nonisolated static func run(_ exe: String, _ args: [String], env: [String: String]? = nil) async -> (Int32, String) {
-        await withCheckedContinuation { cont in
+    /// 執行外部指令並收集輸出。timeout 為 nil 時不限時（brew install、管理者授權視窗要等使用者）；
+    /// 有時限時超過就先送 SIGTERM（sudo 會轉給輔助程式），1 秒後仍在就 SIGKILL，
+    /// 回傳 HelperRun.timeoutCode 與附上逾時說明的輸出。
+    /// 跟 ProcessRunner.runLimited 同一套作法；reconnect 測試組沒有編入 ProcessRunner，所以在這裡另寫一份
+    nonisolated static func run(_ exe: String, _ args: [String], env: [String: String]? = nil,
+                                timeout: TimeInterval? = nil) async -> (Int32, String) {
+        if let timeout { return await runLimited(exe, args, env: env, timeout: timeout) }
+        return await withCheckedContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
                 let p = Process()
                 p.executableURL = URL(fileURLWithPath: exe)
@@ -634,6 +751,58 @@ final class VPNController: ObservableObject {
                     code = p.terminationStatus
                 } catch {}
                 let out = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                cont.resume(returning: (code, out))
+            }
+        }
+    }
+
+    nonisolated private static func runLimited(_ exe: String, _ args: [String], env: [String: String]?,
+                                               timeout: TimeInterval) async -> (Int32, String) {
+        await withCheckedContinuation { cont in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: exe)
+                p.arguments = args
+                if let env { p.environment = env }
+                let pipe = Pipe()
+                p.standardOutput = pipe
+                p.standardError = pipe
+                p.standardInput = FileHandle.nullDevice
+                let buf = RunOutputBuffer()
+                let eof = DispatchSemaphore(value: 0)
+                // 持續讀取，輸出很多也不會因為 pipe 滿了而卡住
+                pipe.fileHandleForReading.readabilityHandler = { h in
+                    let d = h.availableData
+                    if d.isEmpty { h.readabilityHandler = nil; eof.signal() } else { buf.append(d) }
+                }
+                let exited = DispatchSemaphore(value: 0)
+                p.terminationHandler = { _ in exited.signal() }
+                do { try p.run() } catch {
+                    pipe.fileHandleForReading.readabilityHandler = nil
+                    cont.resume(returning: (127, ""))
+                    return
+                }
+                var timedOut = false
+                if exited.wait(timeout: .now() + timeout) == .timedOut {
+                    timedOut = true
+                    p.terminate()
+                    if exited.wait(timeout: .now() + 1) == .timedOut {
+                        kill(p.processIdentifier, SIGKILL)
+                        _ = exited.wait(timeout: .now() + 1)
+                    }
+                }
+                // 等剩下的輸出讀完；孫程序若還握著 pipe，最多再等 1 秒
+                if eof.wait(timeout: .now() + 1) == .timedOut {
+                    pipe.fileHandleForReading.readabilityHandler = nil
+                }
+                var out = String(decoding: buf.value, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+                let code: Int32
+                if timedOut {
+                    code = HelperRun.timeoutCode
+                    out += (out.isEmpty ? "" : "\n") + HelperRun.timeoutNote(timeout)
+                } else {
+                    code = p.isRunning ? -1 : p.terminationStatus
+                }
                 cont.resume(returning: (code, out))
             }
         }

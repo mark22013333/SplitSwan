@@ -152,6 +152,23 @@ check("log 檔不存在：寫明並提示更新系統元件", DiagnosticReport.b
 var emptyLog = input; emptyLog.charonLog = .content("", size: 0)
 check("log 檔是空的：寫明", DiagnosticReport.build(emptyLog, secrets: []).contains("log 檔是空的"))
 
+// MARK: App 連線紀錄（app.log）併入報告
+check("沒給 app.log：寫明沒有紀錄檔", report.contains("===== App 連線紀錄") && report.contains("沒有紀錄檔"))
+var withApp = input
+withApp.appLogPath = "/Users/test/Library/Logs/TestApp/app.log"
+withApp.appLog = .content((0..<250).map { "2026-10-09 10:00:00 app 第 \($0) 行" }.joined(separator: "\n")
+    + "\n2026-10-09 10:00:01 password=\(fakePwd)\n2026-10-09 10:00:02 誤記 \(fakePSK)\n", size: 999)
+let rawApp = DiagnosticReport.render(withApp)
+check("app.log 正對照：未遮蔽版本含假密碼", rawApp.contains(fakePwd) && rawApp.contains(fakePSK))
+let appReport = DiagnosticReport.build(withApp, secrets: [fakePwd, fakePSK])
+check("app.log 段落：路徑與行數", appReport.contains("===== App 連線紀錄（/Users/test/Library/Logs/TestApp/app.log 最後 \(DiagnosticReport.appLogTailLines) 行）"))
+check("app.log 只取最後 200 行", !appReport.contains("app 第 51 行\n") && appReport.contains("app 第 52 行") && appReport.contains("app 第 249 行"))
+check("app.log 內容照遮蔽規則遮蔽", count(fakePwd, in: appReport) == 0 && count(fakePSK, in: appReport) == 0)
+var emptyApp = input; emptyApp.appLog = .content("", size: 0)
+check("app.log 是空的：寫明", DiagnosticReport.build(emptyApp, secrets: []).contains("紀錄檔是空的"))
+var badApp = input; badApp.appLog = .unreadable("沒有讀取權限")
+check("app.log 讀不到：寫明原因", DiagnosticReport.build(badApp, secrets: []).contains("無法讀取紀錄檔：沒有讀取權限"))
+
 // MARK: filelog 設定（規格 §5.3）
 let tuning = ConfigStore.renderCharonTuning()
 check("filelog：路徑", tuning.contains("path = /var/log/splitswan/charon.log") && ConfigStore.charonLogPath == "/var/log/splitswan/charon.log")

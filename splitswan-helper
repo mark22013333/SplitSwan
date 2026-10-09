@@ -4,7 +4,8 @@
 #
 #   splitswan-helper status        輸出一行：connected <conn> <虛擬IP> <本機IP> <已建立秒數> | connecting <conn> | disconnected
 #                                （舊版只輸出前三欄；App 要能處理兩種格式）
-#   splitswan-helper up [auto|1|2|3]
+#   splitswan-helper up [auto|1|2|3]  成功：ok vpnN；失敗：每台一行 reason vpnN <原因代碼>，最後 fail vpnN（或 fail all）
+#                                （舊版沒有 reason 行；App 要能處理兩種格式）
 #   splitswan-helper down
 #   splitswan-helper log           即時輸出 charon log
 #   splitswan-helper reload        重新載入設定（App 儲存設定後呼叫）
@@ -45,15 +46,47 @@ terminate_all() {
   done
 }
 
+# >>> 連線與失敗分類（tools/test-classify.sh 會擷取這一段離線測試，標記行不要改）
+# 把 swanctl --initiate 的輸出（stdin）分類成一個原因代碼，只輸出代碼本身：
+#   auth        帳號、密碼或 PSK 錯（閘道回 AUTHENTICATION_FAILED、EAP 失敗、PSK 驗證不符）
+#   proposal    加密參數不符（NO_PROPOSAL_CHOSEN）
+#   ts          網段不被接受（TS_UNACCEPTABLE）
+#   unreachable 閘道沒回應或連不到（重送放棄、解析不到、送不出封包）
+#   timeout     swanctl --timeout 到了仍未建立
+#   unknown     以上都不是
+# 比對字串取自 strongSwan 6.x 的 charon／vici 訊息格式（本機 Homebrew 版二進位檔內的字串）。
+# 原始輸出含 IKE 身分（帳號）與位址，絕對不可以印出來，只印代碼。
+classify_fail() {
+  local t; t=$(cat)
+  if printf '%s\n' "$t" | grep -qiE 'AUTHENTICATION_FAILED|EAP authentication failed|EAP_FAILURE|EAP method .* failed|MAC mismatched|no shared key found|authentication of .* failed|constraint check failed|no trusted .* public key found'; then
+    echo auth
+  elif printf '%s\n' "$t" | grep -qiE 'NO_PROPOSAL_CHOSEN|no acceptable proposal found|no matching proposal found|received proposals unacceptable|no proposal found'; then
+    echo proposal
+  elif printf '%s\n' "$t" | grep -qiE 'TS_UNACCEPTABLE|no acceptable traffic selectors|invalid traffic selectors'; then
+    echo ts
+  elif printf '%s\n' "$t" | grep -qiE 'giving up after [0-9]+ retransmits|peer not responding|unable to resolve|error writing to socket|Network is unreachable|No route to host|Host is down'; then
+    echo unreachable
+  elif printf '%s\n' "$t" | grep -qiE 'not established after [0-9]+ ?ms'; then
+    echo timeout
+  else
+    echo unknown
+  fi
+}
+
+# 成功印「ok vpnN」；失敗另起一行印「reason vpnN <代碼>」，最後的「fail vpnN／fail all」由呼叫端照舊印。
+# 原因放在獨立的一行，舊版 App 只認「fail vpnN」整行比對，多一行不影響它
 try_conn() {
-  local c=$1
-  if "$SWANCTL" --initiate --child corp --ike "$c" --timeout 20 >/dev/null 2>&1; then
+  local c=$1 out reason
+  if out=$("$SWANCTL" --initiate --child corp --ike "$c" --timeout 20 2>&1); then
     echo "ok $c"
     return 0
   fi
+  reason=$(printf '%s\n' "$out" | classify_fail)
+  echo "reason $c ${reason:-unknown}"
   "$SWANCTL" --terminate --ike "$c" --force --timeout 5 >/dev/null 2>&1
   return 1
 }
+# <<< 連線與失敗分類
 
 cmd_status() {
   if ! charon_running; then echo "disconnected"; return; fi

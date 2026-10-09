@@ -104,6 +104,8 @@ final class DiagnosticRunner: ObservableObject {
             }
         }
         let log = DiagnosticReport.readTail(path: ConfigStore.charonLogPath)
+        let appLogPath = AppLogFile.defaultURL.path
+        let appLog = DiagnosticReport.readTail(path: appLogPath, maxBytes: 128 * 1024)
         progress(total, total)
 
         let missing = DiagnosticReport.CommandResult(code: 127, output: "")
@@ -128,7 +130,9 @@ final class DiagnosticRunner: ObservableObject {
             dnsProbe: results["dnsProbe"] ?? missing,
             httpsProbe: results["https"] ?? missing,
             charonLog: log,
-            logPath: ConfigStore.charonLogPath)
+            logPath: ConfigStore.charonLogPath,
+            appLog: appLog,
+            appLogPath: appLogPath)
         let text = DiagnosticReport.build(input, secrets: secrets)
         return (text, DiagnosticReport.fileName(app: AppInfo.name, date: started))
     }

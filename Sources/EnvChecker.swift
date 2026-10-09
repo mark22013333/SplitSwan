@@ -110,9 +110,11 @@ final class EnvChecker: ObservableObject {
         items = list
 
         Task {
-            let (code, _) = await VPNController.runHelper(["status"])
+            let (code, out) = await VPNController.runHelper(["status"])
             update("sudo") {
                 if code == 0 { $0.level = .ok; $0.detail = "已設定（/etc/sudoers.d/splitswan）" }
+                // 逾時代表 sudo 已放行、是 strongSwan 沒有回應，不要叫使用者重裝
+                else if HelperRun.isTimeout(code: code, output: out) { $0.level = .warn; $0.detail = "輔助程式沒有回應（strongSwan 可能卡住）" }
                 else { $0.level = .fail; $0.detail = "無法免密碼執行輔助程式"; $0.action = .installHelper; $0.actionTitle = "安裝" }
             }
         }
