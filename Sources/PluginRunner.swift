@@ -35,15 +35,18 @@ final class PluginRunner: ObservableObject {
         var problem: String?         // 權限檢查不通過的原因（不會執行）
         var lastRun: Date?
         var output: PluginLogic.Output?
-        var error: String?           // 上次執行的錯誤（非 0 結束、逾時、點擊動作被拒）
+        var error: String?           // 上次執行的錯誤（非 0 結束、逾時）：選單只顯示原因
+        var actionError: String?     // 上次點擊動作的錯誤：保留上次的項目，只在標題加 ⚠︎
         var running = false
 
         var title: String {
             if let t = output?.title, !t.isEmpty { return t }
             return name
         }
+        /// 讓選單只顯示原因、不顯示項目的錯誤
+        var blocking: String? { problem ?? error }
         /// 選單與設定頁顯示的錯誤原因
-        var failure: String? { problem ?? error }
+        var failure: String? { problem ?? error ?? actionError }
     }
 
     @Published private(set) var plugins: [Plugin] = []
@@ -61,6 +64,9 @@ final class PluginRunner: ObservableObject {
     private var timer: Timer?
     private var wakeObserver: NSObjectProtocol?
     private var notifyLog: PluginLogic.NotifyLog?
+    /// 有程序正在跑的外掛（排程執行或點擊動作）。關閉開關不會清掉，
+    /// 所以關閉後立刻重開也不會和還沒結束的那次重疊執行
+    private var inFlight: Set<String> = []
 
     init(directory: URL, stateRoot: URL) {
         self.directory = directory
@@ -87,8 +93,8 @@ final class PluginRunner: ObservableObject {
         timer?.invalidate()
         timer = nil
         guard on else {
-            plugins = []
-            skipped = []
+            setPlugins([])
+            if !skipped.isEmpty { skipped = [] }
             nextDue = [:]
             return
         }
@@ -108,6 +114,7 @@ final class PluginRunner: ObservableObject {
     /// 重新掃描並立刻執行全部外掛（測試也直接呼叫這個）
     func refreshAll() async {
         scan()
+        for p in plugins where p.actionError != nil { update(p.id) { $0.actionError = nil } }
         await withTaskGroup(of: Void.self) { group in
             for p in plugins { group.addTask { await self.run(p.id) } }
         }
@@ -116,7 +123,7 @@ final class PluginRunner: ObservableObject {
     private func tick() {
         scan()
         let t = now()
-        for p in plugins where !p.running && (nextDue[p.id] ?? .distantPast) <= t {
+        for p in plugins where !inFlight.contains(p.id) && (nextDue[p.id] ?? .distantPast) <= t {
             Task { await run(p.id) }
         }
     }
@@ -127,12 +134,12 @@ final class PluginRunner: ObservableObject {
     func scan() {
         let fm = FileManager.default
         guard let names = try? fm.contentsOfDirectory(atPath: directory.path) else {
-            folderMissing = true
-            plugins = []
-            skipped = []
+            if !folderMissing { folderMissing = true }
+            setPlugins([])
+            if !skipped.isEmpty { skipped = [] }
             return
         }
-        folderMissing = false
+        if folderMissing { folderMissing = false }
         let uid = getuid()
         var found: [Plugin] = []
         for file in names.sorted() {
@@ -144,19 +151,21 @@ final class PluginRunner: ObservableObject {
             found.append(Plugin(id: file, name: fn.name, interval: fn.interval, path: path,
                                 resolved: resolved, problem: problem))
         }
-        skipped = found.dropFirst(PluginLogic.maxPlugins).map(\.id)
+        let newSkipped = found.dropFirst(PluginLogic.maxPlugins).map(\.id)
+        if newSkipped != skipped { skipped = newSkipped }
         found = Array(found.prefix(PluginLogic.maxPlugins))
         // 保留上次的執行結果
         let old = Dictionary(uniqueKeysWithValues: plugins.map { ($0.id, $0) })
-        plugins = found.map { p in
-            guard let o = old[p.id] else { return p }
+        setPlugins(found.map { p in
             var n = p
+            n.running = inFlight.contains(p.id)
+            guard let o = old[p.id] else { return n }
             n.lastRun = o.lastRun
             n.output = o.output
             n.error = p.problem == nil ? o.error : nil
-            n.running = o.running
+            n.actionError = o.actionError
             return n
-        }
+        })
         let ids = Set(plugins.map(\.id))
         nextDue = nextDue.filter { ids.contains($0.key) }
     }
@@ -185,7 +194,7 @@ final class PluginRunner: ObservableObject {
     // MARK: 執行
 
     func run(_ id: String) async {
-        guard let i = plugins.firstIndex(where: { $0.id == id }), !plugins[i].running else { return }
+        guard let i = plugins.firstIndex(where: { $0.id == id }), !inFlight.contains(id) else { return }
         let p = plugins[i]
         nextDue[id] = now().addingTimeInterval(p.interval)
         guard p.problem == nil, let exe = p.resolved else { return }   // 權限不符：不執行，原因已在 problem
@@ -193,12 +202,12 @@ final class PluginRunner: ObservableObject {
             update(id) { $0.error = "無法建立外掛的狀態資料夾"; $0.lastRun = self.now() }
             return
         }
-        update(id) { $0.running = true }
+        setInFlight(id, true)
         let r = await ProcessRunner.runLimited("/usr/bin/env", Self.wrapperArgs(exe: exe, args: [], state: state),
-                                               timeout: timeout)
+                                               timeout: timeout, maxBytes: Self.readLimit)
+        setInFlight(id, false)
         let finished = now()
         update(id) { pl in
-            pl.running = false
             pl.lastRun = finished
             if r.timedOut {
                 pl.error = "執行逾時（超過 \(Int(self.timeout)) 秒）"
@@ -213,6 +222,14 @@ final class PluginRunner: ObservableObject {
         if r.code == 0, !r.timedOut, let out = plugins.first(where: { $0.id == id })?.output {
             sendNotifications(plugin: p.name, output: out)
         }
+    }
+
+    /// 讀取輸出的上限：比 64 KB 多 1 byte，PluginLogic.parseOutput 才知道被截斷
+    static let readLimit = PluginLogic.maxOutputBytes + 1
+
+    private func setInFlight(_ id: String, _ on: Bool) {
+        if on { inFlight.insert(id) } else { inFlight.remove(id) }
+        update(id) { $0.running = on }
     }
 
     /// 經 /usr/bin/env -i 清空環境變數，再由 /bin/sh 以固定字串 exec 外掛（外掛路徑與參數都是獨立的 argv，不拼進 shell 字串）。
@@ -246,9 +263,16 @@ final class PluginRunner: ObservableObject {
         return line.count > 200 ? String(line.prefix(200)) + "…" : line
     }
 
+    /// 只在內容真的變了才發布，選單不會每 5 秒整段重建
     private func update(_ id: String, _ f: (inout Plugin) -> Void) {
         guard let i = plugins.firstIndex(where: { $0.id == id }) else { return }
-        f(&plugins[i])
+        var p = plugins[i]
+        f(&p)
+        if p != plugins[i] { plugins[i] = p }
+    }
+
+    private func setPlugins(_ new: [Plugin]) {
+        if new != plugins { plugins = new }
     }
 
     // MARK: 通知
@@ -277,7 +301,8 @@ final class PluginRunner: ObservableObject {
 
     // MARK: 點擊
 
-    /// 選單項目被點擊：href 開網址；bash= 先通過擁有者／權限檢查才執行；refresh=true 完成後重跑外掛
+    /// 選單項目被點擊：href 開網址；bash= 必須是外掛本身或外掛資料夾內的程式，且通過擁有者／權限檢查才執行；
+    /// refresh=true 完成後重跑外掛。點擊動作與排程執行共用 inFlight，不會重疊；失敗時保留上次的項目、標題加 ⚠︎
     func perform(pluginID: String, item: PluginLogic.Item) {
         if let url = item.href { NSWorkspace.shared.open(url) }
         guard let p = plugins.first(where: { $0.id == pluginID }) else { return }
@@ -285,20 +310,32 @@ final class PluginRunner: ObservableObject {
             if item.refresh { rerun(pluginID) }
             return
         }
-        guard let exe = Self.realPath(bash) else {
-            update(pluginID) { $0.error = "點擊動作被拒：找不到 \(bash)" }
+        guard let exe = Self.realPath(bash), let dir = Self.realPath(directory.path) else {
+            update(pluginID) { $0.actionError = "點擊動作被拒：找不到 \(bash)" }
             return
         }
-        if let why = Self.permissionProblem(resolved: exe, pluginDir: nil, uid: getuid()) {
-            update(pluginID) { $0.error = "點擊動作被拒：\(why)" }
+        if let why = PluginLogic.bashTargetProblem(resolved: exe, pluginDir: dir, pluginSelf: p.resolved)
+            ?? Self.permissionProblem(resolved: exe, pluginDir: nil, uid: getuid()) {
+            update(pluginID) { $0.actionError = "點擊動作被拒：\(why)" }
             return
         }
         guard let state = prepareStateDir(p.name) else { return }
         Task {
+            // 外掛正在跑（排程或上一個點擊）就等它結束，最多等一次執行的時間
+            let deadline = Date().addingTimeInterval(timeout + 3)
+            while inFlight.contains(pluginID), Date() < deadline {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            guard !inFlight.contains(pluginID) else {
+                update(pluginID) { $0.actionError = "點擊動作略過：外掛仍在執行中" }
+                return
+            }
+            setInFlight(pluginID, true)
             let r = await ProcessRunner.runLimited("/usr/bin/env", Self.wrapperArgs(exe: exe, args: item.bashArgs, state: state),
-                                                   timeout: timeout)
-            if r.code != 0 || r.timedOut {
-                update(pluginID) { $0.error = r.timedOut ? "點擊動作逾時" : "點擊動作結束碼 \(r.code)" }
+                                                   timeout: timeout, maxBytes: Self.readLimit)
+            setInFlight(pluginID, false)
+            update(pluginID) { pl in
+                pl.actionError = r.timedOut ? "點擊動作逾時" : (r.code != 0 ? "點擊動作結束碼 \(r.code)" : nil)
             }
             if item.refresh { rerun(pluginID) }
         }

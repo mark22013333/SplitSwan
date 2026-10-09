@@ -63,7 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         PluginRunner.shared.notifier = { title, body, href in
             DropNotifier.shared.sendPlugin(plugin: title, title: title, body: body, href: href)
         }
-        PluginRunner.shared.$plugins.receive(on: RunLoop.main)
+        PluginRunner.shared.$plugins.removeDuplicates().receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.renderPlugins() }
             .store(in: &bag)
         PluginRunner.shared.start()

@@ -177,11 +177,21 @@ enum PluginLogic {
 
     // MARK: 驗證
 
-    /// href 只接受 http／https，且要有主機名稱
+    /// href 只接受 http／https，且要有主機名稱；含帳密（`user:pw@`）的拒絕，避免用來偽裝網址
     static func safeURL(_ s: String) -> URL? {
         guard let u = URL(string: s), let scheme = u.scheme?.lowercased(), scheme == "http" || scheme == "https",
-              let host = u.host, !host.isEmpty else { return nil }
+              let host = u.host, !host.isEmpty, u.user == nil, u.password == nil else { return nil }
         return u
+    }
+
+    /// bash= 的目標（symlink 解析後）必須是外掛本身，或位於（解析後的）外掛資料夾內。
+    /// 擁有者檢查擋不住 Homebrew 直譯器（屬於使用者本人），所以另外限定位置。
+    /// 三個參數都必須是 realpath 的結果（沒有 ..、沒有 symlink）。
+    static func bashTargetProblem(resolved: String, pluginDir: String, pluginSelf: String?) -> String? {
+        if resolved == pluginSelf { return nil }
+        let dir = pluginDir.hasSuffix("/") ? pluginDir : pluginDir + "/"
+        if resolved.hasPrefix(dir), resolved.count > dir.count { return nil }
+        return "只能執行外掛資料夾內的程式"
     }
 
     /// 絕對路徑才接受；不可含換行或 NUL

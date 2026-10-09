@@ -5,11 +5,23 @@ import Foundation
 
 enum ProcessRunner {
     /// 收集輸出的緩衝區（在 readabilityHandler 的背景執行緒寫入）
+    /// limit 不為 nil 時，超過的資料直接丟棄（pipe 仍持續讀空，子程序不會因 pipe 滿了而卡住）
     private final class Buffer: @unchecked Sendable {
         private let lock = NSLock()
         private var data = Data()
-        func append(_ d: Data) { lock.lock(); data.append(d); lock.unlock() }
+        private(set) var dropped = false
+        let limit: Int?
+        init(limit: Int?) { self.limit = limit }
+        func append(_ d: Data) {
+            lock.lock(); defer { lock.unlock() }
+            guard let limit else { data.append(d); return }
+            let room = limit - data.count
+            if room >= d.count { data.append(d); return }
+            if room > 0 { data.append(d.prefix(room)) }
+            dropped = true
+        }
         var value: Data { lock.lock(); defer { lock.unlock() }; return data }
+        var truncated: Bool { lock.lock(); defer { lock.unlock() }; return dropped }
     }
 
     /// execute 的結果。output 是原始輸出（未修剪）；launchError 不為 nil 代表執行檔根本沒跑起來（此時 code 為 127）
@@ -18,13 +30,15 @@ enum ProcessRunner {
         var output: String
         var timedOut: Bool
         var launchError: String?
+        var truncated = false     // 輸出超過 maxBytes，後面的資料已丟棄
     }
 
     /// 執行外部指令，超過 timeout 秒先送 SIGTERM，termGrace 秒後仍在就 SIGKILL。
     /// 輸出（stdout 與 stderr 合併）用 readabilityHandler 持續讀取，輸出很多也不會因為 pipe 滿了而卡住。
     /// 逾時時 code 是子程序被終止後的結束狀態（理論上不會還在跑，萬一還在則為 -1），由呼叫者決定要不要改寫
+    /// maxBytes：最多保留多少 bytes 的輸出，nil（預設）表示不限
     static func execute(_ exe: String, _ args: [String], env: [String: String]? = nil,
-                        timeout: TimeInterval, termGrace: TimeInterval = 1) async -> Outcome {
+                        timeout: TimeInterval, termGrace: TimeInterval = 1, maxBytes: Int? = nil) async -> Outcome {
         await withCheckedContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
                 let p = Process()
@@ -35,7 +49,7 @@ enum ProcessRunner {
                 p.standardOutput = pipe
                 p.standardError = pipe
                 p.standardInput = FileHandle.nullDevice
-                let buf = Buffer()
+                let buf = Buffer(limit: maxBytes)
                 let eof = DispatchSemaphore(value: 0)
                 pipe.fileHandleForReading.readabilityHandler = { h in
                     let d = h.availableData
@@ -66,14 +80,17 @@ enum ProcessRunner {
                 }
                 let out = String(decoding: buf.value, as: UTF8.self)
                 let code: Int32 = p.isRunning ? -1 : p.terminationStatus
-                cont.resume(returning: Outcome(code: code, output: out, timedOut: timedOut, launchError: nil))
+                cont.resume(returning: Outcome(code: code, output: out, timedOut: timedOut, launchError: nil,
+                                               truncated: buf.truncated))
             }
         }
     }
 
     /// 診斷、主機檢查、一鍵更新用：逾時 1 秒寬限後 SIGKILL，結果包成 DiagnosticReport.CommandResult
-    static func runLimited(_ exe: String, _ args: [String], timeout: TimeInterval) async -> DiagnosticReport.CommandResult {
-        let r = await execute(exe, args, timeout: timeout)
+    /// maxBytes 同 execute（外掛用 64 KB；其他呼叫者走預設不限）
+    static func runLimited(_ exe: String, _ args: [String], timeout: TimeInterval,
+                           maxBytes: Int? = nil) async -> DiagnosticReport.CommandResult {
+        let r = await execute(exe, args, timeout: timeout, maxBytes: maxBytes)
         if let err = r.launchError {
             return DiagnosticReport.CommandResult(code: 127, output: "無法執行 \(exe)：\(err)", seconds: timeout)
         }

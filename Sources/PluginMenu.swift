@@ -10,7 +10,7 @@ enum PluginMenu {
         init(pluginID: String, item: PluginLogic.Item) { self.pluginID = pluginID; self.item = item }
     }
 
-    /// 每個外掛一個區段；外掛錯誤時標題後加「⚠︎」，子選單顯示一行原因
+    /// 每個外掛一個區段；外掛錯誤時標題後加「⚠︎」，標題的子選單顯示一行原因
     @MainActor
     static func sections(_ plugins: [PluginRunner.Plugin], target: AnyObject, action: Selector) -> [NSMenuItem] {
         var out: [NSMenuItem] = []
@@ -26,11 +26,12 @@ enum PluginMenu {
                 sub.addItem(reason)
                 header.submenu = sub
                 header.isEnabled = true
-                out.append(header)
-                continue
+            } else {
+                header.isEnabled = false
             }
-            header.isEnabled = false
             out.append(header)
+            // 執行失敗或權限不符只顯示原因；點擊動作失敗（actionError）則保留上次的項目
+            if p.blocking != nil { continue }
             guard let o = p.output else {
                 let wait = NSMenuItem(title: "執行中…", action: nil, keyEquivalent: "")
                 wait.isEnabled = false

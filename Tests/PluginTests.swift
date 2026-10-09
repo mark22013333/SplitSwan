@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 // 外掛區塊：PluginLogic 純邏輯＋PluginRunner 實跑假外掛的整合測試。
 // 整合測試只在 argv[1]（run-tests.sh 給的暫存目錄）底下建立檔案，不碰 ~/.config/splitswan。
@@ -129,6 +130,21 @@ check("正對照：--- 放錯位置時解析結果與正確輸出不同", wrong.
 check("正對照：錯誤參數格式得不到 href", L.parseLine("A | href = https://example.com").href == nil)
 check("正對照：權限判斷對 777 檔案不會回 nil", L.permissionProblem(file: FS(uid: me, mode: 0o100777), dir: dirOK, uid: me) != nil)
 
+// MARK: href 帳密、bash= 位置限制
+check("href：含帳密的網址拒絕", L.safeURL("https://user:pw@example.com/") == nil && L.safeURL("https://user@example.com/") == nil
+      && L.safeURL("http://example.com@evil.example/") == nil)
+check("href：一般網址（含 @ 在路徑）仍接受", L.safeURL("https://example.com/a@b") != nil)
+let pd = "/Users/me/.config/splitswan/plugins"
+check("bash=：外掛資料夾內接受", L.bashTargetProblem(resolved: pd + "/a.sh", pluginDir: pd, pluginSelf: nil) == nil
+      && L.bashTargetProblem(resolved: pd + "/lib/h.sh", pluginDir: pd + "/", pluginSelf: nil) == nil)
+check("bash=：外掛本身（symlink 到外面）接受", L.bashTargetProblem(resolved: "/Users/me/src/x.sh", pluginDir: pd, pluginSelf: "/Users/me/src/x.sh") == nil)
+check("bash=：/bin/sh、Homebrew 直譯器拒絕", L.bashTargetProblem(resolved: "/bin/sh", pluginDir: pd, pluginSelf: pd + "/a.sh") != nil
+      && L.bashTargetProblem(resolved: "/opt/homebrew/Cellar/python@3.14/3.14.7/bin/python3.14", pluginDir: pd, pluginSelf: nil) != nil)
+check("bash=：資料夾外的本人檔案拒絕", L.bashTargetProblem(resolved: "/Users/me/.config/splitswan/x.sh", pluginDir: pd, pluginSelf: nil) != nil)
+check("bash=：同前綴的相鄰資料夾拒絕", L.bashTargetProblem(resolved: pd + "-evil/a.sh", pluginDir: pd, pluginSelf: nil) != nil)
+check("bash=：資料夾本身拒絕", L.bashTargetProblem(resolved: pd, pluginDir: pd, pluginSelf: nil) != nil
+      && L.bashTargetProblem(resolved: pd + "/", pluginDir: pd, pluginSelf: nil) != nil)
+
 // MARK: 整合測試：實跑假外掛
 let base = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : NSTemporaryDirectory()
 let root = base + "/plugin-it-\(getpid())"
@@ -226,7 +242,111 @@ if let mark = good?.output?.items.first(where: { $0.text == "標記" }) {
 }
 // bash= 指向不屬於自己的程式 → 拒絕
 runner.perform(pluginID: "good.1m.sh", item: L.parseLine("x | bash=/bin/echo param1=hi"))
-check("bash= 指向 root 擁有的程式被拒", plugin("good.1m.sh")?.error?.contains("點擊動作被拒") == true)
+check("bash= 指向 root 擁有的程式被拒", plugin("good.1m.sh")?.actionError?.contains("點擊動作被拒") == true)
+check("點擊失敗：保留上次項目、只標 ⚠︎", plugin("good.1m.sh")?.output != nil && plugin("good.1m.sh")?.blocking == nil
+      && plugin("good.1m.sh")?.failure != nil)
+
+// bash= 位置限制（實際走 perform）：外部直譯器、資料夾外本人檔案、../ 跳脫、symlink 指出去都拒絕
+let pwn = root + "/pwned"
+@MainActor func tryClick(_ line: String) async -> String? {
+    runner.perform(pluginID: "good.1m.sh", item: L.parseLine(line))
+    try? await Task.sleep(nanoseconds: 1_500_000_000)
+    return plugin("good.1m.sh")?.actionError
+}
+if fm.isExecutableFile(atPath: "/opt/homebrew/bin/python3") {
+    let e = await tryClick("x | bash=/opt/homebrew/bin/python3 param1=-c param2=\"open('\(pwn)','w').write('x')\"")
+    check("bash=/opt/homebrew/bin/python3 被拒且沒有執行", e?.contains("外掛資料夾內") == true && !fm.fileExists(atPath: pwn))
+} else {
+    print("⚠️ 本機沒有 /opt/homebrew/bin/python3，略過")
+}
+let e1 = await tryClick("x | bash=/bin/sh param1=-c param2=\"echo x > \(pwn)\"")
+check("bash=/bin/sh 被拒且沒有執行", e1?.contains("外掛資料夾內") == true && !fm.fileExists(atPath: pwn))
+put("outside.sh", "#!/bin/bash\necho x > \"\(pwn)\"\n", dir: root)
+let e2 = await tryClick("x | bash=\(root)/outside.sh")
+check("外掛資料夾外的本人檔案被拒", e2?.contains("外掛資料夾內") == true && !fm.fileExists(atPath: pwn))
+let e3 = await tryClick("x | bash=\(pdir)/../outside.sh")
+check("../ 跳脫被拒", e3?.contains("外掛資料夾內") == true && !fm.fileExists(atPath: pwn))
+try! fm.createDirectory(atPath: pdir + "/lib", withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+try! fm.createSymbolicLink(atPath: pdir + "/lib/out.sh", withDestinationPath: root + "/outside.sh")
+let e4 = await tryClick("x | bash=\(pdir)/lib/out.sh")
+check("資料夾內的 symlink 指出資料夾被拒", e4?.contains("外掛資料夾內") == true && !fm.fileExists(atPath: pwn))
+let okMark = root + "/helper-ran"
+put("helper.sh", "#!/bin/bash\necho ok > \"\(okMark)\"\n", dir: pdir + "/lib")
+let e5 = await tryClick("x | bash=\(pdir)/lib/helper.sh")
+check("外掛資料夾內的程式可執行", e5 == nil && fm.fileExists(atPath: okMark))
+check("正對照：探針的 marker 機制有效（資料夾內的 helper 確實寫出檔案）", fm.fileExists(atPath: okMark))
+
+// 輸出上限在讀取時生效：大量輸出不會讓記憶體暴增，仍會逾時／正常結束
+func maxRSS() -> Int { var u = rusage(); getrusage(RUSAGE_SELF, &u); return Int(u.ru_maxrss) }
+let big2 = root + "/big"
+try! fm.createDirectory(atPath: big2, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+put("yes.1m.sh", "#!/bin/bash\necho Y\necho ---\nexec /usr/bin/yes\n", dir: big2)
+put("burst.1m.sh", "#!/bin/bash\necho B\necho ---\n/usr/bin/yes 0123456789 | head -c 3000000\nexit 0\n", dir: big2)
+let runner5 = PluginRunner(directory: URL(fileURLWithPath: big2), stateRoot: URL(fileURLWithPath: sdir))
+runner5.timeout = 2
+runner5.scan()
+let rss0 = maxRSS()
+await runner5.run("yes.1m.sh")
+let rss1 = maxRSS()
+await runner5.run("burst.1m.sh")
+let y5 = runner5.plugins.first { $0.id == "yes.1m.sh" }, b5 = runner5.plugins.first { $0.id == "burst.1m.sh" }
+check("無止盡輸出：仍正常逾時", y5?.error?.contains("逾時") == true)
+check("無止盡輸出：峰值記憶體增加 < 64 MB（實際 \((rss1 - rss0) / 1_048_576) MB）", rss1 - rss0 < 64 * 1_048_576)
+check("3 MB 輸出後正常結束：成功解析並標記截斷、項目 ≤ 30", b5?.error == nil && b5?.output?.truncated == true
+      && (b5?.output?.items.count ?? 99) <= L.maxItems)
+let lim = await ProcessRunner.runLimited("/usr/bin/yes", [], timeout: 1, maxBytes: 1000)
+check("ProcessRunner maxBytes：收到的輸出 ≤ 上限且逾時", lim.output.utf8.count <= 1000 && lim.timedOut)
+let full = await ProcessRunner.execute("/bin/sh", ["-c", "/usr/bin/yes 0123456789 | head -c 200000"], timeout: 5)
+check("ProcessRunner 預設不限：200 KB 完整收到、未截斷", full.output.utf8.count == 200000 && !full.truncated && full.code == 0)
+let cut = await ProcessRunner.execute("/bin/sh", ["-c", "/usr/bin/yes 0123456789 | head -c 200000"], timeout: 5, maxBytes: 5000)
+check("ProcessRunner maxBytes：超過標 truncated、程式照常結束", cut.output.utf8.count == 5000 && cut.truncated && cut.code == 0)
+
+// 選單只在內容變化時重建：內容沒變時 scan() 不發布
+var publishes = 0
+let sub = runner.$plugins.dropFirst().sink { _ in publishes += 1 }
+runner.scan(); runner.scan()
+check("內容沒變時 scan() 不發布新值", publishes == 0)
+put("new.1m.sh", "#!/bin/bash\necho n\n")
+runner.scan()
+check("正對照：新增外掛時會發布", publishes == 1)
+sub.cancel()
+
+// 不重疊：關閉後立刻重開、點擊與排程同時發生
+let ov = root + "/ov"
+try! fm.createDirectory(atPath: ov, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+let slowLog = root + "/slow.log"
+put("slow.1m.sh", "#!/bin/bash\necho \"start $$\" >> \"\(slowLog)\"\nsleep 1\necho \"end $$\" >> \"\(slowLog)\"\necho S\necho ---\necho \"點 | bash=$0 param1=x\"\n", dir: ov)
+let runner6 = PluginRunner(directory: URL(fileURLWithPath: ov), stateRoot: URL(fileURLWithPath: sdir))
+runner6.timeout = 3
+func maxDepth() -> (Int, Int) {
+    let lines = ((try? String(contentsOfFile: slowLog, encoding: .utf8)) ?? "").split(separator: "\n")
+    var d = 0, m = 0
+    for l in lines { d += l.hasPrefix("start") ? 1 : -1; m = max(m, d) }
+    return (m, lines.filter { $0.hasPrefix("start") }.count)
+}
+runner6.scan()
+let t6 = Task { await runner6.run("slow.1m.sh") }
+try? await Task.sleep(nanoseconds: 300_000_000)
+runner6.setEnabled(false)
+runner6.setEnabled(true)
+try? await Task.sleep(nanoseconds: 2_500_000_000)
+_ = await t6.value
+runner6.setEnabled(false)
+let (d1, cnt1) = maxDepth()
+check("關閉後立刻重開不重疊執行（最大同時 \(d1)，共 \(cnt1) 次）", d1 == 1 && cnt1 >= 1)
+try? "".write(toFile: slowLog, atomically: false, encoding: .utf8)
+runner6.scan()
+await runner6.run("slow.1m.sh")
+try? "".write(toFile: slowLog, atomically: false, encoding: .utf8)
+let t7 = Task { await runner6.run("slow.1m.sh") }
+try? await Task.sleep(nanoseconds: 300_000_000)
+if let click = runner6.plugins.first(where: { $0.id == "slow.1m.sh" })?.output?.items.first(where: { $0.text == "點" }) {
+    runner6.perform(pluginID: "slow.1m.sh", item: click)
+} else { check("找到「點」項目", false) }
+_ = await t7.value
+try? await Task.sleep(nanoseconds: 3_000_000_000)
+let (d2, cnt2) = maxDepth()
+check("點擊 bash= 與排程執行不重疊（最大同時 \(d2)，共 \(cnt2) 次）", d2 == 1 && cnt2 == 2)
 
 // 數量上限：11 個外掛只取前 10 個
 let many2 = root + "/many"
