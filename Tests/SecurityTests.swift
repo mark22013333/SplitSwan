@@ -60,6 +60,52 @@ o = try! JSONSerialization.jsonObject(with: enc) as! [String: Any]; o["iteration
 check("iterations 超過 2,000,000 → 拒絕", rejected { try ConfigExport.decrypt(JSONSerialization.data(withJSONObject: o), passphrase: nfc) })
 check("超過 1 MB 的檔案 → 拒絕", rejected { try ConfigExport.decrypt(Data(count: 1_000_001), passphrase: nfc) })
 
+// ConfigStore.validate：帳號白名單（換行、大括號會破壞 swanctl.conf 結構）
+func settings(user: String = "alice", gw: String = "203.0.113.1", ts: String = "10.0.0.0/24") -> VPNSettings {
+  var s = VPNSettings(); s.username = user; s.gateways = [gw, "", ""]; s.remoteTS = ts; return s
+}
+func valid(_ s: VPNSettings) -> Bool { (try? ConfigStore.validate(s)) != nil }
+check("正對照：合法帳號、閘道、網段 → 接受", valid(settings(user: "alice.b_c@corp-1")))
+check("帳號含換行 → 拒絕", !valid(settings(user: "alice\neap_id = mallory")))
+check("帳號含 CR → 拒絕", !valid(settings(user: "alice\rbob")))
+check("帳號含左大括號 → 拒絕", !valid(settings(user: "alice{")))
+check("帳號含右大括號 → 拒絕", !valid(settings(user: "alice}")))
+check("帳號含全形數字 → 拒絕", !valid(settings(user: "alice１２３")))
+check("帳號含空白 → 拒絕", !valid(settings(user: "alice bob")))
+check("帳號含雙引號 → 拒絕", !valid(settings(user: "alice\"")))
+check("帳號空白 → 拒絕", !valid(settings(user: "")))
+check("閘道含換行與大括號 → 拒絕", !valid(settings(gw: "203.0.113.1\n}\nx {")))
+check("網段用全形數字 → 拒絕", !valid(settings(ts: "１０.0.0.0/24")))
+check("網段前綴用全形數字 → 拒絕", !valid(settings(ts: "10.0.0.0/２４")))
+
+// ConfigStore.quote：密碼、PSK 寫進 secret = "…" 前的跳脫
+check("雙引號跳脫成 \\\"", ConfigStore.quote("a\"b") == "a\\\"b")
+check("反斜線跳脫成 \\\\", ConfigStore.quote("a\\b") == "a\\\\b")
+check("反斜線在雙引號前也各自跳脫", ConfigStore.quote("\\\"") == "\\\\\\\"")
+for raw in ["p\"; } secrets { x", "end\\", "\\\"\\\"", "普通密碼"] {
+  let q = ConfigStore.quote(raw)
+  // 跳脫後的字串裡，每個雙引號前面都必須有奇數個反斜線（也就是不會提早結束字串）
+  var unescapedQuote = false, slashes = 0
+  for c in q { if c == "\\" { slashes += 1 } else { if c == "\"" && slashes % 2 == 0 { unescapedQuote = true }; slashes = 0 } }
+  check("跳脫後沒有會結束字串的雙引號，且結尾不是落單反斜線：\(raw.debugDescription)", !unescapedQuote && slashes % 2 == 0)
+  check("unquote(quote(x)) == x：\(raw.debugDescription)", ConfigStore.unquote(q) == raw)
+}
+
+// 密碼、PSK 含換行：檢查函式 validateSecret 是 private，只能經由 save() 測。
+// save() 在檢查換行之後就會寫 /opt/homebrew/etc/swanctl；為了不在檢查失效時改到本機設定，
+// 只有在那個目錄不存在時才跑（不存在時，就算檢查失效也只會丟「找不到」而不會寫檔）。
+if fm.fileExists(atPath: ConfigStore.swanctlDir) {
+  print("⚠️ 略過「密碼／PSK 含換行」：\(ConfigStore.swanctlDir) 存在，經由 save() 測試可能寫入本機設定")
+} else {
+  func saveError(psk: String, password: String) -> String {
+    do { try ConfigStore.save(settings(), psk: psk, password: password); return "" }
+    catch { return error.localizedDescription }
+  }
+  check("PSK 含換行 → 拒絕", saveError(psk: "k\n}", password: "p").contains("不可包含換行"))
+  check("PSK 含 CR → 拒絕", saveError(psk: "k\r", password: "p").contains("不可包含換行"))
+  check("密碼含換行 → 拒絕", saveError(psk: "k", password: "p\nsecret = x").contains("不可包含換行"))
+}
+
 let leftovers = (try? fm.contentsOfDirectory(atPath: "\(T)/marks"))?.filter { $0 != "control" } ?? []
 check("所有攻擊標記檔都不存在（除了正對照）", leftovers.isEmpty)
 print("\n通過 \(pass)，失敗 \(fail)")
