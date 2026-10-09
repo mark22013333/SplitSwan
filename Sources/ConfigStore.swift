@@ -153,7 +153,8 @@ enum ConfigStore {
         }
     }
 
-    private static func validateSecret(_ s: String, name: String) throws {
+    /// 密碼、PSK 不可含換行（會破壞 secrets.conf 結構）。不設 private，讓測試能直接驗證、不必經由會寫檔的 save()
+    static func validateSecret(_ s: String, name: String) throws {
         guard !s.contains("\n"), !s.contains("\r") else { throw ConfigError.invalid("\(name)不可包含換行") }
     }
 

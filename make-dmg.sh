@@ -1,8 +1,31 @@
 #!/bin/bash
 # 打包安裝檔 dist/<APP_NAME>-<版本>.dmg：打開後把 App 拖進「應用程式」即可
+# 同時完成發版流程的本機步驟：檢查版號、跑測試、產生 .sha256 與 .sig（push、tag、gh release 仍需手動）
+#   bash make-dmg.sh                完整流程
+#   bash make-dmg.sh --skip-tests   略過單元測試（剛跑過全綠時用）
+#   bash make-dmg.sh --no-sign      不產生 .sig（自己測試用的 dmg，不要拿去發版）
 set -euo pipefail
 cd "$(dirname "$0")"
 source ./app.env
+
+SKIP_TESTS=0; NO_SIGN=0
+for a in "$@"; do
+  case $a in
+    --skip-tests) SKIP_TESTS=1 ;;
+    --no-sign)    NO_SIGN=1 ;;
+    *) echo "未知的參數：${a}（可用：--skip-tests、--no-sign）" >&2; exit 2 ;;
+  esac
+done
+
+echo "▸ 檢查版號"
+bash tools/check-version.sh
+
+if [ "$SKIP_TESTS" = 1 ]; then
+  echo "⚠️ 依 --skip-tests 略過單元測試"
+else
+  echo "▸ 單元測試"
+  bash Tests/run-tests.sh
+fi
 
 bash build.sh
 VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" build/${APP_NAME}.app/Contents/Info.plist)
@@ -42,3 +65,22 @@ if hdiutil verify "$DMG" >/dev/null; then
 else
   echo "❌ $DMG 驗證失敗" >&2; exit 1
 fi
+
+# .sha256 只寫檔名、不含路徑，使用者下載後在同一目錄執行 shasum -c 才對得上
+DMG_NAME=$(basename "$DMG")
+(cd dist && shasum -a 256 "$DMG_NAME" > "${DMG_NAME}.sha256" && shasum -a 256 -c "${DMG_NAME}.sha256" >/dev/null)
+echo "✅ 已產生並核對：dist/${DMG_NAME}.sha256"
+
+# 私鑰內容只由 release-sign.swift 讀取，本腳本只檢查檔案在不在，不讀也不印
+SIGN_KEY="$HOME/.config/splitswan-release/update-ed25519.key"
+if [ "$NO_SIGN" = 1 ]; then
+  echo "⚠️ 依 --no-sign 沒有產生 .sig：這個 dmg 不能拿去發版（App 的「下載並安裝」會拒絕）" >&2
+elif [ -f "$SIGN_KEY" ]; then
+  swift tools/release-sign.swift sign "$DMG"
+  swift tools/release-sign.swift verify "$DMG"
+  echo "✅ 已產生並驗證：${DMG}.sig"
+else
+  echo "⚠️ 警告：找不到 ${SIGN_KEY}，沒有產生 ${DMG_NAME}.sig；沒有 .sig 的版本，App 的「下載並安裝」會拒絕安裝" >&2
+fi
+
+echo "下一步（手動）：commit、push → annotated tag v${VERSION} 並 push → gh release create 附 dmg、.sha256、.sig → 下載回來驗證"

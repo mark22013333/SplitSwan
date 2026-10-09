@@ -173,7 +173,8 @@ SplitSwan 是解壓縮即用的單一 exe，沒有安裝程式，所以預設沒
 - **首次設定精靈尚未在 Windows 真機上驗證**：程式在 macOS 上交叉編譯，判斷規則有單元測試，但實際的 WSL 安裝、重開機續接、下載匯入、UAC 等行為還沒實測。
 - 只支援 WSL 預設的 NAT 網路模式（`.wslconfig` 設成 `networkingMode=mirrored` 時會拒絕連線）。
 - 內網網段不能跟 WSL 的 NAT 網段（通常在 172.16–31.x）重疊。
-- 不會開機自動啟動、沒有自動更新、不能匯出 `.splitswan`、不支援 IPv6。
+- 不會開機自動啟動、不能匯出 `.splitswan`、不支援 IPv6。
+- 新版本不會自動安裝：可以每天自動檢查並通知，但要自己按「下載並安裝」（見上方「更新」）。
 - 桌面／開始選單捷徑（COM 建立 `.lnk`）尚未在 Windows 真機上驗證。
 - 公司端點防護或 Hyper-V 防火牆可能擋 WSL 轉發，只能實測。
 - SplitSwan.exe 的圖示與 Mac 版相同（`windows/tools/make-ico.sh` 由 Mac 版的 `tools/make-icon.swift` 產生）。
