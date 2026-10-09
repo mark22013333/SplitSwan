@@ -34,7 +34,7 @@ KEEP_DAYS=14                            # 狀態檔保留天數
 # ─────────────────────────────────────────────────────────
 
 set -u
-STATE="${SPLITSWAN_PLUGIN_STATE:-$HOME/.config/splitswan/plugin-state/punch-reminder}"
+STATE="${SPLITSWAN_PLUGIN_STATE:-$HOME/.config/splitswan/plugin-state/punch-reminder.1m.sh}"
 TODAY="${TODAY:-$(date +%Y-%m-%d)}"
 NOW="${NOW:-$(date +%H:%M)}"
 DOW="${DOW:-$(date +%u)}"

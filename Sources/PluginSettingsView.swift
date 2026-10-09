@@ -58,6 +58,9 @@ struct PluginSettingsView: View {
         } else if p.problem == nil {
             parts.append(runner.runningIDs.contains(p.id) ? "執行中…" : "尚未執行")
         }
+        if runner.notifyCapped.contains(p.id) {
+            parts.append("今天的通知已達上限（\(PluginLogic.maxNotifyKeysPerDay) 則），明天恢復")
+        }
         if let why = p.failure {
             parts.append(why)
         } else if let o = p.output {

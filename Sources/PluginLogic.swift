@@ -1,6 +1,7 @@
 // 外掛區塊的純邏輯（不碰檔案系統、不執行程式），方便單元測試：
 // 檔名→間隔、輸出解析（SwiftBar 子集＋notify 擴充）、href／bash／顏色驗證、通知每日去重、權限判斷。
 // 執行與排程在 PluginRunner.swift。
+import CryptoKit
 import Foundation
 
 enum PluginLogic {
@@ -10,7 +11,11 @@ enum PluginLogic {
     static let maxPlugins = 10                       // 外掛數量上限
     static let maxOutputBytes = 64 * 1024            // 輸出上限，超過截斷
     static let maxItems = 30                         // 每個外掛最多顯示的項目數（含子選單項目）
-    static let maxTextLength = 200                   // 單一項目文字上限，避免整個選單被撐爆
+    static let maxTextLength = 200                   // 單一項目文字上限（字元），避免整個選單被撐爆
+    static let maxTextBytes = 600                    // 單一項目文字上限（UTF-8 bytes），擋住帶大量組合字元的單一字
+    static let maxNotifyIDLength = 64                // notify_id 超過就改用雜湊
+    static let maxNotifyPerRun = 3                   // 每個外掛每次執行最多發幾則通知
+    static let maxNotifyKeysPerDay = 20              // 每個外掛每天最多幾個不同的去重鍵，達上限當天不再發
     static let timeout: TimeInterval = 10            // 每次執行的時間上限
 
     // MARK: 檔名
@@ -23,7 +28,7 @@ enum PluginLogic {
     /// `<名稱>.<間隔>.<副檔名>`（沿用 SwiftBar）。隱藏檔或沒有名稱回 nil。
     /// 間隔：數字＋s/m/h/d，數字只接受半形 0-9；沒有間隔段用 5 分鐘；短於 30 秒當 30 秒。
     static func parseFileName(_ file: String) -> FileName? {
-        guard !file.hasPrefix("."), !file.contains("/") else { return nil }
+        guard !file.hasPrefix("."), !file.contains("/"), sanitize(file) == file else { return nil }   // 含控制字元的檔名不當外掛
         let parts = file.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
         guard let name = parts.first, !name.isEmpty else { return nil }
         var interval = defaultInterval
@@ -74,7 +79,13 @@ enum PluginLogic {
         var refresh: Bool { params["refresh"]?.lowercased() == "true" }
         var notify: Bool { params["notify"]?.lowercased() == "true" }
         /// 通知去重鍵：notify_id，沒給就用該行文字
-        var notifyKey: String { params["notify_id"].flatMap { $0.isEmpty ? nil : $0 } ?? text }
+        /// 超過 64 字元改用 SHA-256 前 32 碼，避免不受信任的輸出把去重紀錄撐大
+        var notifyKey: String {
+            let k = params["notify_id"].flatMap { $0.isEmpty ? nil : $0 } ?? text
+            guard k.count > PluginLogic.maxNotifyIDLength || k.utf8.count > PluginLogic.maxNotifyIDLength * 4 else { return k }
+            let hex = SHA256.hash(data: Data(k.utf8)).map { String(format: "%02x", $0) }.joined()
+            return "#" + hex.prefix(32)
+        }
         var color: String? { params["color"].flatMap(PluginLogic.normalizedColor) }
     }
 
@@ -139,8 +150,8 @@ enum PluginLogic {
 
     /// 一行：`文字 | key=value key2="有 空白"`
     static func parseLine(_ line: String) -> Item {
-        guard let bar = line.firstIndex(of: "|") else { return Item(text: clip(line.trimmingCharacters(in: .whitespaces))) }
-        let text = clip(String(line[..<bar]).trimmingCharacters(in: .whitespaces))
+        guard let bar = line.firstIndex(of: "|") else { return Item(text: clip(sanitize(line).trimmingCharacters(in: .whitespaces))) }
+        let text = clip(sanitize(String(line[..<bar])).trimmingCharacters(in: .whitespaces))
         return Item(text: text, params: parseParams(String(line[line.index(after: bar)...])))
     }
 
@@ -172,8 +183,35 @@ enum PluginLogic {
         return out
     }
 
-    private static func clip(_ s: String) -> String {
-        s.count > maxTextLength ? String(s.prefix(maxTextLength)) + "…" : s
+    /// 字元數與 UTF-8 bytes 都設上限（單一字元可帶上萬個組合符號）
+    static func clip(_ s: String) -> String {
+        var t = s.count > maxTextLength ? String(s.prefix(maxTextLength)) : s
+        var cut = t.count < s.count
+        if t.utf8.count > maxTextBytes {
+            var scalars = String.UnicodeScalarView()
+            var bytes = 0
+            for u in t.unicodeScalars {
+                let n = String(u).utf8.count
+                if bytes + n > maxTextBytes { break }
+                scalars.append(u); bytes += n
+            }
+            t = String(scalars)
+            cut = true
+        }
+        return cut ? t + "…" : t
+    }
+
+    /// 去掉控制字元（Cc）、格式字元（Cf，含 bidi 方向控制）與行／段分隔符，
+    /// 避免外掛輸出在選單或通知裡做出假的換行、反轉文字
+    static func sanitize(_ s: String) -> String {
+        var out = String.UnicodeScalarView()
+        for u in s.unicodeScalars {
+            switch u.properties.generalCategory {
+            case .control, .format, .lineSeparator, .paragraphSeparator: continue
+            default: out.append(u)
+            }
+        }
+        return String(out)
     }
 
     // MARK: 驗證
@@ -185,14 +223,12 @@ enum PluginLogic {
         return u
     }
 
-    /// bash= 的目標（symlink 解析後）必須是外掛本身，或位於（解析後的）外掛資料夾內。
-    /// 擁有者檢查擋不住 Homebrew 直譯器（屬於使用者本人），所以另外限定位置。
-    /// 三個參數都必須是 realpath 的結果（沒有 ..、沒有 symlink）。
-    static func bashTargetProblem(resolved: String, pluginDir: String, pluginSelf: String?) -> String? {
-        if resolved == pluginSelf { return nil }
-        let dir = pluginDir.hasSuffix("/") ? pluginDir : pluginDir + "/"
-        if resolved.hasPrefix(dir), resolved.count > dir.count { return nil }
-        return "只能執行外掛資料夾內的程式"
+    /// bash= 的目標（symlink 解析後）只能是外掛本身（解析後的實際路徑）。
+    /// 擁有者檢查擋不住 Homebrew 直譯器（屬於使用者本人），資料夾內其他工具也可能接受任意參數，所以一律只准外掛自己。
+    /// 兩個參數都必須是 realpath 的結果（沒有 ..、沒有 symlink）。
+    static func bashTargetProblem(resolved: String, pluginSelf: String?) -> String? {
+        guard let pluginSelf, resolved == pluginSelf else { return "只能執行外掛本身" }
+        return nil
     }
 
     /// 絕對路徑才接受；不可含換行或 NUL
@@ -225,25 +261,32 @@ enum PluginLogic {
 
     // MARK: 通知每日去重
 
-    /// 今天（本地日期）已發過的通知鍵
-    struct NotifyLog: Codable, Equatable {
+    /// 單一外掛今天（本地日期）已發過的通知鍵；每個外掛一份，只保留當天
+    struct NotifyLog: Codable, Equatable, Sendable {
         var day = ""
-        var keys: [String] = []
+        var keys: Set<String> = []
     }
 
-    static func notifyKey(plugin: String, key: String) -> String { plugin + "\u{1F}" + key }
-
-    /// 同一外掛同一去重鍵每天只發一次
-    static func shouldNotify(plugin: String, key: String, today: String, log: NotifyLog) -> Bool {
-        log.day != today || !log.keys.contains(notifyKey(plugin: plugin, key: key))
+    struct NotifyPlan: Equatable {
+        var send: [Item]          // 這次要發的通知
+        var log: NotifyLog        // 更新後的紀錄
+        var capped: Bool          // 今天已達去重鍵上限，之後不再發
     }
 
-    /// 記錄已發送；換日就只保留今天的
-    static func recordNotify(plugin: String, key: String, today: String, log: NotifyLog) -> NotifyLog {
+    /// 決定這次執行要發哪些通知：同一去重鍵每天只發一次；每次最多 3 則；每天最多 20 個不同的鍵，達上限當天不再發。
+    /// 超過「每次 3 則」的部分不記錄，下次執行再發
+    static func planNotifications(_ items: [Item], today: String, log: NotifyLog) -> NotifyPlan {
         var l = log.day == today ? log : NotifyLog(day: today, keys: [])
-        let k = notifyKey(plugin: plugin, key: key)
-        if !l.keys.contains(k) { l.keys.append(k) }
-        return l
+        var send: [Item] = []
+        var seen: Set<String> = []
+        for item in items where item.notify && !item.isSeparator {
+            let k = item.notifyKey
+            guard !l.keys.contains(k), seen.insert(k).inserted else { continue }
+            if l.keys.count >= maxNotifyKeysPerDay || send.count >= maxNotifyPerRun { break }
+            l.keys.insert(k)
+            send.append(item)
+        }
+        return NotifyPlan(send: send, log: l, capped: l.keys.count >= maxNotifyKeysPerDay)
     }
 
     static func dayString(_ date: Date, calendar: Calendar = .current) -> String {
@@ -260,6 +303,7 @@ enum PluginLogic {
         var isDirectory: Bool { mode & 0o170000 == 0o040000 }
         var isRegular: Bool { mode & 0o170000 == 0o100000 }
         var groupOrOtherWritable: Bool { mode & 0o022 != 0 }
+        var sticky: Bool { mode & 0o1000 != 0 }
         var ownerExecutable: Bool { mode & 0o100 != 0 }
     }
 
@@ -275,6 +319,15 @@ enum PluginLogic {
         if file.uid != uid { return "檔案不屬於目前使用者" }
         if file.groupOrOtherWritable { return "檔案可被其他使用者寫入（請執行 chmod go-w）" }
         if !file.ownerExecutable { return "檔案不可執行（請執行 chmod u+x）" }
+        return nil
+    }
+
+    /// 外掛資料夾以上的每一層（直到 /）：必須屬於目前使用者或 root；
+    /// 可被 group／other 寫入的只接受設了 sticky bit 的（例：/private/tmp，他人無法改名或刪除不屬於他的項目）
+    static func ancestorProblem(_ dir: FileStat?, path: String, uid: UInt32) -> String? {
+        guard let dir, dir.isDirectory else { return "找不到上層資料夾 \(path)" }
+        if dir.uid != uid && dir.uid != 0 { return "上層資料夾 \(path) 不屬於目前使用者" }
+        if dir.groupOrOtherWritable && !dir.sticky { return "上層資料夾 \(path) 可被其他使用者寫入" }
         return nil
     }
 }

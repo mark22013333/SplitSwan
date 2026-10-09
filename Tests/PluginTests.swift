@@ -98,16 +98,44 @@ check("沒有 notify_id 用該行文字", L.parseLine("別忘了 | notify=true")
 check("notify 不是 true 就不發", !L.parseLine("x | notify=yes").notify)
 
 // MARK: 通知每日去重
-var log = L.NotifyLog()
-check("今天沒發過 → 發", L.shouldNotify(plugin: "p", key: "in-1", today: "2026-10-09", log: log))
-log = L.recordNotify(plugin: "p", key: "in-1", today: "2026-10-09", log: log)
-check("同一天同一鍵 → 不發", !L.shouldNotify(plugin: "p", key: "in-1", today: "2026-10-09", log: log))
-check("同一天不同鍵 → 發", L.shouldNotify(plugin: "p", key: "in-2", today: "2026-10-09", log: log))
-check("同一天同鍵但不同外掛 → 發", L.shouldNotify(plugin: "q", key: "in-1", today: "2026-10-09", log: log))
-check("隔天同一鍵 → 發", L.shouldNotify(plugin: "p", key: "in-1", today: "2026-10-10", log: log))
-let log2 = L.recordNotify(plugin: "p", key: "off-1", today: "2026-10-10", log: log)
-check("換日只保留當天紀錄", log2.day == "2026-10-10" && log2.keys.count == 1)
-check("重複記錄不重複累加", L.recordNotify(plugin: "p", key: "in-1", today: "2026-10-09", log: log).keys.count == 1)
+func nItem(_ id: String) -> Item { L.parseLine("訊息 \(id) | notify=true notify_id=\(id)") }
+var plan = L.planNotifications([nItem("in-1")], today: "2026-10-09", log: L.NotifyLog())
+check("今天沒發過 → 發", plan.send.map(\.notifyKey) == ["in-1"] && plan.log.keys == ["in-1"])
+var log = plan.log
+check("同一天同一鍵 → 不發", L.planNotifications([nItem("in-1")], today: "2026-10-09", log: log).send.isEmpty)
+check("同一天不同鍵 → 發", L.planNotifications([nItem("in-2")], today: "2026-10-09", log: log).send.count == 1)
+let next = L.planNotifications([nItem("in-1")], today: "2026-10-10", log: log)
+check("隔天同一鍵 → 發，紀錄只保留當天", next.send.count == 1 && next.log.day == "2026-10-10" && next.log.keys == ["in-1"])
+check("同一次輸出重複的鍵只發一次", L.planNotifications([nItem("a"), nItem("a")], today: "d", log: L.NotifyLog()).send.count == 1)
+let five = L.planNotifications((1...5).map { nItem("k\($0)") }, today: "d", log: L.NotifyLog())
+check("每次執行最多發 3 則，其餘不記錄（下次再發）", five.send.count == 3 && five.log.keys.count == 3)
+check("下次執行補發剩下的", L.planNotifications((1...5).map { nItem("k\($0)") }, today: "d", log: five.log).send.map(\.notifyKey) == ["k4", "k5"])
+check("沒有 notify=true 的行不發", L.planNotifications([L.parseLine("x | notify_id=a")], today: "d", log: L.NotifyLog()).send.isEmpty)
+// 濫發：每次換 30 個新 id、30 秒一次跑 6 小時（資安探針情境）
+var flood = L.NotifyLog(), floodSent = 0, floodCapped = false
+for run in 0..<720 {
+    let p = L.planNotifications((0..<30).map { nItem("r\(run)-\($0)-" + String(repeating: "x", count: 64)) }, today: "d", log: flood)
+    floodSent += p.send.count; flood = p.log; floodCapped = p.capped
+}
+let floodBytes = (try? JSONEncoder().encode(flood))?.count ?? 0
+check("濫發 6 小時：總共只發 \(floodSent) 則（≤ 20）、達上限標記 capped", floodSent == L.maxNotifyKeysPerDay && floodCapped)
+check("去重紀錄有界：\(flood.keys.count) 個鍵、\(floodBytes) bytes", flood.keys.count == L.maxNotifyKeysPerDay && floodBytes < 4096)
+check("正對照：未達上限時 capped 為 false", !L.planNotifications([nItem("a")], today: "d", log: L.NotifyLog()).capped)
+let longKey = L.parseLine("x | notify=true notify_id=" + String(repeating: "k", count: 60000)).notifyKey
+check("notify_id 超過 64 字元改用雜湊（長度 \(longKey.count)）", longKey.count <= 64 && longKey.hasPrefix("#"))
+check("64 字元以內原樣保留", L.parseLine("x | notify=true notify_id=" + String(repeating: "k", count: 64)).notifyKey.count == 64)
+check("不同的長 id 雜湊不同", L.parseLine("x | notify_id=" + String(repeating: "a", count: 100)).notifyKey
+      != L.parseLine("x | notify_id=" + String(repeating: "b", count: 100)).notifyKey)
+
+// MARK: 文字過濾與長度上限（L3、L4）
+let ctl = L.parseOutput("T\u{202E}x\n---\nA\rB 結束\nX\u{2028}Y\u{2029}Z\u{85}W\nN\u{0}UL\n\u{202E}moc.elppa\u{202C}\n\u{1B}[31mesc\n\u{2066}iso\u{2069}\n")
+let allScalars = ([ctl.title] + ctl.items.map(\.text)).flatMap { $0.unicodeScalars }
+check("控制／格式／分隔字元全部移除", !allScalars.contains { [.control, .format, .lineSeparator, .paragraphSeparator].contains($0.properties.generalCategory) })
+check("移除後的文字", ctl.items.map(\.text) == ["AB 結束", "XYZW", "NUL", "moc.elppa", "[31mesc", "iso"] && ctl.title == "Tx")
+let zal = L.parseOutput("T\n---\nZ" + String(repeating: "\u{0301}", count: 30000)).items[0].text
+check("單一字元帶 3 萬個組合符號：截到 \(zal.utf8.count) bytes", zal.utf8.count <= L.maxTextBytes + 3)
+check("檔名含控制字元不當外掛", L.parseFileName("a\u{202E}.1m.sh") == nil && L.parseFileName("a\r.1m.sh") == nil)
+
 var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(identifier: "Asia/Taipei")!
 check("本地日期字串", L.dayString(Date(timeIntervalSince1970: 1_791_475_200), calendar: cal) == "2026-10-09")  // 2026-10-08 16:00 UTC
 
@@ -137,15 +165,19 @@ check("href：含帳密的網址拒絕", L.safeURL("https://user:pw@example.com/
       && L.safeURL("http://example.com@evil.example/") == nil)
 check("href：一般網址（含 @ 在路徑）仍接受", L.safeURL("https://example.com/a@b") != nil)
 let pd = "/Users/me/.config/splitswan/plugins"
-check("bash=：外掛資料夾內接受", L.bashTargetProblem(resolved: pd + "/a.sh", pluginDir: pd, pluginSelf: nil) == nil
-      && L.bashTargetProblem(resolved: pd + "/lib/h.sh", pluginDir: pd + "/", pluginSelf: nil) == nil)
-check("bash=：外掛本身（symlink 到外面）接受", L.bashTargetProblem(resolved: "/Users/me/src/x.sh", pluginDir: pd, pluginSelf: "/Users/me/src/x.sh") == nil)
-check("bash=：/bin/sh、Homebrew 直譯器拒絕", L.bashTargetProblem(resolved: "/bin/sh", pluginDir: pd, pluginSelf: pd + "/a.sh") != nil
-      && L.bashTargetProblem(resolved: "/opt/homebrew/Cellar/python@3.14/3.14.7/bin/python3.14", pluginDir: pd, pluginSelf: nil) != nil)
-check("bash=：資料夾外的本人檔案拒絕", L.bashTargetProblem(resolved: "/Users/me/.config/splitswan/x.sh", pluginDir: pd, pluginSelf: nil) != nil)
-check("bash=：同前綴的相鄰資料夾拒絕", L.bashTargetProblem(resolved: pd + "-evil/a.sh", pluginDir: pd, pluginSelf: nil) != nil)
-check("bash=：資料夾本身拒絕", L.bashTargetProblem(resolved: pd, pluginDir: pd, pluginSelf: nil) != nil
-      && L.bashTargetProblem(resolved: pd + "/", pluginDir: pd, pluginSelf: nil) != nil)
+check("bash=：外掛本身接受", L.bashTargetProblem(resolved: pd + "/a.1m.sh", pluginSelf: pd + "/a.1m.sh") == nil)
+check("bash=：外掛資料夾內的其他檔案也拒絕", L.bashTargetProblem(resolved: pd + "/lib/h.sh", pluginSelf: pd + "/a.1m.sh") != nil
+      && L.bashTargetProblem(resolved: pd + "/b.1m.sh", pluginSelf: pd + "/a.1m.sh") != nil)
+check("bash=：/bin/sh、Homebrew 直譯器拒絕", L.bashTargetProblem(resolved: "/bin/sh", pluginSelf: pd + "/a.sh") != nil
+      && L.bashTargetProblem(resolved: "/opt/homebrew/Cellar/python@3.14/3.14.7/bin/python3.14", pluginSelf: pd + "/a.sh") != nil)
+check("bash=：不知道外掛本身時一律拒絕", L.bashTargetProblem(resolved: pd + "/a.sh", pluginSelf: nil) != nil)
+check("上層資料夾：自己或 root、不可被他人寫入（sticky 例外）",
+      L.ancestorProblem(FS(uid: 0, mode: 0o040755), path: "/", uid: me) == nil
+      && L.ancestorProblem(FS(uid: 0, mode: 0o041777), path: "/tmp", uid: me) == nil
+      && L.ancestorProblem(FS(uid: me, mode: 0o040750), path: "~", uid: me) == nil
+      && L.ancestorProblem(FS(uid: me, mode: 0o040775), path: "x", uid: me) != nil
+      && L.ancestorProblem(FS(uid: 502, mode: 0o040700), path: "x", uid: me) != nil
+      && L.ancestorProblem(nil, path: "x", uid: me) != nil)
 
 // MARK: 整合測試：實跑假外掛
 let base = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : NSTemporaryDirectory()
@@ -187,10 +219,10 @@ try! fm.setAttributes([.posixPermissions: 0o770], ofItemAtPath: loose)
 put("target.sh", "#!/bin/bash\necho x\n", dir: loose)
 try! fm.createSymbolicLink(atPath: pdir + "/linked.1m.sh", withDestinationPath: loose + "/target.sh")
 
-var sent: [(String, String, URL?)] = []
+var sent: [(String, String?, String, URL?)] = []
 let runner = PluginRunner(directory: URL(fileURLWithPath: pdir), stateRoot: URL(fileURLWithPath: sdir))
 runner.timeout = 2
-runner.notifier = { t, b, h in sent.append((t, b, h)) }
+runner.notifier = { t, st, b, h in sent.append((t, st, b, h)) }
 let t0 = Date()
 await runner.refreshAll()
 let elapsed = Date().timeIntervalSince(t0)
@@ -201,37 +233,39 @@ check("掃描：只列可執行一般檔案（略過隱藏、不可執行、子�
 let good = plugin("good.1m.sh")
 check("正常外掛解析成功", good?.failure == nil && good?.output?.title == "正常外掛")
 let texts = good?.output?.items.map(\.text) ?? []
-check("SPLITSWAN_PLUGIN_STATE 指向 state/<名稱>", texts.contains("state=" + sdir + "/good"))
+check("SPLITSWAN_PLUGIN_STATE 指向 state/<完整檔名>", texts.contains("state=" + sdir + "/good.1m.sh"))
 check("SPLITSWAN=1 與固定 PATH", texts.contains("flag=1 path=" + PluginRunner.pluginPATH))
 check("App 的其他環境變數不會傳給外掛", texts.contains("secret=none"))
 check("stderr 不混進輸出", !texts.contains("錯誤輸出"))
-check("狀態資料夾權限 700", (try? fm.attributesOfItem(atPath: sdir + "/good")[.posixPermissions] as? Int) == 0o700)
+check("狀態資料夾權限 700", (try? fm.attributesOfItem(atPath: sdir + "/good.1m.sh")[.posixPermissions] as? Int) == 0o700)
 let w = plugin("writable.1m.sh")
 check("group 可寫的外掛被拒且沒有執行", w?.problem?.contains("其他使用者寫入") == true && runner.lastRuns["writable.1m.sh"] == nil
-      && !fm.fileExists(atPath: sdir + "/writable/ran"))
+      && !fm.fileExists(atPath: sdir + "/writable.1m.sh/ran"))
 check("symlink 依解析後目標檢查：所在資料夾 group 可寫被拒", plugin("linked.1m.sh")?.problem?.contains("資料夾") == true)
 let slow = plugin("slow.10s.sh")
 check("逾時外掛標錯誤", slow?.error?.contains("逾時") == true && slow?.output == nil)
 check("逾時不會拖住整體（並行、約 2～4 秒）", elapsed < 6)
 check("非 0 結束標錯誤並附 stderr 最後一行", plugin("bad.1m.sh")?.error == "結束碼 3：壞掉的原因")
 check("間隔解析：slow.10s 拉高到 30 秒", slow?.interval == 30)
-check("notify：發出一則，標題為外掛標題、帶 href", sent.count == 1 && sent.first?.0 == "正常外掛" && sent.first?.1 == "提醒"
-      && sent.first?.2?.absoluteString == "https://example.com/punch")
+check("notify：發出一則，標題固定「外掛：good」、輸出標題只放副標題、帶 href", sent.count == 1 && sent.first?.0 == "外掛：good"
+      && sent.first?.1 == "正常外掛" && sent.first?.2 == "提醒" && sent.first?.3?.absoluteString == "https://example.com/punch")
 await runner.run("good.1m.sh")
 check("同一天再跑一次不重複通知", sent.count == 1)
-check("通知紀錄寫成 600 檔案", (try? fm.attributesOfItem(atPath: sdir + "/notified.json")[.posixPermissions] as? Int) == 0o600)
+let notifiedFile = sdir + "/.notified/good.1m.sh.json"
+for _ in 0..<20 where !fm.fileExists(atPath: notifiedFile) { try? await Task.sleep(nanoseconds: 100_000_000) }
+check("每個外掛一份通知紀錄，600", (try? fm.attributesOfItem(atPath: notifiedFile)[.posixPermissions] as? Int) == 0o600)
 // 換一個新的 runner（模擬 App 重新啟動）：從檔案讀回紀錄，仍不重複
 let runner2 = PluginRunner(directory: URL(fileURLWithPath: pdir), stateRoot: URL(fileURLWithPath: sdir))
 runner2.timeout = 2
 var sent2 = 0
-runner2.notifier = { _, _, _ in sent2 += 1 }
+runner2.notifier = { _, _, _, _ in sent2 += 1 }
 runner2.scan()
 await runner2.run("good.1m.sh")
 check("重新啟動後讀回去重紀錄", sent2 == 0)
 
 // 點擊動作：bash=$0 param1=mark refresh=true → 執行外掛自己並重跑
 if let mark = good?.output?.items.first(where: { $0.text == "標記" }) {
-    check("bash= 是外掛自己的絕對路徑", mark.bash == PluginRunner.realPath(pdir + "/good.1m.sh") && mark.bashArgs == ["mark"])
+    check("bash= 是外掛自己的絕對路徑（\(mark.bash ?? "nil")｜\(mark.bashArgs)）", mark.bash.flatMap(PluginRunner.realPath) == PluginRunner.realPath(pdir + "/good.1m.sh") && mark.bashArgs == ["mark"])
     runner.perform(pluginID: "good.1m.sh", item: mark)
     var ok = false
     for _ in 0..<40 {
@@ -257,26 +291,27 @@ let pwn = root + "/pwned"
 }
 if fm.isExecutableFile(atPath: "/opt/homebrew/bin/python3") {
     let e = await tryClick("x | bash=/opt/homebrew/bin/python3 param1=-c param2=\"open('\(pwn)','w').write('x')\"")
-    check("bash=/opt/homebrew/bin/python3 被拒且沒有執行", e?.contains("外掛資料夾內") == true && !fm.fileExists(atPath: pwn))
+    check("bash=/opt/homebrew/bin/python3 被拒且沒有執行", e?.contains("外掛本身") == true && !fm.fileExists(atPath: pwn))
 } else {
     print("⚠️ 本機沒有 /opt/homebrew/bin/python3，略過")
 }
 let e1 = await tryClick("x | bash=/bin/sh param1=-c param2=\"echo x > \(pwn)\"")
-check("bash=/bin/sh 被拒且沒有執行", e1?.contains("外掛資料夾內") == true && !fm.fileExists(atPath: pwn))
+check("bash=/bin/sh 被拒且沒有執行", e1?.contains("外掛本身") == true && !fm.fileExists(atPath: pwn))
 put("outside.sh", "#!/bin/bash\necho x > \"\(pwn)\"\n", dir: root)
 let e2 = await tryClick("x | bash=\(root)/outside.sh")
-check("外掛資料夾外的本人檔案被拒", e2?.contains("外掛資料夾內") == true && !fm.fileExists(atPath: pwn))
+check("外掛資料夾外的本人檔案被拒", e2?.contains("外掛本身") == true && !fm.fileExists(atPath: pwn))
 let e3 = await tryClick("x | bash=\(pdir)/../outside.sh")
-check("../ 跳脫被拒", e3?.contains("外掛資料夾內") == true && !fm.fileExists(atPath: pwn))
+check("../ 跳脫被拒", e3?.contains("外掛本身") == true && !fm.fileExists(atPath: pwn))
 try! fm.createDirectory(atPath: pdir + "/lib", withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
 try! fm.createSymbolicLink(atPath: pdir + "/lib/out.sh", withDestinationPath: root + "/outside.sh")
 let e4 = await tryClick("x | bash=\(pdir)/lib/out.sh")
-check("資料夾內的 symlink 指出資料夾被拒", e4?.contains("外掛資料夾內") == true && !fm.fileExists(atPath: pwn))
+check("資料夾內的 symlink 指出資料夾被拒", e4?.contains("外掛本身") == true && !fm.fileExists(atPath: pwn))
 let okMark = root + "/helper-ran"
 put("helper.sh", "#!/bin/bash\necho ok > \"\(okMark)\"\n", dir: pdir + "/lib")
 let e5 = await tryClick("x | bash=\(pdir)/lib/helper.sh")
-check("外掛資料夾內的程式可執行", e5 == nil && fm.fileExists(atPath: okMark))
-check("正對照：探針的 marker 機制有效（資料夾內的 helper 確實寫出檔案）", fm.fileExists(atPath: okMark))
+check("外掛資料夾內的其他程式也被拒（只准外掛本身）", e5?.contains("外掛本身") == true && !fm.fileExists(atPath: okMark))
+let e6 = await tryClick("x | bash=\(pdir)/good.1m.sh param1=mark")
+check("正對照：bash= 指向外掛本身可執行", e6 == nil)
 
 // 輸出上限在讀取時生效：大量輸出不會讓記憶體暴增，仍會逾時／正常結束
 func maxRSS() -> Int { var u = rusage(); getrusage(RUSAGE_SELF, &u); return Int(u.ru_maxrss) }
@@ -411,6 +446,109 @@ let ccSec = Date().timeIntervalSince(tc)
 var depth = 0, peak = 0
 for l in ((try? String(contentsOfFile: ccLog, encoding: .utf8)) ?? "").split(separator: "\n") { depth += l == "start" ? 1 : -1; peak = max(peak, depth) }
 check("4 個外掛同時到期：最多 2 個同時執行（峰值 \(peak)，耗時 \(String(format: "%.1f", ccSec)) 秒）", peak == 2 && ccSec >= 1.5 && ccr.lastRuns.count == 4)
+
+// MARK: 資安第二輪：ACL、上層資料夾、symlink 位置、隔離標記、檔名識別、stderr 上限、關閉／暫停的完整性
+func sh(_ exe: String, _ args: [String]) -> Int32 {
+    let p = Process(); p.executableURL = URL(fileURLWithPath: exe); p.arguments = args
+    try? p.run(); p.waitUntilExit(); return p.terminationStatus
+}
+func mkPluginDir(_ name: String) -> String {
+    let d = root + "/sec-" + name + "/plugins"
+    try! fm.createDirectory(atPath: d, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    try! fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root + "/sec-" + name)
+    return d
+}
+@MainActor func check1(_ dir: String, _ file: String) -> String? { PluginRunner.fullCheck(path: dir + "/" + file, pluginDir: dir, uid: getuid()).problem }
+let okDir = mkPluginDir("ok")
+put("ok.1m.sh", "#!/bin/bash\necho ok\n", dir: okDir)
+check("正對照：乾淨的外掛通過完整檢查（含上層資料夾直到 /）", check1(okDir, "ok.1m.sh") == nil)
+let aclDir = mkPluginDir("acldir")
+put("a.1m.sh", "#!/bin/bash\necho ACLRAN\n", dir: aclDir)
+check("外掛資料夾有 everyone 可新增／刪除檔案的 ACL → 拒絕", sh("/bin/chmod", ["+a", "everyone allow add_file,delete_child", aclDir]) == 0
+      && check1(aclDir, "a.1m.sh")?.contains("ACL") == true)
+let aclFileDir = mkPluginDir("aclfile")
+put("b.1m.sh", "#!/bin/bash\necho x\n", dir: aclFileDir)
+check("外掛檔有 everyone 可寫的 ACL → 拒絕", sh("/bin/chmod", ["+a", "everyone allow write,append", aclFileDir + "/b.1m.sh"]) == 0
+      && check1(aclFileDir, "b.1m.sh")?.contains("ACL") == true)
+let denyDir = mkPluginDir("aclde")
+put("c.1m.sh", "#!/bin/bash\necho x\n", dir: denyDir)
+check("只有 deny 的 ACL 不影響", sh("/bin/chmod", ["+a", "everyone deny chown", denyDir + "/c.1m.sh"]) == 0 && check1(denyDir, "c.1m.sh") == nil)
+let selfDir = mkPluginDir("aclself")
+put("d.1m.sh", "#!/bin/bash\necho x\n", dir: selfDir)
+check("給自己的 allow ACL 不影響", sh("/bin/chmod", ["+a", "user:\(NSUserName()) allow write", selfDir + "/d.1m.sh"]) == 0 && check1(selfDir, "d.1m.sh") == nil)
+// 上層資料夾可被他人寫入
+let gw = root + "/sec-gw"
+try! fm.createDirectory(atPath: gw + "/mid/plugins", withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+put("e.1m.sh", "#!/bin/bash\necho x\n", dir: gw + "/mid/plugins")
+try! fm.setAttributes([.posixPermissions: 0o777], ofItemAtPath: gw + "/mid")
+check("上層資料夾 777（無 sticky）→ 拒絕", check1(gw + "/mid/plugins", "e.1m.sh")?.contains("上層資料夾") == true)
+try! fm.setAttributes([.posixPermissions: 0o1777], ofItemAtPath: gw + "/mid")
+check("上層資料夾 1777（sticky，如 /tmp）→ 接受", check1(gw + "/mid/plugins", "e.1m.sh") == nil)
+try! fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: gw + "/mid")
+check("上層資料夾有他人可寫 ACL → 拒絕", sh("/bin/chmod", ["+a", "everyone allow add_file", gw]) == 0
+      && check1(gw + "/mid/plugins", "e.1m.sh")?.contains("ACL") == true)
+// symlink 指到外掛資料夾外（例：python3）
+let lnDir = mkPluginDir("symlink")
+if fm.isExecutableFile(atPath: "/opt/homebrew/bin/python3") {
+    try! fm.createSymbolicLink(atPath: lnDir + "/py.1m.sh", withDestinationPath: "/opt/homebrew/bin/python3")
+    check("外掛本身是指向 python3 的 symlink → 拒絕", check1(lnDir, "py.1m.sh")?.contains("不在外掛資料夾內") == true)
+}
+put("real.sh", "#!/bin/bash\necho x\n", dir: lnDir)
+try! fm.createSymbolicLink(atPath: lnDir + "/alias.1m.sh", withDestinationPath: lnDir + "/real.sh")
+check("symlink 指向同一層的檔案 → 接受", check1(lnDir, "alias.1m.sh") == nil)
+// 隔離標記
+let qDir = mkPluginDir("quarantine")
+put("q.1m.sh", "#!/bin/bash\necho QRAN\n", dir: qDir)
+check("正對照：加隔離標記前可執行", check1(qDir, "q.1m.sh") == nil)
+check("帶 com.apple.quarantine → 拒絕", sh("/usr/bin/xattr", ["-w", "com.apple.quarantine", "0081;00000000;Safari;", qDir + "/q.1m.sh"]) == 0
+      && check1(qDir, "q.1m.sh")?.contains("隔離") == true)
+// 同名不同檔名：狀態資料夾與通知分開
+let dupDir = mkPluginDir("dup"), dupState = root + "/sec-dup/state"
+put("a.1m.sh", "#!/bin/bash\necho \"$SPLITSWAN_PLUGIN_STATE\"\n", dir: dupDir)
+put("a.5m.py", "#!/bin/bash\necho \"$SPLITSWAN_PLUGIN_STATE\"\n", dir: dupDir)
+let dupR = PluginRunner(directory: URL(fileURLWithPath: dupDir), stateRoot: URL(fileURLWithPath: dupState))
+await dupR.refreshAll()
+check("a.1m.sh 與 a.5m.py 各自的狀態資料夾", dupR.plugins.first { $0.id == "a.1m.sh" }?.output?.title == dupState + "/a.1m.sh"
+      && dupR.plugins.first { $0.id == "a.5m.py" }?.output?.title == dupState + "/a.5m.py")
+// stderr 有上限、不寫檔
+let errDir = mkPluginDir("stderr"), errState = root + "/sec-stderr/state"
+put("e.1m.sh", "#!/bin/bash\nhead -c 3000000 /dev/zero | tr '\\0' 'e' >&2\necho\necho 最後一行 >&2\nexit 2\n", dir: errDir)
+let errR = PluginRunner(directory: URL(fileURLWithPath: errDir), stateRoot: URL(fileURLWithPath: errState))
+errR.timeout = 5
+await errR.refreshAll()
+let errMsg = errR.plugins.first?.error ?? ""
+check("大量 stderr：錯誤訊息有上限（\(errMsg.utf8.count) bytes）", errMsg.hasPrefix("結束碼 2") && errMsg.utf8.count < 700)
+check("stderr 不再寫進狀態資料夾", !fm.fileExists(atPath: errState + "/e.1m.sh/.stderr"))
+let rawErr = await ProcessRunner.execute("/bin/sh", ["-c", "head -c 100000 /dev/zero >&2; echo out"], timeout: 5, stderrLimit: 4096)
+check("ProcessRunner stderrLimit：stderr 分開且 ≤ 4 KB、stdout 不混入", rawErr.errorOutput.utf8.count == 4096 && rawErr.output == "out\n")
+// 關閉／暫停的完整性（M1）
+let m1Dir = mkPluginDir("m1"), m1Log = root + "/sec-m1/ran.log"
+for n in ["s1", "s2", "s3"] {
+    put("\(n).1m.sh", "#!/bin/bash\necho \(n) >> \"\(m1Log)\"\nsleep 1\necho T\necho ---\necho \"hi | notify=true notify_id=\(n)\"\n", dir: m1Dir)
+}
+let m1 = PluginRunner(directory: URL(fileURLWithPath: m1Dir), stateRoot: URL(fileURLWithPath: root + "/sec-m1/state"))
+m1.timeout = 5
+var m1Sent = 0
+m1.notifier = { _, _, _, _ in m1Sent += 1 }
+func m1Runs() -> Int { ((try? String(contentsOfFile: m1Log, encoding: .utf8)) ?? "").split(separator: "\n").count }
+m1.setEnabled(true)
+try? await Task.sleep(nanoseconds: 400_000_000)
+m1.setEnabled(false)
+try? await Task.sleep(nanoseconds: 2_500_000_000)
+check("關閉後：排隊中的第 3 個不開始（實際 \(m1Runs()) 個）", m1Runs() == 2)
+check("關閉後：進行中的完成也不發通知、不寫紀錄、不更新選單", m1Sent == 0 && m1.plugins.isEmpty
+      && !fm.fileExists(atPath: root + "/sec-m1/state/.notified"))
+m1.setEnabled(true)
+try? await Task.sleep(nanoseconds: 400_000_000)
+let runsBeforePause = m1Runs()
+m1.pause(.locked)
+try? await Task.sleep(nanoseconds: 2_500_000_000)
+check("暫停後：排隊中的不開始、進行中的不發通知、不更新輸出", m1Runs() == runsBeforePause && m1Sent == 0
+      && m1.plugins.allSatisfy { $0.output == nil })
+m1.resume(.locked)
+for _ in 0..<60 where m1Sent < 3 { try? await Task.sleep(nanoseconds: 100_000_000) }
+check("正對照：解除暫停後照常執行並發通知（\(m1Sent) 則）", m1Sent == 3 && m1.plugins.allSatisfy { $0.output != nil })
+m1.setEnabled(false)
 
 print("整合測試目錄：\(root)")
 

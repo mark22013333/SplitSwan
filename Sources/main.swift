@@ -60,8 +60,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         vpn.start()
         env.check()
         // 外掛區塊（設定頁開關，預設關）：狀態變了就重畫選單中的外掛區段
-        PluginRunner.shared.notifier = { title, body, href in
-            DropNotifier.shared.sendPlugin(plugin: title, title: title, body: body, href: href)
+        PluginRunner.shared.notifier = { title, subtitle, body, href in
+            DropNotifier.shared.sendPlugin(plugin: title, title: title, subtitle: subtitle, body: body, href: href)
         }
         PluginRunner.shared.$plugins.removeDuplicates().receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.renderPlugins() }

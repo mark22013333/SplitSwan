@@ -19,14 +19,15 @@ final class DropNotifier: NSObject, UNUserNotificationCenterDelegate {
 
     /// VPN 斷線／恢復通知
     func send(title: String, body: String) {
-        deliver(title: title, body: body, userInfo: [Self.kindKey: "vpn"], thread: "vpn")
+        deliver(title: title, subtitle: nil, body: body, userInfo: [Self.kindKey: "vpn"], thread: "vpn")
     }
 
-    /// 外掛通知：與 VPN 通知分開歸類；href 只接受 http／https（PluginLogic 已驗證，點擊時再驗一次）
-    func sendPlugin(plugin: String, title: String, body: String, href: URL?) {
+    /// 外掛通知：與 VPN 通知分開歸類。標題由 PluginRunner 固定為「外掛：<名稱>」，外掛輸出的標題只放副標題；
+    /// href 只接受 http／https（PluginLogic 已驗證，點擊時再驗一次）
+    func sendPlugin(plugin: String, title: String, subtitle: String?, body: String, href: URL?) {
         var info: [String: String] = [Self.kindKey: "plugin"]
         if let href { info[Self.hrefKey] = href.absoluteString }
-        deliver(title: title, body: body, userInfo: info, thread: "plugin-" + plugin)
+        deliver(title: title, subtitle: subtitle, body: body, userInfo: info, thread: "plugin-" + plugin)
     }
 
     /// 點擊外掛通知要開的網址；不是外掛通知或不是 http／https 回 nil
@@ -37,7 +38,7 @@ final class DropNotifier: NSObject, UNUserNotificationCenterDelegate {
         return u
     }
 
-    private func deliver(title: String, body: String, userInfo: [String: String], thread: String) {
+    private func deliver(title: String, subtitle: String?, body: String, userInfo: [String: String], thread: String) {
         Task {
             let center = UNUserNotificationCenter.current()
             switch await center.notificationSettings().authorizationStatus {
@@ -55,6 +56,7 @@ final class DropNotifier: NSObject, UNUserNotificationCenterDelegate {
             }
             let content = UNMutableNotificationContent()
             content.title = title
+            if let subtitle { content.subtitle = subtitle }
             content.body = body
             content.sound = .default
             content.userInfo = userInfo

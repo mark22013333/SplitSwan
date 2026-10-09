@@ -31,15 +31,18 @@ enum ProcessRunner {
         var timedOut: Bool
         var launchError: String?
         var truncated = false     // 輸出超過 maxBytes，後面的資料已丟棄
+        var errorOutput = ""      // stderrLimit 不為 nil 時，另外收集的 stderr（最多 stderrLimit bytes）
     }
 
     /// 執行外部指令，超過 timeout 秒先送 SIGTERM，termGrace 秒後仍在就 SIGKILL。
     /// 輸出（stdout 與 stderr 合併）用 readabilityHandler 持續讀取，輸出很多也不會因為 pipe 滿了而卡住。
     /// 逾時時 code 是子程序被終止後的結束狀態（理論上不會還在跑，萬一還在則為 -1），由呼叫者決定要不要改寫
-    /// maxBytes：最多保留多少 bytes 的輸出，nil（預設）表示不限；qos：等待子程序的背景 queue 優先權（外掛用 .utility）
+    /// maxBytes：最多保留多少 bytes 的輸出，nil（預設）表示不限；qos：等待子程序的背景 queue 優先權（外掛用 .utility）。
+    /// stderrLimit：不為 nil 時 stderr 改用另一條 pipe 收集到 errorOutput（最多這麼多 bytes，其餘丟棄），
+    /// 不再混進 output；nil（預設）維持 stdout／stderr 合併
     static func execute(_ exe: String, _ args: [String], env: [String: String]? = nil,
                         timeout: TimeInterval, termGrace: TimeInterval = 1, maxBytes: Int? = nil,
-                        qos: DispatchQoS.QoSClass = .userInitiated) async -> Outcome {
+                        qos: DispatchQoS.QoSClass = .userInitiated, stderrLimit: Int? = nil) async -> Outcome {
         await withCheckedContinuation { cont in
             DispatchQueue.global(qos: qos).async {
                 let p = Process()
@@ -48,7 +51,6 @@ enum ProcessRunner {
                 if let env { p.environment = env }
                 let pipe = Pipe()
                 p.standardOutput = pipe
-                p.standardError = pipe
                 p.standardInput = FileHandle.nullDevice
                 let buf = Buffer(limit: maxBytes)
                 let eof = DispatchSemaphore(value: 0)
@@ -56,10 +58,23 @@ enum ProcessRunner {
                     let d = h.availableData
                     if d.isEmpty { h.readabilityHandler = nil; eof.signal() } else { buf.append(d) }
                 }
+                let errPipe: Pipe? = stderrLimit == nil ? nil : Pipe()
+                let errBuf = Buffer(limit: stderrLimit)
+                let errEOF = DispatchSemaphore(value: 0)
+                if let errPipe {
+                    p.standardError = errPipe
+                    errPipe.fileHandleForReading.readabilityHandler = { h in
+                        let d = h.availableData
+                        if d.isEmpty { h.readabilityHandler = nil; errEOF.signal() } else { errBuf.append(d) }
+                    }
+                } else {
+                    p.standardError = pipe
+                }
                 let exited = DispatchSemaphore(value: 0)
                 p.terminationHandler = { _ in exited.signal() }
                 do { try p.run() } catch {
                     pipe.fileHandleForReading.readabilityHandler = nil
+                    errPipe?.fileHandleForReading.readabilityHandler = nil
                     cont.resume(returning: Outcome(code: 127, output: "", timedOut: false,
                                                    launchError: error.localizedDescription))
                     return
@@ -79,10 +94,14 @@ enum ProcessRunner {
                 if eof.wait(timeout: .now() + 1) == .timedOut {
                     pipe.fileHandleForReading.readabilityHandler = nil
                 }
+                if let errPipe, errEOF.wait(timeout: .now() + 0.5) == .timedOut {
+                    errPipe.fileHandleForReading.readabilityHandler = nil
+                }
                 let out = String(decoding: buf.value, as: UTF8.self)
                 let code: Int32 = p.isRunning ? -1 : p.terminationStatus
                 cont.resume(returning: Outcome(code: code, output: out, timedOut: timedOut, launchError: nil,
-                                               truncated: buf.truncated))
+                                               truncated: buf.truncated,
+                                               errorOutput: String(decoding: errBuf.value, as: UTF8.self)))
             }
         }
     }

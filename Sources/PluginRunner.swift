@@ -9,7 +9,11 @@
 // - 執行、權限檢查、輸出解析都在背景（QoS .utility），主執行緒只在結果真的變了才更新 @Published。
 // - 睡眠、螢幕關閉、鎖定、螢幕保護程式期間暫停全部排程，恢復後各跑一次再恢復排程。
 // - 同時最多執行 2 個外掛，其餘排隊。
+//
+// 資安原則：外掛輸出是不受信任的資料。執行前完整檢查擁有者、寫入權限、ACL、隔離標記與上層資料夾；
+// bash= 只能是外掛本身；通知標題固定「外掛：<名稱>」；文字過濾控制字元並限長；通知每次、每天都有上限。
 import AppKit
+import Darwin.membership
 import Foundation
 
 @MainActor
@@ -67,12 +71,13 @@ final class PluginRunner: ObservableObject {
     // 設定頁才需要的執行狀態，分開發布，選單不訂閱
     @Published private(set) var lastRuns: [String: Date] = [:]
     @Published private(set) var runningIDs: Set<String> = []
+    @Published private(set) var notifyCapped: Set<String> = []   // 今天通知已達上限的外掛
 
     let directory: URL
     let stateRoot: URL
     var timeout: TimeInterval = PluginLogic.timeout
-    /// 通知發送端（App 內接到 DropNotifier；測試時換成記錄用的閉包）
-    var notifier: (_ title: String, _ body: String, _ href: URL?) -> Void = { _, _, _ in }
+    /// 通知發送端（App 內接到 DropNotifier；測試時換成記錄用的閉包）。title 固定為「外掛：<名稱>」，subtitle 是外掛輸出的標題
+    var notifier: (_ title: String, _ subtitle: String?, _ body: String, _ href: URL?) -> Void = { _, _, _, _ in }
     var now: () -> Date = Date.init
 
     /// 開關打開後才為 true；false 時不持有任何 timer、監看或事件訂閱
@@ -82,7 +87,11 @@ final class PluginRunner: ObservableObject {
     private var watcher: DispatchSourceFileSystemObject?
     private var watchDebounce: DispatchWorkItem?
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
-    private var notifyLog: PluginLogic.NotifyLog?
+    private var notifyLogs: [String: PluginLogic.NotifyLog] = [:]
+    /// 每次關閉或暫停就加一；排隊中或執行中的 run 發現世代變了就放棄（不開始、不更新、不發通知）
+    private var epoch = 0
+    private var everActivated = false
+    private var idleWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
     /// 正在跑或排隊中的外掛（排程執行或點擊動作）。關閉開關不會清掉，
     /// 所以關閉後立刻重開也不會和還沒結束的那次重疊執行
     private var inFlight: Set<String> = []
@@ -112,6 +121,7 @@ final class PluginRunner: ObservableObject {
         if on {
             if !isActive {
                 isActive = true
+                everActivated = true
                 addObservers()
             }
             Task { await refreshAll() }
@@ -119,6 +129,7 @@ final class PluginRunner: ObservableObject {
         }
         guard isActive else { return }
         isActive = false
+        epoch += 1
         paused = []
         removeObservers()
         stopWatcher()
@@ -149,6 +160,7 @@ final class PluginRunner: ObservableObject {
     func pause(_ reason: PauseReason) {
         guard isActive else { return }
         paused.insert(reason)
+        epoch += 1
         cancelTimers()
     }
 
@@ -263,7 +275,7 @@ final class PluginRunner: ObservableObject {
 
     // MARK: 掃描
 
-    /// 列出外掛資料夾內「可執行的一般檔案」，依檔名排序、最多 10 個，並做權限檢查
+    /// 列出外掛資料夾內「可執行的一般檔案」，依檔名排序、最多 10 個，並做完整的權限檢查
     func scan() {
         let fm = FileManager.default
         guard let names = try? fm.contentsOfDirectory(atPath: directory.path) else {
@@ -276,13 +288,13 @@ final class PluginRunner: ObservableObject {
         let uid = getuid()
         var found: [Plugin] = []
         for file in names.sorted() {
-            guard let fn = PluginLogic.parseFileName(file) else { continue }   // 隱藏檔
+            guard let fn = PluginLogic.parseFileName(file) else { continue }   // 隱藏檔、含控制字元的檔名
             let path = directory.appendingPathComponent(file).path
             guard let resolved = Self.realPath(path), let st = Self.statOf(resolved),
                   st.isRegular, access(resolved, X_OK) == 0 else { continue }  // 子目錄、不可執行檔略過
-            let problem = Self.permissionProblem(resolved: resolved, pluginDir: directory.path, uid: uid)
+            let check = Self.fullCheck(path: path, pluginDir: directory.path, uid: uid)
             found.append(Plugin(id: file, name: fn.name, interval: fn.interval, path: path,
-                                resolved: resolved, problem: problem))
+                                resolved: check.resolved ?? resolved, problem: check.problem))
         }
         let newSkipped = found.dropFirst(PluginLogic.maxPlugins).map(\.id)
         if newSkipped != skipped { skipped = newSkipped }
@@ -299,13 +311,68 @@ final class PluginRunner: ObservableObject {
         })
     }
 
-    /// 執行目標（symlink 解析後）與它所在的資料夾、以及外掛資料夾本身，都要屬於目前使用者且不可被 group／other 寫入
-    nonisolated static func permissionProblem(resolved: String, pluginDir: String?, uid: UInt32) -> String? {
-        let parent = (resolved as NSString).deletingLastPathComponent
-        if let pluginDir, let r = PluginLogic.permissionProblem(file: statOf(resolved), dir: statOf(pluginDir), uid: uid) {
-            return r
+    /// 執行前的完整檢查（掃描、每次執行、點擊動作取得名額之後都會再做一次）：
+    /// 1. symlink 解析後的實際檔案必須在外掛資料夾第一層（擋住指向 python3 等外部程式的 symlink）
+    /// 2. 檔案與外掛資料夾屬於目前使用者、不可被 group／other 寫入、檔案可執行
+    /// 3. 檔案與外掛資料夾沒有允許其他人寫入的 ACL
+    /// 4. 檔案沒有 com.apple.quarantine（下載來的腳本）
+    /// 5. 外掛資料夾以上每一層直到 /：屬於自己或 root、不可被他人寫入（sticky 例外）、沒有允許他人寫入的 ACL
+    nonisolated static func fullCheck(path: String, pluginDir: String, uid: uid_t) -> (resolved: String?, problem: String?) {
+        guard let resolved = realPath(path) else { return (nil, "找不到檔案") }
+        guard let dir = realPath(pluginDir) else { return (resolved, "找不到外掛資料夾") }
+        if (resolved as NSString).deletingLastPathComponent != dir {
+            return (resolved, "實際檔案不在外掛資料夾內（symlink 指到外面）")
         }
-        return PluginLogic.permissionProblem(file: statOf(resolved), dir: statOf(parent), uid: uid)
+        if let why = PluginLogic.permissionProblem(file: statOf(resolved), dir: statOf(dir), uid: uid) { return (resolved, why) }
+        if let why = aclProblem(resolved, uid: uid) ?? aclProblem(dir, uid: uid) { return (resolved, why) }
+        if hasQuarantine(resolved) {
+            return (resolved, "檔案帶有下載隔離標記（com.apple.quarantine），確認內容後可自行用 xattr 移除")
+        }
+        var d = (dir as NSString).deletingLastPathComponent
+        while true {
+            if let why = PluginLogic.ancestorProblem(statOf(d), path: d, uid: uid) ?? aclProblem(d, uid: uid) {
+                return (resolved, why)
+            }
+            if d == "/" || d.isEmpty { break }
+            d = (d as NSString).deletingLastPathComponent
+        }
+        return (resolved, nil)
+    }
+
+    /// ACL 中只要有一條 allow 把寫入類權限（寫入／附加／新增檔案或子資料夾／刪除／改屬性／改權限／改擁有者）
+    /// 給目前使用者以外的人，就回傳原因。deny 規則與給自己的規則不影響
+    nonisolated static func aclProblem(_ path: String, uid: uid_t) -> String? {
+        guard let acl = acl_get_file(path, ACL_TYPE_EXTENDED) else { return nil }   // 沒有 ACL
+        defer { acl_free(UnsafeMutableRawPointer(acl)) }
+        let writePerms: [acl_perm_t] = [ACL_WRITE_DATA, ACL_APPEND_DATA, ACL_DELETE, ACL_DELETE_CHILD, ACL_WRITE_ATTRIBUTES,
+                                        ACL_WRITE_EXTATTRIBUTES, ACL_WRITE_SECURITY, ACL_CHANGE_OWNER]
+        var entry: acl_entry_t?
+        var which = Int32(ACL_FIRST_ENTRY.rawValue)
+        while acl_get_entry(acl, which, &entry) == 0, let e = entry {
+            which = Int32(ACL_NEXT_ENTRY.rawValue)
+            var tag = ACL_UNDEFINED_TAG
+            guard acl_get_tag_type(e, &tag) == 0, tag == ACL_EXTENDED_ALLOW else { continue }
+            var isSelf = false
+            if let q = acl_get_qualifier(e) {
+                var ident = id_t(0)
+                var idType = Int32(0)
+                if mbr_uuid_to_id(q.assumingMemoryBound(to: UInt8.self), &ident, &idType) == 0 {
+                    isSelf = idType == ID_TYPE_UID && ident == uid
+                }
+                acl_free(q)
+            }
+            if isSelf { continue }
+            var perms: acl_permset_t?
+            guard acl_get_permset(e, &perms) == 0, let perms else { continue }
+            if writePerms.contains(where: { acl_get_perm_np(perms, $0) == 1 }) {
+                return "\(path) 有 ACL 允許其他使用者寫入（請執行 chmod -N 移除 ACL）"
+            }
+        }
+        return nil
+    }
+
+    nonisolated static func hasQuarantine(_ path: String) -> Bool {
+        getxattr(path, "com.apple.quarantine", nil, 0, 0, 0) >= 0
     }
 
     nonisolated static func statOf(_ path: String) -> PluginLogic.FileStat? {
@@ -331,16 +398,24 @@ final class PluginRunner: ObservableObject {
         var timedOut = false
     }
 
+    /// stderr 最多保留的 bytes（只用來顯示錯誤原因）
+    nonisolated static let stderrLimit = 4096
+
     func run(_ id: String) async {
         guard let p = plugins.first(where: { $0.id == id }), !inFlight.contains(id) else { return }
+        let myEpoch = epoch
         setInFlight(id, true)
         await acquireSlot()
+        // 排隊期間被關閉或暫停：不開始
+        guard myEpoch == epoch else { releaseSlot(); setInFlight(id, false); return }
         let r = await Task.detached(priority: .utility) { [stateRoot, directory, timeout] in
-            await Self.execute(path: p.path, name: p.name, pluginDir: directory.path, stateRoot: stateRoot.path,
+            await Self.execute(path: p.path, id: p.id, pluginDir: directory.path, stateRoot: stateRoot.path,
                                args: [], timeout: timeout, parse: true)
         }.value
         releaseSlot()
         setInFlight(id, false)
+        // 執行期間被關閉或暫停：結果丟棄，不更新選單、不發通知、不寫紀錄
+        guard myEpoch == epoch else { return }
         if r.problem == nil { lastRuns[id] = now() }
         update(id) { pl in
             pl.problem = r.problem
@@ -349,31 +424,30 @@ final class PluginRunner: ObservableObject {
             if r.error == nil { pl.output = r.output }
         }
         if r.problem == nil, r.error == nil, let out = r.output {
-            sendNotifications(plugin: p.name, output: out)
+            await sendNotifications(plugin: p, output: out, epoch: myEpoch)
         }
     }
 
-    /// 在背景執行：重新檢查權限（掃描後可能被改過）→ 建立狀態資料夾 → 限時執行 → 解析輸出
-    nonisolated static func execute(path: String, name: String, pluginDir: String, stateRoot: String,
-                                    args: [String], timeout: TimeInterval, parse: Bool, exeOverride: String? = nil) async -> ExecResult {
-        let exe: String
-        if let exeOverride { exe = exeOverride } else {
-            guard let resolved = realPath(path) else { return ExecResult(problem: "找不到檔案") }
-            if let why = permissionProblem(resolved: resolved, pluginDir: pluginDir, uid: getuid()) {
-                return ExecResult(problem: why)
-            }
-            exe = resolved
-        }
-        guard let state = prepareStateDir(root: stateRoot, name: name) else {
+    /// 在背景執行：完整檢查（掃描後可能被改過）→ 建立狀態資料夾 → 限時執行 → 解析輸出。
+    /// 直接執行外掛檔案本身（不經 shell），環境變數整組換掉，stderr 另外收集且有上限
+    nonisolated static func execute(path: String, id: String, pluginDir: String, stateRoot: String,
+                                    args: [String], timeout: TimeInterval, parse: Bool) async -> ExecResult {
+        let check = fullCheck(path: path, pluginDir: pluginDir, uid: getuid())
+        if let why = check.problem { return ExecResult(problem: why) }
+        guard let exe = check.resolved else { return ExecResult(problem: "找不到檔案") }
+        guard let state = prepareStateDir(root: stateRoot, name: id) else {
             return ExecResult(error: "無法建立外掛的狀態資料夾")
         }
-        let r = await ProcessRunner.runLimited("/usr/bin/env", wrapperArgs(exe: exe, args: args, state: state),
-                                               timeout: timeout, maxBytes: readLimit, qos: .utility)
+        let env = ["PATH": pluginPATH, "HOME": home, "SPLITSWAN_PLUGIN_STATE": state, "SPLITSWAN": "1"]
+        let r = await ProcessRunner.execute(exe, args, env: env, timeout: timeout, maxBytes: readLimit,
+                                            qos: .utility, stderrLimit: stderrLimit)
         var out = ExecResult(code: r.code, timedOut: r.timedOut)
-        if r.timedOut {
+        if let err = r.launchError {
+            out.error = "無法執行：\(PluginLogic.clip(PluginLogic.sanitize(err)))"
+        } else if r.timedOut {
             out.error = "執行逾時（超過 \(Int(timeout)) 秒）"
         } else if r.code != 0 {
-            let detail = lastLine(ofFile: state + "/.stderr")
+            let detail = lastLine(r.errorOutput)
             out.error = "結束碼 \(r.code)" + (detail.map { "：\($0)" } ?? "")
         } else if parse {
             out.output = PluginLogic.parseOutput(r.output)
@@ -381,14 +455,7 @@ final class PluginRunner: ObservableObject {
         return out
     }
 
-    /// 經 /usr/bin/env -i 清空環境變數，再由 /bin/sh 以固定字串 exec 外掛（外掛路徑與參數都是獨立的 argv，不拼進 shell 字串）。
-    /// stdout 是外掛輸出；stderr 寫到狀態資料夾的 .stderr，錯誤時顯示最後一行。
-    nonisolated static func wrapperArgs(exe: String, args: [String], state: String) -> [String] {
-        ["-i", "PATH=\(pluginPATH)", "HOME=\(home)", "SPLITSWAN_PLUGIN_STATE=\(state)", "SPLITSWAN=1",
-         "/bin/sh", "-c", "exec \"$0\" \"$@\" 2>\"$SPLITSWAN_PLUGIN_STATE/.stderr\"", exe] + args
-    }
-
-    /// 建立 plugin-state/<名稱>（700），回傳路徑。只在真的要執行外掛時才建立
+    /// 建立 plugin-state/<完整檔名>（700），回傳路徑。只在真的要執行外掛時才建立
     nonisolated static func prepareStateDir(root: String, name: String) -> String? {
         let fm = FileManager.default
         let dir = root + "/" + name
@@ -400,16 +467,11 @@ final class PluginRunner: ObservableObject {
         return dir
     }
 
-    nonisolated static func lastLine(ofFile path: String) -> String? {
-        guard let h = FileHandle(forReadingAtPath: path) else { return nil }
-        defer { try? h.close() }
-        let size = (try? h.seekToEnd()) ?? 0
-        try? h.seek(toOffset: size > 4096 ? size - 4096 : 0)
-        let data = (try? h.readToEnd()) ?? Data()
-        let line = String(decoding: data, as: UTF8.self).split(separator: "\n").last
-            .map { String($0).trimmingCharacters(in: .whitespaces) }
+    /// stderr 的最後一個非空行（過濾控制字元、限長）
+    nonisolated static func lastLine(_ text: String) -> String? {
+        let line = text.split(separator: "\n").last.map { PluginLogic.sanitize(String($0)).trimmingCharacters(in: .whitespaces) }
         guard let line, !line.isEmpty else { return nil }
-        return line.count > 200 ? String(line.prefix(200)) + "…" : line
+        return PluginLogic.clip(line)
     }
 
     // MARK: 同時執行上限
@@ -428,6 +490,16 @@ final class PluginRunner: ObservableObject {
         if on { inFlight.insert(id) } else { inFlight.remove(id) }
         let r = inFlight
         if r != runningIDs { runningIDs = r }
+        if !on, let waiters = idleWaiters.removeValue(forKey: id) {
+            for w in waiters { w.resume() }
+        }
+    }
+
+    /// 等到該外掛沒有在跑（不輪詢）
+    private func waitUntilIdle(_ id: String) async {
+        while inFlight.contains(id) {
+            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in idleWaiters[id, default: []].append(c) }
+        }
     }
 
     /// 只在內容真的變了才發布，選單不會無謂重建
@@ -444,34 +516,60 @@ final class PluginRunner: ObservableObject {
 
     // MARK: 通知
 
-    private var notifyLogURL: URL { stateRoot.appendingPathComponent("notified.json") }
-
-    private func sendNotifications(plugin: String, output: PluginLogic.Output) {
-        let all = output.items.flatMap { [$0] + $0.children }.filter { $0.notify && !$0.isSeparator }
-        guard !all.isEmpty else { return }       // 沒有通知行就不讀寫紀錄檔
-        let today = PluginLogic.dayString(now())
-        var log = notifyLog ?? (try? JSONDecoder().decode(PluginLogic.NotifyLog.self, from: Data(contentsOf: notifyLogURL)))
-            ?? PluginLogic.NotifyLog()
-        var changed = false
-        if log.day != today { log = PluginLogic.NotifyLog(day: today, keys: []); changed = true }
-        for item in all {
-            guard PluginLogic.shouldNotify(plugin: plugin, key: item.notifyKey, today: today, log: log) else { continue }
-            notifier(output.title.isEmpty ? plugin : output.title, item.text, item.href)
-            log = PluginLogic.recordNotify(plugin: plugin, key: item.notifyKey, today: today, log: log)
-            changed = true
-        }
-        notifyLog = log
-        if changed, let data = try? JSONEncoder().encode(log) {
-            try? data.write(to: notifyLogURL, options: .atomic)
-            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: notifyLogURL.path)
-        }
+    /// 每個外掛一份去重紀錄：plugin-state/.notified/<完整檔名>.json（600）
+    nonisolated static func notifyLogURL(root: String, id: String) -> URL {
+        URL(fileURLWithPath: root + "/.notified/" + id + ".json")
     }
+
+    nonisolated static func loadNotifyLog(_ url: URL) -> PluginLogic.NotifyLog? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attrs[.size] as? Int, size <= 16 * 1024,             // 異常大的紀錄檔不讀
+              let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(PluginLogic.NotifyLog.self, from: data)
+    }
+
+    nonisolated static func saveNotifyLog(_ log: PluginLogic.NotifyLog, to url: URL) {
+        let fm = FileManager.default
+        let dir = url.deletingLastPathComponent().path
+        try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        guard let data = try? JSONEncoder().encode(log) else { return }
+        try? data.write(to: url, options: .atomic)
+        try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+
+    /// 通知標題固定為「外掛：<檔名中的名稱>」，外掛輸出的標題只放副標題，避免冒充 SplitSwan 自己的通知。
+    /// 讀寫紀錄檔在背景；關閉或暫停後不發、不寫
+    private func sendNotifications(plugin p: Plugin, output: PluginLogic.Output, epoch myEpoch: Int) async {
+        let items = output.items.flatMap { [$0] + $0.children }.filter { $0.notify && !$0.isSeparator }
+        guard !items.isEmpty else { return }
+        let url = Self.notifyLogURL(root: stateRoot.path, id: p.id)
+        var log = notifyLogs[p.id]
+        if log == nil {
+            log = await Task.detached(priority: .utility) { Self.loadNotifyLog(url) }.value ?? PluginLogic.NotifyLog()
+        }
+        guard myEpoch == epoch, isActiveOrDirect else { return }
+        let plan = PluginLogic.planNotifications(items, today: PluginLogic.dayString(now()), log: log ?? PluginLogic.NotifyLog())
+        let wasCapped = notifyCapped.contains(p.id)
+        if plan.capped != wasCapped {
+            if plan.capped { notifyCapped.insert(p.id) } else { notifyCapped.remove(p.id) }
+        }
+        guard plan.log != log else { return }
+        notifyLogs[p.id] = plan.log
+        let title = "外掛：" + p.name
+        let subtitle = output.title.isEmpty || output.title == p.name ? nil : output.title
+        for item in plan.send { notifier(title, subtitle, item.text, item.href) }
+        let toSave = plan.log
+        Task.detached(priority: .utility) { Self.saveNotifyLog(toSave, to: url) }
+    }
+
+    /// 測試直接呼叫 run()（沒開啟）時也要能發通知；開啟過又關閉則不發
+    private var isActiveOrDirect: Bool { isActive || !everActivated }
 
     // MARK: 點擊
 
-    /// 選單項目被點擊：href 開網址；bash= 必須是外掛本身或外掛資料夾內的程式，且通過擁有者／權限檢查才執行；
-    /// refresh=true 完成後重跑外掛。點擊動作與排程執行共用 inFlight 與同時執行上限，不會重疊；
-    /// 失敗時保留上次的項目、標題加 ⚠︎
+    /// 選單項目被點擊：href 開網址；bash= 只能是外掛本身（解析後的實際路徑）；
+    /// 取得執行名額之後、執行之前再做一次完整檢查；refresh=true 完成後重跑外掛。
+    /// 點擊動作與排程執行共用 inFlight 與同時執行上限，不會重疊；失敗時保留上次的項目、標題加 ⚠︎
     func perform(pluginID: String, item: PluginLogic.Item) {
         if let url = item.href { NSWorkspace.shared.open(url) }
         guard let p = plugins.first(where: { $0.id == pluginID }) else { return }
@@ -479,34 +577,30 @@ final class PluginRunner: ObservableObject {
             if item.refresh { Task { await run(pluginID) } }
             return
         }
-        guard let exe = Self.realPath(bash), let dir = Self.realPath(directory.path) else {
-            update(pluginID) { $0.actionError = "點擊動作被拒：找不到 \(bash)" }
+        guard let exe = Self.realPath(bash) else {
+            update(pluginID) { $0.actionError = "點擊動作被拒：找不到 \(PluginLogic.clip(bash))" }
             return
         }
-        if let why = PluginLogic.bashTargetProblem(resolved: exe, pluginDir: dir, pluginSelf: p.resolved)
-            ?? Self.permissionProblem(resolved: exe, pluginDir: nil, uid: getuid()) {
+        if let why = PluginLogic.bashTargetProblem(resolved: exe, pluginSelf: p.resolved) {
             update(pluginID) { $0.actionError = "點擊動作被拒：\(why)" }
             return
         }
+        let myEpoch = epoch
         Task {
-            // 外掛正在跑（排程或上一個點擊）就等它結束，最多等一次執行的時間
-            let deadline = Date().addingTimeInterval(timeout + 3)
-            while inFlight.contains(pluginID), Date() < deadline {
-                try? await Task.sleep(nanoseconds: 100_000_000)
-            }
-            guard !inFlight.contains(pluginID) else {
-                update(pluginID) { $0.actionError = "點擊動作略過：外掛仍在執行中" }
-                return
-            }
+            await waitUntilIdle(pluginID)        // 外掛正在跑（排程或上一個點擊）就等它結束
             setInFlight(pluginID, true)
             await acquireSlot()
+            guard myEpoch == epoch else { releaseSlot(); setInFlight(pluginID, false); return }
+            // execute 會在取得名額之後重新做完整檢查，並確認仍是外掛本身
             let r = await Task.detached(priority: .utility) { [stateRoot, directory, timeout] in
-                await Self.execute(path: p.path, name: p.name, pluginDir: directory.path, stateRoot: stateRoot.path,
-                                   args: item.bashArgs, timeout: timeout, parse: false, exeOverride: exe)
+                await Self.execute(path: p.path, id: p.id, pluginDir: directory.path, stateRoot: stateRoot.path,
+                                   args: item.bashArgs, timeout: timeout, parse: false)
             }.value
             releaseSlot()
             setInFlight(pluginID, false)
+            guard myEpoch == epoch else { return }
             update(pluginID) { pl in
+                if let why = r.problem { pl.actionError = "點擊動作被拒：\(why)"; return }
                 pl.actionError = r.timedOut ? "點擊動作逾時" : (r.code != 0 ? "點擊動作結束碼 \(r.code)" : r.error)
             }
             if item.refresh { await run(pluginID) }
