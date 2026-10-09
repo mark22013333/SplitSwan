@@ -11,7 +11,9 @@ typealias Item = PluginLogic.Item
 check("名稱.間隔.副檔名", L.parseFileName("punch.1m.sh") == L.FileName(name: "punch", interval: 60))
 check("秒／時／天", L.parseFileName("a.30s.sh")?.interval == 30 && L.parseFileName("a.2h.py")?.interval == 7200
       && L.parseFileName("a.1d.rb")?.interval == 86400)
-check("短於 10 秒當 10 秒", L.parseFileName("a.1s.sh")?.interval == 10 && L.parseFileName("a.0s.sh")?.interval == 10)
+check("短於 30 秒當 30 秒", L.parseFileName("a.1s.sh")?.interval == 30 && L.parseFileName("a.10s.sh")?.interval == 30
+      && L.parseFileName("a.0s.sh")?.interval == 30 && L.parseFileName("a.45s.sh")?.interval == 45)
+check("timer 容許誤差：間隔 10%、至少 1 秒", L.timerTolerance(60) == 6 && L.timerTolerance(5) == 1 && L.timerTolerance(3600) == 360)
 check("沒有間隔段用 5 分鐘", L.parseFileName("a.sh")?.interval == 300 && L.parseFileName("noext")?.interval == 300)
 check("間隔格式錯誤用 5 分鐘", L.parseFileName("a.5x.sh")?.interval == 300 && L.parseFileName("a.m.sh")?.interval == 300
       && L.parseFileName("a.-5m.sh")?.interval == 300)
@@ -205,14 +207,14 @@ check("App 的其他環境變數不會傳給外掛", texts.contains("secret=none
 check("stderr 不混進輸出", !texts.contains("錯誤輸出"))
 check("狀態資料夾權限 700", (try? fm.attributesOfItem(atPath: sdir + "/good")[.posixPermissions] as? Int) == 0o700)
 let w = plugin("writable.1m.sh")
-check("group 可寫的外掛被拒且沒有執行", w?.problem?.contains("其他使用者寫入") == true && w?.lastRun == nil
+check("group 可寫的外掛被拒且沒有執行", w?.problem?.contains("其他使用者寫入") == true && runner.lastRuns["writable.1m.sh"] == nil
       && !fm.fileExists(atPath: sdir + "/writable/ran"))
 check("symlink 依解析後目標檢查：所在資料夾 group 可寫被拒", plugin("linked.1m.sh")?.problem?.contains("資料夾") == true)
 let slow = plugin("slow.10s.sh")
 check("逾時外掛標錯誤", slow?.error?.contains("逾時") == true && slow?.output == nil)
 check("逾時不會拖住整體（並行、約 2～4 秒）", elapsed < 6)
 check("非 0 結束標錯誤並附 stderr 最後一行", plugin("bad.1m.sh")?.error == "結束碼 3：壞掉的原因")
-check("間隔解析：slow 為 10 秒", slow?.interval == 10)
+check("間隔解析：slow.10s 拉高到 30 秒", slow?.interval == 30)
 check("notify：發出一則，標題為外掛標題、帶 href", sent.count == 1 && sent.first?.0 == "正常外掛" && sent.first?.1 == "提醒"
       && sent.first?.2?.absoluteString == "https://example.com/punch")
 await runner.run("good.1m.sh")
@@ -358,6 +360,58 @@ check("超過 10 個依檔名排序後略過", runner3.plugins.count == 10 && ru
 let runner4 = PluginRunner(directory: URL(fileURLWithPath: root + "/nope"), stateRoot: URL(fileURLWithPath: sdir))
 runner4.scan()
 check("外掛資料夾不存在：不建立、標記 folderMissing", runner4.folderMissing && !fm.fileExists(atPath: root + "/nope"))
+// MARK: 效能：關閉時零開銷、監看資料夾、每個外掛一個 timer、暫停／恢復、同時執行上限
+let perfDir = root + "/perf", perfState = root + "/perf-state"
+try! fm.createDirectory(atPath: perfDir, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+put("a.1m.sh", "#!/bin/bash\necho A\necho ---\necho $(date +%s%N)\n", dir: perfDir)
+put("b.5m.sh", "#!/bin/bash\necho B\n", dir: perfDir)
+let pr = PluginRunner(directory: URL(fileURLWithPath: perfDir), stateRoot: URL(fileURLWithPath: perfState))
+pr.timeout = 3
+pr.setEnabled(false)
+let r0 = pr.resources
+check("關閉（從未開啟）：0 個 timer、不監看、0 個事件訂閱", r0.timers == 0 && !r0.watching && r0.observers == 0)
+check("關閉：沒有掃描（plugins 空）、沒有建立 plugin-state", pr.plugins.isEmpty && !fm.fileExists(atPath: perfState))
+pr.refreshIfEnabled()
+try? await Task.sleep(nanoseconds: 300_000_000)
+check("關閉時 refreshIfEnabled 不做事", pr.plugins.isEmpty && !fm.fileExists(atPath: perfState))
+pr.setEnabled(true)
+for _ in 0..<30 where pr.lastRuns.count < 2 { try? await Task.sleep(nanoseconds: 100_000_000) }
+let r1 = pr.resources
+check("開啟：每個外掛一個 timer、監看資料夾、訂閱 8 個睡眠／鎖定事件", r1.timers == 2 && r1.watching && r1.observers == 8)
+check("開啟後各跑一次", pr.lastRuns.count == 2)
+check("timer 容許誤差：1m → 6 秒、5m → 30 秒", pr.timerTolerance("a.1m.sh") == 6 && pr.timerTolerance("b.5m.sh") == 30)
+// 監看：新增外掛 → 約 1 秒後自動出現並執行（不靠輪詢）
+put("c.1m.sh", "#!/bin/bash\necho C\n", dir: perfDir)
+for _ in 0..<40 where pr.lastRuns["c.1m.sh"] == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
+check("資料夾新增外掛：自動掃描、建立 timer 並執行", pr.plugins.contains { $0.id == "c.1m.sh" } && pr.lastRuns["c.1m.sh"] != nil
+      && pr.resources.timers == 3)
+// 暫停：鎖定＋睡眠，兩個都解除才恢復
+pr.pause(.sleep); pr.pause(.locked)
+check("暫停中：沒有 timer", pr.resources.timers == 0)
+let ranA = pr.lastRuns["a.1m.sh"]
+pr.resume(.sleep)
+try? await Task.sleep(nanoseconds: 500_000_000)
+check("只解除睡眠、仍鎖定：維持暫停、不執行", pr.resources.timers == 0 && pr.lastRuns["a.1m.sh"] == ranA)
+pr.resume(.locked)
+for _ in 0..<30 where pr.lastRuns["a.1m.sh"] == ranA { try? await Task.sleep(nanoseconds: 100_000_000) }
+check("解鎖後各跑一次並恢復排程", pr.lastRuns["a.1m.sh"] != ranA && pr.resources.timers == 3)
+pr.resume(.screenSaver)
+check("沒暫停過的原因解除不會多跑", pr.resources.timers == 3)
+pr.setEnabled(false)
+let r2 = pr.resources
+check("再關閉：timer、監看、事件訂閱全部釋放", r2.timers == 0 && !r2.watching && r2.observers == 0 && pr.plugins.isEmpty)
+// 同時執行上限 2
+let cc = root + "/cc", ccLog = root + "/cc.log"
+try! fm.createDirectory(atPath: cc, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+for i in 1...4 { put("c\(i).1m.sh", "#!/bin/bash\necho \"start\" >> \"\(ccLog)\"\nsleep 0.8\necho \"end\" >> \"\(ccLog)\"\necho C\n", dir: cc) }
+let ccr = PluginRunner(directory: URL(fileURLWithPath: cc), stateRoot: URL(fileURLWithPath: perfState))
+let tc = Date()
+await ccr.refreshAll()
+let ccSec = Date().timeIntervalSince(tc)
+var depth = 0, peak = 0
+for l in ((try? String(contentsOfFile: ccLog, encoding: .utf8)) ?? "").split(separator: "\n") { depth += l == "start" ? 1 : -1; peak = max(peak, depth) }
+check("4 個外掛同時到期：最多 2 個同時執行（峰值 \(peak)，耗時 \(String(format: "%.1f", ccSec)) 秒）", peak == 2 && ccSec >= 1.5 && ccr.lastRuns.count == 4)
+
 print("整合測試目錄：\(root)")
 
 print("通過 \(pass)，失敗 \(fail)")

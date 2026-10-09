@@ -51,12 +51,12 @@ struct PluginSettingsView: View {
 
     private func statusText(_ p: PluginRunner.Plugin) -> String {
         var parts = ["每 \(PluginLogic.intervalText(p.interval))"]
-        if let d = p.lastRun {
+        if let d = runner.lastRuns[p.id] {
             let f = DateFormatter()
             f.dateFormat = "HH:mm:ss"
             parts.append("上次 \(f.string(from: d))")
         } else if p.problem == nil {
-            parts.append(p.running ? "執行中…" : "尚未執行")
+            parts.append(runner.runningIDs.contains(p.id) ? "執行中…" : "尚未執行")
         }
         if let why = p.failure {
             parts.append(why)

@@ -36,11 +36,12 @@ enum ProcessRunner {
     /// 執行外部指令，超過 timeout 秒先送 SIGTERM，termGrace 秒後仍在就 SIGKILL。
     /// 輸出（stdout 與 stderr 合併）用 readabilityHandler 持續讀取，輸出很多也不會因為 pipe 滿了而卡住。
     /// 逾時時 code 是子程序被終止後的結束狀態（理論上不會還在跑，萬一還在則為 -1），由呼叫者決定要不要改寫
-    /// maxBytes：最多保留多少 bytes 的輸出，nil（預設）表示不限
+    /// maxBytes：最多保留多少 bytes 的輸出，nil（預設）表示不限；qos：等待子程序的背景 queue 優先權（外掛用 .utility）
     static func execute(_ exe: String, _ args: [String], env: [String: String]? = nil,
-                        timeout: TimeInterval, termGrace: TimeInterval = 1, maxBytes: Int? = nil) async -> Outcome {
+                        timeout: TimeInterval, termGrace: TimeInterval = 1, maxBytes: Int? = nil,
+                        qos: DispatchQoS.QoSClass = .userInitiated) async -> Outcome {
         await withCheckedContinuation { cont in
-            DispatchQueue.global(qos: .userInitiated).async {
+            DispatchQueue.global(qos: qos).async {
                 let p = Process()
                 p.executableURL = URL(fileURLWithPath: exe)
                 p.arguments = args
@@ -89,8 +90,8 @@ enum ProcessRunner {
     /// 診斷、主機檢查、一鍵更新用：逾時 1 秒寬限後 SIGKILL，結果包成 DiagnosticReport.CommandResult
     /// maxBytes 同 execute（外掛用 64 KB；其他呼叫者走預設不限）
     static func runLimited(_ exe: String, _ args: [String], timeout: TimeInterval,
-                           maxBytes: Int? = nil) async -> DiagnosticReport.CommandResult {
-        let r = await execute(exe, args, timeout: timeout, maxBytes: maxBytes)
+                           maxBytes: Int? = nil, qos: DispatchQoS.QoSClass = .userInitiated) async -> DiagnosticReport.CommandResult {
+        let r = await execute(exe, args, timeout: timeout, maxBytes: maxBytes, qos: qos)
         if let err = r.launchError {
             return DiagnosticReport.CommandResult(code: 127, output: "無法執行 \(exe)：\(err)", seconds: timeout)
         }

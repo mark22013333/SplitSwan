@@ -4,7 +4,8 @@
 import Foundation
 
 enum PluginLogic {
-    static let minInterval: TimeInterval = 10        // 最短間隔，更短一律當 10 秒
+    static let minInterval: TimeInterval = 30        // 最短間隔，更短一律當 30 秒
+    static let maxConcurrent = 2                     // 同時執行的外掛數上限，其餘排隊
     static let defaultInterval: TimeInterval = 300   // 檔名沒有間隔段時用 5 分鐘
     static let maxPlugins = 10                       // 外掛數量上限
     static let maxOutputBytes = 64 * 1024            // 輸出上限，超過截斷
@@ -20,7 +21,7 @@ enum PluginLogic {
     }
 
     /// `<名稱>.<間隔>.<副檔名>`（沿用 SwiftBar）。隱藏檔或沒有名稱回 nil。
-    /// 間隔：數字＋s/m/h/d，數字只接受半形 0-9；沒有間隔段用 5 分鐘；短於 10 秒當 10 秒。
+    /// 間隔：數字＋s/m/h/d，數字只接受半形 0-9；沒有間隔段用 5 分鐘；短於 30 秒當 30 秒。
     static func parseFileName(_ file: String) -> FileName? {
         guard !file.hasPrefix("."), !file.contains("/") else { return nil }
         let parts = file.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
@@ -52,7 +53,7 @@ enum PluginLogic {
 
     // MARK: 輸出解析
 
-    struct Item: Equatable {
+    struct Item: Equatable, Sendable {
         var text: String
         var params: [String: String] = [:]
         var isSeparator = false
@@ -77,7 +78,7 @@ enum PluginLogic {
         var color: String? { params["color"].flatMap(PluginLogic.normalizedColor) }
     }
 
-    struct Output: Equatable {
+    struct Output: Equatable, Sendable {
         var title: String
         var items: [Item]
         var truncated = false     // 輸出超過 64 KB 或項目超過 30 個
@@ -218,6 +219,9 @@ enum PluginLogic {
         guard hex.count == 7, hex.hasPrefix("#"), let v = UInt32(hex.dropFirst(), radix: 16) else { return nil }
         return (Double((v >> 16) & 0xff) / 255, Double((v >> 8) & 0xff) / 255, Double(v & 0xff) / 255)
     }
+
+    /// 排程 timer 的容許誤差：間隔的 10%，至少 1 秒，讓系統合併喚醒
+    static func timerTolerance(_ interval: TimeInterval) -> TimeInterval { max(1, interval * 0.1) }
 
     // MARK: 通知每日去重
 
