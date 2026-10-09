@@ -1,0 +1,137 @@
+#!/bin/bash
+# SplitSwan 外掛範例：打卡提醒（每分鐘執行一次）
+#
+# 安裝：
+#   mkdir -p ~/.config/splitswan/plugins && chmod 700 ~/.config/splitswan/plugins
+#   cp punch-reminder.1m.sh.example ~/.config/splitswan/plugins/punch-reminder.1m.sh
+#   chmod 700 ~/.config/splitswan/plugins/punch-reminder.1m.sh
+# 再把下面的 PUNCH_URL 改成實際的打卡網址，到 SplitSwan 設定頁開啟「外掛」。
+#
+# 規則（彈性上班、下班＝上班＋工時）：
+#   上班①  現在 ≥ IN_START 且還沒標記上班 → 通知「該上班打卡了」
+#   上班②  現在 ≥ IN_LATE  且還沒標記上班 → 通知「快遲到了，還沒打上班卡」
+#   下班①  時間 = max(OFF_EARLIEST, 上班標記 + WORK_SPAN_MIN)；沒標記上班就用 OFF_EARLIEST
+#          現在 ≥ 下班① 且還沒標記下班 → 通知「可以下班打卡了」
+#   下班②  現在 ≥ 下班① + OFF_SECOND_DELAY_MIN 且還沒標記下班 → 通知「別忘了下班打卡」（紅字）
+# 不支援跨日：下班①超過 23:59（例：14:30 才上班）時，選單顯示「預計 隔日 HH:MM（跨日不提醒）」且不發下班通知；
+# 下班①在當天但下班②跨過午夜時，只會有下班①的提醒。時間一律 24 小時制 00:00–23:59。
+# 同一時間只顯示較晚那一則（例：已過 IN_LATE 就只提醒上班②），每則通知每天只發一次（SplitSwan 去重）。
+#
+# 打卡後請在選單點「標記上班已打卡」「標記下班已打卡」，提醒才會停止。
+# 也可以直接在終端機執行：punch-reminder.1m.sh mark in｜mark off｜unmark in｜unmark off
+#
+# 測試用環境變數：NOW=HH:MM、TODAY=YYYY-MM-DD、DOW=1..7（1＝週一），沒設就用目前時間。
+
+# ── 可調整的設定 ──────────────────────────────────────────
+PUNCH_URL="https://example.com/punch"   # 打卡頁網址
+IN_START="08:30"                        # 最早上班時間，之後開始提醒上班打卡
+IN_LATE="08:50"                         # 再晚就快遲到了，第二次提醒
+WORK_SPAN_MIN=600                       # 上班到下班的分鐘數（含午休），600＝10 小時
+OFF_EARLIEST="18:30"                    # 最早下班時間
+OFF_SECOND_DELAY_MIN=30                 # 下班第一次提醒之後多久再提醒一次
+WORKDAYS="1 2 3 4 5"                    # 工作日（date +%u：1＝週一 … 7＝週日）
+KEEP_DAYS=14                            # 狀態檔保留天數
+# ─────────────────────────────────────────────────────────
+
+set -u
+STATE="${SPLITSWAN_PLUGIN_STATE:-$HOME/.config/splitswan/plugin-state/punch-reminder.1m.sh}"
+TODAY="${TODAY:-$(date +%Y-%m-%d)}"
+NOW="${NOW:-$(date +%H:%M)}"
+DOW="${DOW:-$(date +%u)}"
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"   # 選單 bash= 需要絕對路徑
+
+valid_time() { [[ "$1" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; }
+to_min() { echo $(( 10#${1%%:*} * 60 + 10#${1##*:} )); }
+fmt() {  # 分鐘數 → HH:MM；超過當天顯示成「隔日 HH:MM」
+  local m=$1 p=""
+  if [ "$m" -ge 1440 ]; then p="隔日 "; m=$((m % 1440)); fi
+  printf '%s%02d:%02d' "$p" $((m / 60)) $((m % 60))
+}
+
+valid_time "$NOW" || { echo "打卡 ⚠︎"; echo "---"; echo "NOW 格式錯誤：$NOW"; exit 1; }
+[[ "$TODAY" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "打卡 ⚠︎"; echo "---"; echo "TODAY 格式錯誤：$TODAY"; exit 1; }
+
+mkdir -p "$STATE" && chmod 700 "$STATE" || exit 1
+
+# ── 標記／取消（選單點擊或終端機執行）─────────────────────
+case "${1:-}" in
+  mark|unmark)
+    kind="${2:-}"
+    [ "$kind" = in ] || [ "$kind" = off ] || { echo "用法：$0 mark|unmark in|off" >&2; exit 2; }
+    f="$STATE/$TODAY.$kind"
+    if [ "$1" = mark ]; then echo "$NOW" >| "$f"; else rm -f -- "$f"; fi
+    exit 0 ;;
+  "") ;;
+  *) echo "用法：$0 [mark|unmark in|off]" >&2; exit 2 ;;
+esac
+
+# ── 只保留最近 KEEP_DAYS 天的狀態檔（只動本目錄下「日期.in／日期.off」的一般檔案）──
+cutoff=$(date -j -v-"$((KEEP_DAYS - 1))"d -f %Y-%m-%d "$TODAY" +%Y-%m-%d 2>/dev/null)
+if [ -n "$cutoff" ]; then
+  for f in "$STATE"/*.in "$STATE"/*.off; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    b=$(basename "$f")
+    [[ "$b" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2})\.(in|off)$ ]] || continue
+    [[ "${BASH_REMATCH[1]}" < "$cutoff" ]] && rm -f -- "$f"
+  done
+fi
+
+read_mark() {  # 讀今天的標記時間，格式不對當作沒標記
+  local f="$STATE/$TODAY.$1" t=""
+  [ -f "$f" ] && t=$(head -c 5 "$f")
+  valid_time "$t" && echo "$t"
+}
+
+# ── 非工作日 ───────────────────────────────────────────
+if [[ " $WORKDAYS " != *" $DOW "* ]]; then
+  echo "打卡"
+  echo "---"
+  echo "今天不用打卡"
+  exit 0
+fi
+
+IN=$(read_mark in)
+OFF=$(read_mark off)
+now=$(to_min "$NOW")
+off1=$(to_min "$OFF_EARLIEST")
+if [ -n "$IN" ]; then
+  t=$(( $(to_min "$IN") + WORK_SPAN_MIN ))
+  [ "$t" -gt "$off1" ] && off1=$t
+fi
+off2=$(( off1 + OFF_SECOND_DELAY_MIN ))
+OFF1_TEXT=$(fmt "$off1")
+
+if [ -n "$IN" ] && [ -n "$OFF" ]; then echo "打卡 ✓"; else echo "打卡"; fi
+echo "---"
+
+# 提醒（notify=true：SplitSwan 另以通知發出，點通知開打卡頁）
+if [ -z "$IN" ]; then
+  if [ "$now" -ge "$(to_min "$IN_LATE")" ]; then
+    echo "快遲到了，還沒打上班卡 | notify=true notify_id=in-2 href=$PUNCH_URL"
+  elif [ "$now" -ge "$(to_min "$IN_START")" ]; then
+    echo "該上班打卡了 | notify=true notify_id=in-1 href=$PUNCH_URL"
+  fi
+fi
+if [ -z "$OFF" ] && [ "$off1" -lt 1440 ]; then   # 下班時間跨過午夜就不提醒（見開頭說明）
+  if [ "$now" -ge "$off2" ]; then
+    echo "別忘了下班打卡 | notify=true notify_id=off-2 color=red href=$PUNCH_URL"
+  elif [ "$now" -ge "$off1" ]; then
+    echo "可以下班打卡了（預計 ${OFF1_TEXT}） | notify=true notify_id=off-1 href=$PUNCH_URL"
+  fi
+fi
+
+if [ -n "$IN" ]; then echo "上班：已打卡 $IN"; else echo "上班：未打卡"; fi
+if [ -n "$OFF" ]; then echo "下班：已打卡 $OFF"; elif [ "$off1" -ge 1440 ]; then echo "下班：預計 ${OFF1_TEXT}（跨日不提醒）"
+else echo "下班：預計 $OFF1_TEXT 提醒"; fi
+echo "---"
+echo "開啟打卡頁 | href=$PUNCH_URL"
+if [ -n "$IN" ]; then
+  echo "取消上班打卡標記 | bash=\"$SELF\" param1=unmark param2=in refresh=true"
+else
+  echo "標記上班已打卡 | bash=\"$SELF\" param1=mark param2=in refresh=true"
+fi
+if [ -n "$OFF" ]; then
+  echo "取消下班打卡標記 | bash=\"$SELF\" param1=unmark param2=off refresh=true"
+else
+  echo "標記下班已打卡 | bash=\"$SELF\" param1=mark param2=off refresh=true"
+fi

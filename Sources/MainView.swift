@@ -249,6 +249,10 @@ struct SettingsTab: View {
                         IconStylePicker()
                     }
 
+                    SettingsCard("外掛") {
+                        PluginSettingsView()
+                    }
+
                     SettingsCard("其他") {
                         Toggle("登入時自動啟動", isOn: $launchAtLogin)
                             .toggleStyle(.switch)
@@ -281,7 +285,7 @@ struct SettingsTab: View {
             }
         }
         .textFieldStyle(.roundedBorder)
-        .onAppear { loadDraft(); checkNotifyPermission() }
+        .onAppear { loadDraft(); checkNotifyPermission(); PluginRunner.shared.refreshIfEnabled() }
     }
 
     private func checkNotifyPermission() {

@@ -20,6 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var disconnectItem: NSMenuItem!
     private let updateItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let updateSeparator = NSMenuItem.separator()
+    private let pluginAnchor = NSMenuItem.separator()    // 外掛區段插在這條分隔線之前（「結束」之上）
+    private var pluginItems: [NSMenuItem] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMainMenu()
@@ -57,6 +59,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ConfigStore.migrateIfNeeded() { vpn.reloadConfig() }
         vpn.start()
         env.check()
+        // 外掛區塊（設定頁開關，預設關）：狀態變了就重畫選單中的外掛區段
+        PluginRunner.shared.notifier = { title, subtitle, body, href in
+            DropNotifier.shared.sendPlugin(plugin: title, title: title, subtitle: subtitle, body: body, href: href)
+        }
+        PluginRunner.shared.$plugins.removeDuplicates().receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.renderPlugins() }
+            .store(in: &bag)
+        PluginRunner.shared.start()
 
         // 登入時自動啟動不跳視窗，其他情況（手動點開）跳視窗
         if !launchedAsLoginItem() { showWindow() }
@@ -168,7 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "開啟 \(AppInfo.name) 視窗…", action: #selector(showWindow), keyEquivalent: "o"))
         menu.addItem(NSMenuItem(title: "查看連線紀錄…", action: #selector(openLog), keyEquivalent: "l"))
-        menu.addItem(.separator())
+        menu.addItem(pluginAnchor)
         menu.addItem(NSMenuItem(title: "結束 \(AppInfo.name)", action: #selector(quit), keyEquivalent: "q"))
 
         for item in menu.items where item.action != nil { item.target = self }
@@ -219,6 +229,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openAbout() {
         windowModel.tab = .about
         showWindow()
+    }
+
+    /// 外掛區段：VPN 項目之後、「結束」之前，每個外掛一段
+    private func renderPlugins() {
+        for item in pluginItems { menu.removeItem(item) }
+        pluginItems = PluginMenu.sections(PluginRunner.shared.plugins, target: self, action: #selector(pluginClicked(_:)))
+        var at = menu.index(of: pluginAnchor)
+        for item in pluginItems { menu.insertItem(item, at: at); at += 1 }
+    }
+
+    @objc private func pluginClicked(_ sender: NSMenuItem) {
+        guard let a = sender.representedObject as? PluginMenu.Action else { return }
+        PluginRunner.shared.perform(pluginID: a.pluginID, item: a.item)
     }
 
     private func renderUpdateItem() {
