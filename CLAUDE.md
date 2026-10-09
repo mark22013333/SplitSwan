@@ -11,15 +11,18 @@ SplitSwan：macOS（Apple Silicon、macOS 14+）狀態列 App，用 Homebrew 版
 ```bash
 bash build.sh                 # 編譯到 build/SplitSwan.app（ad-hoc 簽章）
 bash build.sh --install       # 編譯並裝到 /Applications（先結束執行中的 App）
-bash make-dmg.sh              # 編譯並打包 dist/SplitSwan-<版本>.dmg
-bash Tests/run-tests.sh       # 全部單元測試（不連 VPN、不需 sudo、不寫系統設定）
+bash make-dmg.sh              # 檢查版號＋跑測試＋編譯打包 dist/SplitSwan-<版本>.dmg＋.sha256＋.sig（--skip-tests、--no-sign）
+bash Tests/run-tests.sh       # 全部單元測試，各組並行（不連 VPN、不需 sudo、不寫系統設定）
+bash Tests/run-tests.sh security update   # 只跑指定的組
+bash tools/check-version.sh   # 檢查 build.sh 的 VERSION 與 README「版本：」一致
 open build/SplitSwan.app --args -InitialTab settings   # 直接開在指定分頁（settings / environment / about）
 ```
 
-- **測試沒有 XCTest**：`Tests/run-tests.sh` 把每個測試檔複製成暫存目錄的 `main.swift`，再跟一份**寫死的** Sources 清單一起用 `swiftc` 編成獨立執行檔；輸出含「失敗 0」才算通過。
-- **只跑單一測試組**：沒有參數可選，暫時註解掉 `run-tests.sh` 裡其他 `run …` 行，或照該行的檔案清單手動 `swiftc`。
-- 因為測試檔自己就是 `main.swift`，`Sources/main.swift` 永遠不能編進測試。新增 Sources 檔時，要手動加進 `run-tests.sh` 裡用到它的每一組編譯清單，否則測試會編譯失敗。`settings` 組另外編入一個 `AppActions` stub。
-- **版本號**：`build.sh` 開頭的 `VERSION`、`BUILD_NUM`，並手動同步 `README.md` 第 10 行的「版本：」。`make-dmg.sh` 從 Info.plist 讀版本，不用改。
+- **測試沒有 XCTest**：`Tests/run-tests.sh` 把每個測試檔複製成暫存目錄的 `main.swift`，再跟一份**寫死的** Sources 清單（`files()` 函式）一起用 `swiftc -Onone` 編成獨立執行檔；各組並行編譯執行，結束後依組別順序輸出。結尾那行「失敗 0」且程式正常結束才算通過，任一組失敗（含編譯失敗）整體退出碼 1，未知組名退出碼 2。
+- **只跑部分測試組**：把組名當參數，例 `bash Tests/run-tests.sh settings`；沒參數就跑全部。
+- 因為測試檔自己就是 `main.swift`，`Sources/main.swift` 永遠不能編進測試。新增 Sources 檔時，要手動加進 `run-tests.sh` 的 `files()` 裡用到它的每一組，否則測試會編譯失敗。
+- `settings` 組只編 `SettingsLogic.swift`（設定頁的純函式，`MainView` 的 `SettingsTab` 轉呼叫它），不編 SwiftUI 介面；設定頁新增要測的純函式時放在 `SettingsLogic`。
+- **版本號**：`build.sh` 開頭的 `VERSION`、`BUILD_NUM`，並手動同步 `README.md` 開頭「> 版本：」那一行（`tools/check-version.sh` 用內容找這行比對，`make-dmg.sh` 會先跑它）。`make-dmg.sh` 從 Info.plist 讀版本，不用改。
 - App 名稱與 bundle id 在 `app.env`（Swift 端從 Info.plist 讀，不寫死）。改 bundle id 會讓 UserDefaults 與登入項目重新開始。
 
 ## 架構
@@ -66,14 +69,13 @@ SplitSwan.app ──sudo -n──▶ /usr/local/libexec/splitswan-helper (root) 
 
 依序執行，缺一步就不算發版完成：
 
-1. `bash Tests/run-tests.sh` 全綠
-2. 改 `build.sh` 的 `VERSION`、`BUILD_NUM`，同步 `README.md` 的「版本：」
-3. `bash make-dmg.sh` → `dist/SplitSwan-X.Y.Z.dmg`
-4. 在 `dist/` 內產生 `SplitSwan-X.Y.Z.dmg.sha256`，內容只寫檔名不含路徑（格式同 `shasum -a 256 SplitSwan-X.Y.Z.dmg` 的輸出）；再執行 `swift tools/release-sign.swift sign dist/SplitSwan-X.Y.Z.dmg` 產生 `.dmg.sig`，並用 `verify` 確認。沒有 `.sig` 的版本，App 的「下載並安裝」會拒絕安裝
-5. commit、push
-6. annotated tag `vX.Y.Z` 並 push
-7. `gh release create vX.Y.Z` 附 dmg、.sha256 與 .sig；說明開頭是「## 本版更新」條列，並附 SHA-256。輔助程式有變更時，要提醒使用者到「環境檢查」按系統元件的「更新」
-8. 從 GitHub 下載回來，在同一目錄執行 `shasum -a 256 -c SplitSwan-X.Y.Z.dmg.sha256` 與 `swift tools/release-sign.swift verify SplitSwan-X.Y.Z.dmg` 驗證
+1. 改 `build.sh` 的 `VERSION`、`BUILD_NUM`，同步 `README.md` 的「版本：」
+2. `bash make-dmg.sh`（不加 `--no-sign`）：依序檢查版號一致、跑全部測試、編譯打包 `dist/SplitSwan-X.Y.Z.dmg`、在 `dist/` 內產生只含檔名的 `.dmg.sha256` 並用 `shasum -c` 核對、私鑰存在時呼叫 `swift tools/release-sign.swift sign` 再 `verify` 產生 `.dmg.sig`。任何一步失敗就中止
+3. 確認輸出有「✅ 已產生並驗證：…dmg.sig」。印出「找不到私鑰」警告時**不可發版**：沒有 `.sig` 的版本，App 的「下載並安裝」會拒絕安裝
+4. commit、push
+5. annotated tag `vX.Y.Z` 並 push
+6. `gh release create vX.Y.Z` 附 dmg、.sha256 與 .sig；說明開頭是「## 本版更新」條列，並附 SHA-256。輔助程式有變更時，要提醒使用者到「環境檢查」按系統元件的「更新」
+7. 從 GitHub 下載回來，在同一目錄執行 `shasum -a 256 -c SplitSwan-X.Y.Z.dmg.sha256` 與 `swift tools/release-sign.swift verify SplitSwan-X.Y.Z.dmg` 驗證
 
 **更新簽章金鑰**：私鑰在 `~/.config/splitswan-release/update-ed25519.key`（600，不在 repo），公鑰寫在 `UpdateLogic.publicKeyBase64`。私鑰遺失或換金鑰，已安裝的舊版就無法再自動更新，只能請使用者手動下載一次。私鑰不可提交、不可貼進對話或 release。
 
@@ -88,5 +90,6 @@ SplitSwan.app ──sudo -n──▶ /usr/local/libexec/splitswan-helper (root) 
 - 用 AppleScript（System Events）自動點按鈕時，SwiftUI 按鈕沒有可讀的標籤（name 為 missing value），要用 `position`／`size` 辨認，點之前先截圖確認是哪一顆。
 - **通知只在 App 位於 Applications 資料夾時有效**（ad-hoc 簽章也可以）；從 `build/` 或 `/tmp` 執行會直接回 `Notifications are not allowed`。測通知要用 `build.sh --install`。
 - `build.sh --install` 會結束執行中的 App，但 charon 的通道不會斷；新 App 啟動後依 `WantConnected` 決定要不要自動連線。
-- `Tests/run-tests.sh` 共 8 組（reconnect、export、security、settings、diagnostic、hostcheck、update、about），完整跑一次要數分鐘，主要花在 settings 組的編譯；有其他程序同時改 Sources 時會出現「input file was modified during the build」，那不是測試失敗。
+- `Tests/run-tests.sh` 共 8 組（reconnect、export、security、settings、diagnostic、hostcheck、update、about），並行完整跑一次約 25 秒；有其他程序同時改 Sources 時會出現「input file was modified during the build」，那不是測試失敗，重跑即可。
+- security 組的「密碼／PSK 含換行」只能經 `ConfigStore.save()` 測（檢查函式是 private），為了不寫入本機設定，`/opt/homebrew/etc/swanctl` 存在時會印「⚠️ 略過」而不跑。
 - 狀態列的 `gitstatusd` 會在 `.git/` 留下 0 byte 的殘留 `index.lock`，git 寫入失敗時先用 stat 連續取樣確認 mtime 不動、已是過去式，再清除。
