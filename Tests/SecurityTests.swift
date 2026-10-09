@@ -91,20 +91,11 @@ for raw in ["p\"; } secrets { x", "end\\", "\\\"\\\"", "普通密碼"] {
   check("unquote(quote(x)) == x：\(raw.debugDescription)", ConfigStore.unquote(q) == raw)
 }
 
-// 密碼、PSK 含換行：檢查函式 validateSecret 是 private，只能經由 save() 測。
-// save() 在檢查換行之後就會寫 /opt/homebrew/etc/swanctl；為了不在檢查失效時改到本機設定，
-// 只有在那個目錄不存在時才跑（不存在時，就算檢查失效也只會丟「找不到」而不會寫檔）。
-if fm.fileExists(atPath: ConfigStore.swanctlDir) {
-  print("⚠️ 略過「密碼／PSK 含換行」：\(ConfigStore.swanctlDir) 存在，經由 save() 測試可能寫入本機設定")
-} else {
-  func saveError(psk: String, password: String) -> String {
-    do { try ConfigStore.save(settings(), psk: psk, password: password); return "" }
-    catch { return error.localizedDescription }
-  }
-  check("PSK 含換行 → 拒絕", saveError(psk: "k\n}", password: "p").contains("不可包含換行"))
-  check("PSK 含 CR → 拒絕", saveError(psk: "k\r", password: "p").contains("不可包含換行"))
-  check("密碼含換行 → 拒絕", saveError(psk: "k", password: "p\nsecret = x").contains("不可包含換行"))
-}
+// 密碼、PSK 含換行：直接測 validateSecret，不經由會寫入 /opt/homebrew/etc/swanctl 的 save()
+check("PSK 含換行 → 拒絕", rejected { try ConfigStore.validateSecret("k\n}", name: "PSK") })
+check("PSK 含 CR → 拒絕", rejected { try ConfigStore.validateSecret("k\r", name: "PSK") })
+check("密碼含換行 → 拒絕", rejected { try ConfigStore.validateSecret("p\nsecret = x", name: "密碼") })
+check("一般密碼（含引號、反斜線）→ 接受", !rejected { try ConfigStore.validateSecret("p\"a\\b", name: "密碼") })
 
 let leftovers = (try? fm.contentsOfDirectory(atPath: "\(T)/marks"))?.filter { $0 != "control" } ?? []
 check("所有攻擊標記檔都不存在（除了正對照）", leftovers.isEmpty)
