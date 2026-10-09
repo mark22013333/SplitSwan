@@ -224,7 +224,22 @@ chmod 700 ~/.config/splitswan/plugins/punch-reminder.1m.sh
 # 編輯檔案開頭的 PUNCH_URL（打卡頁網址）與時間設定
 ```
 
-腳本可以不靠 App 直接測：`NOW=08:55 TODAY=2026-10-09 DOW=5 SPLITSWAN_PLUGIN_STATE=/tmp/punch-test bash punch-reminder.1m.sh`。
+**哪天要上班**依序判斷：
+
+1. **覆寫檔** `~/.config/splitswan/punch-overrides.txt`（沒有就略過）：每行 `YYYY-MM-DD off|work [說明]`，`#` 開頭是註解，格式不對的行忽略。例：
+   ```
+   # 特休
+   2026-10-12 off 特休
+   # 國定假日要加班
+   2026-10-10 work 加班
+   ```
+   檔案必須屬於你、他人不可寫（`chmod 600`），否則整份忽略，選單會提示。
+2. **政府行政機關辦公日曆表**（腳本開頭 `HOLIDAY_SOURCE="tw-gov"`，設成 `none` 就停用）：資料來源是政府資料開放平臺 data.gov.tw 資料集 14718。腳本從清單挑「<民國年>年中華民國政府行政機關辦公日曆表」，排除 Google 行事曆版，有更新版時取最新上傳的；只接受 www.dgpa.gov.tw／data.gov.tw 的 https 網址。下載後只採用格式正確（`日期,星期,0或2,備註`）且滿一整年的資料，快取在狀態資料夾的 `calendar-<西元年>.csv`，7 天更新一次；抓取失敗時沿用舊快取，6 小時內不重試。選單的「重新抓取日曆」會立刻重抓。連網只用 curl，清單限 6 秒、CSV 限 2 秒。
+3. 都沒有就用 `WORKDAYS`（週一到週五）。
+
+放假日選單顯示「今天放假：<備註或週末>」；下方灰字顯示日曆來源，例如「日曆：政府 115 年（更新於 10-10）」「日曆：覆寫」「日曆：抓取失敗，暫用週一至週五」。
+
+腳本可以不靠 App 直接測：`NOW=08:55 TODAY=2026-10-09 DOW=5 SPLITSWAN_PLUGIN_STATE=/tmp/punch-test bash punch-reminder.1m.sh`。離線測試可再加 `CAL_API_FILE=<清單 JSON> CAL_CSV_FILE=<日曆 CSV>`（設定時完全不連網），或 `HOLIDAY_SOURCE=none`。
 
 ## 疑難排解
 
