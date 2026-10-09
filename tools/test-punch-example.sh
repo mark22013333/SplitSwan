@@ -95,5 +95,19 @@ out=$(p "$(st bad)" 8:5 2>&1); [ $? = 1 ] && has "$out" "NOW 格式錯誤"; chec
 s=$(st junk); mkdir -p "$s"; echo 'x;rm' >"$s/2026-10-09.in"
 out=$(p "$s" 09:00); has "$out" "上班：未打卡"; check "標記檔內容不合法當作沒標記" $?
 
+# 15. 下班時間跨過午夜：顯示隔日時間、不發下班提醒
+s=$(st late); p "$s" 14:30 mark in
+out=$(p "$s" 23:59)
+has "$out" "下班：預計 隔日 00:30（跨日不提醒）" && ! has "$out" "notify_id=off-"; check "14:30 上班：下班顯示隔日 00:30 且不提醒" $?
+! has "$out" "23:59 提醒"; check "不再顯示假的「預計 23:59 提醒」" $?
+s=$(st edge); p "$s" 13:30 mark in
+out=$(p "$s" 23:30); has "$out" "可以下班打卡了（預計 23:30）"; check "13:30 上班：下班① 23:30 當天照常提醒" $?
+# 16. 24 小時制邊界
+p "$(st t24)" 24:00 >/dev/null 2>&1; [ $? = 1 ]; check "NOW=24:00 視為格式錯誤" $?
+p "$(st t29)" 29:59 >/dev/null 2>&1; [ $? = 1 ]; check "NOW=29:59 視為格式錯誤" $?
+p "$(st t2359)" 23:59 >/dev/null 2>&1; [ $? = 0 ]; check "NOW=23:59 合法" $?
+s=$(st junk24); mkdir -p "$s"; echo '25:00' >"$s/2026-10-09.in"
+out=$(p "$s" 09:00); has "$out" "上班：未打卡"; check "標記檔 25:00 當作沒標記" $?
+
 echo "通過 ${pass}，失敗 $fail"
 [ "$fail" = 0 ]
