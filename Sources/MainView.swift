@@ -288,17 +288,11 @@ struct SettingsTab: View {
         Task { notifyDenied = await DropNotifier.isDenied() }
     }
 
-    /// 「a, b, c」→ 一行一個
-    static func lines(_ ts: String) -> String {
-        ts.split(whereSeparator: { $0 == "," || $0.isNewline })
-            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-            .joined(separator: "\n")
-    }
+    /// 「a, b, c」→ 一行一個（實作在 SettingsLogic.swift，方便單元測試）
+    static func lines(_ ts: String) -> String { SettingsLogic.lines(ts) }
 
     /// 編輯框的內容（換行或逗號分隔都接受）→ 設定檔用的「a, b, c」
-    static func commaList(_ text: String) -> String {
-        lines(text).split(separator: "\n").joined(separator: ", ")
-    }
+    static func commaList(_ text: String) -> String { SettingsLogic.commaList(text) }
 
     private func loadDraft() {
         draft = ConfigStore.load()
@@ -488,12 +482,7 @@ struct SettingsTab: View {
 
     /// 表單是否有還沒儲存的修改（一鍵加入網段會整份存檔，有未儲存的修改時要先擋下）
     static func isDirty(draft: VPNSettings, tsText: String, psk: String, password: String, saved: VPNSettings) -> Bool {
-        if !psk.isEmpty || !password.isEmpty { return true }
-        var d = draft
-        d.remoteTS = commaList(tsText)
-        var s = saved
-        s.remoteTS = commaList(saved.remoteTS)
-        return ConfigStore.normalized(d) != ConfigStore.normalized(s)
+        SettingsLogic.isDirty(draft: draft, tsText: tsText, psk: psk, password: password, saved: saved)
     }
 
     private func setLaunchAtLogin(_ on: Bool) {
