@@ -56,6 +56,10 @@ EOF
 # 假 swanctl：--initiate 依 FAKE_MODE 決定結果，輸出刻意含帳號與位址，用來驗證不外流
 cat >"$RUN/bin/swanctl" <<'EOF'
 #!/bin/bash
+# FAKE_HANG：參數含這個字串時就卡住（argv[0] 換成 FAKE_MARK，方便用 ps 精確找到）
+if [ -n "${FAKE_HANG:-}" ]; then
+  case "$*" in *"$FAKE_HANG"*) exec -a "$FAKE_MARK" /bin/sleep 300 ;; esac
+fi
 case "$*" in
   *--initiate*)
     ike=$(printf '%s\n' "$@" | awk 'prev=="--ike"{print} {prev=$0}')
@@ -68,8 +72,11 @@ case "$*" in
 esac
 EOF
 chmod 755 "$RUN/bin/charon" "$RUN/bin/swanctl"
-sed -e "s#^SWANCTL=.*#SWANCTL=$RUN/bin/swanctl#" -e "s#^CHARON=.*#CHARON=$RUN/bin/charon#" "$SRC" >"$RUN/helper"
-grep -q "^SWANCTL=$RUN/bin/swanctl\$" "$RUN/helper"; check "副本的 swanctl 已換成假程式（正對照）" $?
+mkdir -p "$RUN/tmp"
+sed -e "s#^SWANCTL=.*#SWANCTL=$RUN/bin/swanctl#" -e "s#^CHARON=.*#CHARON=$RUN/bin/charon#" \
+    -e "s#^HELPER_TMPDIR=.*#HELPER_TMPDIR=$RUN/tmp#" "$SRC" >"$RUN/helper"
+grep -q "^SWANCTL=$RUN/bin/swanctl\$" "$RUN/helper" && grep -q "^HELPER_TMPDIR=$RUN/tmp\$" "$RUN/helper"
+check "副本的 swanctl 與暫存目錄已換掉（正對照）" $?
 
 out=$(FAKE_MODE=auth bash "$RUN/helper" up 2); rc=$?
 [ "$rc" = 1 ] && [ "$out" = "$(printf 'reason vpn2 auth\nfail vpn2')" ]; check "up 2 驗證失敗：reason vpn2 auth ＋ fail vpn2，結束代碼 1（實際：$(echo $out)）" $?
@@ -88,6 +95,58 @@ check "up auto 全部失敗：三行原因＋fail all" $?
 
 out=$(bash "$RUN/helper" up 4 2>&1); rc=$?
 [ "$rc" = 2 ]; check "up 4 仍拒絕（結束代碼 2）" $?
+[ -z "$(ls -A "$RUN/tmp")" ]; check "正常結束後不留暫存檔" $?
+
+# ---- 3. 逾時中止：對 helper 送 TERM，卡住的 swanctl 要跟著結束、暫存檔要清掉 ----
+# App 逾時時 sudo 會把 SIGTERM 轉給 helper；這裡直接對 helper 送 TERM 模擬。
+# 用 ps -eo pid=,args= 精確比對 argv[0]（不用 pgrep -f，會比對到自己）
+alive() { ps -eo pid=,args= | awk -v m="$1" '$2==m{f=1} END{exit !f}'; }
+reap() { ps -eo pid=,args= | awk -v m="$1" '$2==m{print $1}' | while read -r p; do kill -KILL "$p" 2>/dev/null; done; }
+HT_STARTED=1; HT_ORPHAN=1; HT_RC=0
+hang_test() {  # helper 檔 卡住的參數 子命令…；結果放 HT_STARTED（0=假 swanctl 有跑起來）、HT_ORPHAN（0=留下孤兒）
+  local helper=$1 hang=$2 mark="splitswan-fake-swanctl-$$-$RANDOM" hp i
+  shift 2
+  FAKE_HANG="$hang" FAKE_MARK="$mark" bash "$helper" "$@" >/dev/null 2>&1 &
+  hp=$!
+  HT_STARTED=1
+  for i in $(seq 1 50); do if alive "$mark"; then HT_STARTED=0; break; fi; sleep 0.1; done
+  kill -TERM "$hp" 2>/dev/null
+  wait "$hp" 2>/dev/null; HT_RC=$?
+  sleep 0.5
+  if alive "$mark"; then HT_ORPHAN=0; reap "$mark"; else HT_ORPHAN=1; fi
+}
+# 讓 charon_running 恆真，status／down 才會呼叫 swanctl（不受這台機器有沒有跑 charon 影響）
+sed -e 's/^charon_running() .*/charon_running() { true; }/' "$RUN/helper" >"$RUN/helper-hang"
+grep -q '^charon_running() { true; }$' "$RUN/helper-hang"; check "副本的 charon_running 已換掉（正對照）" $?
+
+for spec in "--initiate|up 1" "--terminate|down" "--list-sas|status" "--load-all|reload"; do
+  hang=${spec%%|*}; cmd=${spec#*|}
+  # shellcheck disable=SC2086
+  hang_test "$RUN/helper-hang" "$hang" $cmd
+  [ "$HT_STARTED" = 0 ]; check "${cmd}：假 swanctl 卡在 ${hang}（正對照：真的有卡住）" $?
+  [ "$HT_ORPHAN" = 1 ] && [ "$HT_RC" = 143 ]; check "${cmd}：TERM 後 swanctl 跟著結束、helper 回 143（實際 ${HT_RC}）" $?
+  [ -z "$(ls -A "$RUN/tmp")" ]; check "${cmd}：中斷後不留暫存檔" $?
+done
+
+# 正對照：main 上的舊版 helper（前景執行／命令替換）同樣情境應該留下孤兒，證明這個測試抓得到問題
+if git -C "$(dirname "$SRC")" show main:splitswan-helper >"$RUN/old-src" 2>/dev/null && [ -s "$RUN/old-src" ]; then
+  sed -e "s#^SWANCTL=.*#SWANCTL=$RUN/bin/swanctl#" -e "s#^CHARON=.*#CHARON=$RUN/bin/charon#" \
+      -e 's/^charon_running() .*/charon_running() { true; }/' "$RUN/old-src" >"$RUN/old-helper"
+  hang_test "$RUN/old-helper" "--initiate" up 1
+  [ "$HT_STARTED" = 0 ] && [ "$HT_ORPHAN" = 0 ]; check "正對照：舊版 helper 的 up 被 TERM 後留下孤兒 swanctl（測試抓得到）" $?
+  hang_test "$RUN/old-helper" "--list-sas" status
+  [ "$HT_STARTED" = 0 ] && [ "$HT_ORPHAN" = 0 ]; check "正對照：舊版 helper 的 status 被 TERM 後留下孤兒 swanctl" $?
+else
+  echo "（略過正對照：讀不到 main 上的 splitswan-helper）"
+fi
+
+# here-string：大輸出時 classify_fail 仍判得到（舊寫法在 pipefail 下會因 SIGPIPE 誤判）
+big=$( { yes '[IKE] retransmit 1 of request with message ID 0' | head -n 20000; echo '[IKE] received AUTHENTICATION_FAILED notify error'; } )
+got=$(set -o pipefail; printf '%s\n' "$big" | classify_fail)
+[ "$got" = auth ]; check "大輸出（約 1 MB）在 pipefail 下仍分類正確（實際：${got}）" $?
+big2=$( { echo '[IKE] received AUTHENTICATION_FAILED notify error'; yes '[IKE] retransmit 1 of request with message ID 0' | head -n 20000; } )
+got=$(set -o pipefail; printf '%s\n' "$big2" | classify_fail)
+[ "$got" = auth ]; check "命中在開頭、後面還有大量輸出時仍正確（SIGPIPE 情境，實際：${got}）" $?
 
 echo "通過 ${pass}，失敗 ${fail}"
 [ "$fail" = 0 ]

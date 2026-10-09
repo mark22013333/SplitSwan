@@ -126,6 +126,16 @@ enum HelperRun {
         }
     }
 
+    /// 逾時送 SIGTERM 後，等多久才 SIGKILL
+    static let termGrace: TimeInterval = 3
+
+    /// status 連續逾時 n 次後，暫停輪詢多久：1 次不暫停，2 次起 30、60、120 秒（上限 120）。
+    /// charon 卡住時每次 status 都要等滿時限，不暫停的話會每 15 秒堆一次 sudo
+    static func statusPause(afterTimeouts n: Int) -> TimeInterval {
+        guard n >= 2 else { return 0 }
+        return min(30 * pow(2, Double(min(n - 2, 8))), 120)
+    }
+
     static func isTimeout(code: Int32, output: String) -> Bool {
         code == timeoutCode && output.contains(timeoutMarker)
     }
@@ -247,7 +257,8 @@ final class VPNController: ObservableObject {
     private var timer: Timer?
     private var logTrimTimer: Timer?
     private var refreshing = false
-    private var statusTimedOut = false                // 上一次 status 逾時（只在剛發生時記一筆）
+    private var statusTimeouts = 0                    // status 連續逾時次數
+    private var statusPausedUntil = Date.distantPast  // 連續逾時時暫停輪詢到這個時間
     private var status = HelperStatus(state: .disconnected, localIP: nil, establishedSeconds: nil)
     private var firstRefreshDone = false
 
@@ -377,18 +388,22 @@ final class VPNController: ObservableObject {
     // MARK: 狀態輪詢
 
     func refresh() {
-        guard !refreshing else { return }
+        guard !refreshing, Date() >= statusPausedUntil else { return }
         refreshing = true
         Task {
             defer { refreshing = false }
             let (code, out) = await Self.runHelper(["status"])
             if HelperRun.isTimeout(code: code, output: out) {
                 // charon 卡住時 status 會逾時：保留上一次的狀態，不當成「輔助程式未安裝」，也不觸發重連判斷
-                if !statusTimedOut { note("讀取連線狀態逾時（charon 可能沒有回應）") }
-                statusTimedOut = true
+                statusTimeouts += 1
+                let pause = HelperRun.statusPause(afterTimeouts: statusTimeouts)
+                statusPausedUntil = Date().addingTimeInterval(pause)
+                if statusTimeouts == 1 { note("讀取連線狀態逾時（charon 可能沒有回應）") }
+                else if pause > 0 { note("讀取連線狀態連續逾時 \(statusTimeouts) 次，\(Int(pause)) 秒後再試") }
                 return
             }
-            statusTimedOut = false
+            statusTimeouts = 0
+            statusPausedUntil = .distantPast
             let new = code == 0 ? HelperStatus.parse(out) : HelperStatus(state: .helperMissing, localIP: nil, establishedSeconds: nil)
             apply(new)
         }
@@ -786,7 +801,8 @@ final class VPNController: ObservableObject {
                 if exited.wait(timeout: .now() + timeout) == .timedOut {
                     timedOut = true
                     p.terminate()
-                    if exited.wait(timeout: .now() + 1) == .timedOut {
+                    // 給輔助程式的 trap 時間結束 swanctl、清暫存檔；SIGKILL 無法經 sudo 轉送，只能當最後手段
+                    if exited.wait(timeout: .now() + HelperRun.termGrace) == .timedOut {
                         kill(p.processIdentifier, SIGKILL)
                         _ = exited.wait(timeout: .now() + 1)
                     }

@@ -280,7 +280,16 @@ check("逾時：回 124 與可辨識的說明", slowCode == HelperRun.timeoutCod
 t1 = Date()
 let (stubCode, _) = await VPNController.run("/bin/sh", ["-c", "trap '' TERM; sleep 10"], timeout: 1)
 took = Date().timeIntervalSince(t1)
-check("逾時：不理 SIGTERM 的程式會被 SIGKILL（\(String(format: "%.1f", took)) 秒）", stubCode == HelperRun.timeoutCode && took < 5)
+check("逾時：不理 SIGTERM 的程式在寬限 \(Int(HelperRun.termGrace)) 秒後被 SIGKILL（\(String(format: "%.1f", took)) 秒）",
+      stubCode == HelperRun.timeoutCode && took >= 1 + HelperRun.termGrace - 0.2 && took < 1 + HelperRun.termGrace + 3)
+// 會處理 SIGTERM 的程式（像新版輔助程式的 trap）：寬限內就結束，不用等滿
+t1 = Date()
+let (trapCode, trapOut) = await VPNController.run("/bin/bash", ["-c", "trap 'echo 收尾; exit 143' TERM; sleep 10 & wait"], timeout: 1)
+took = Date().timeIntervalSince(t1)
+check("逾時：有 TERM trap 的程式收尾後就回來（\(String(format: "%.1f", took)) 秒）、收尾輸出保留",
+      trapCode == HelperRun.timeoutCode && took < 1 + HelperRun.termGrace && trapOut.contains("收尾"))
+check("status 連續逾時：1 次不暫停，2 次起 30→60→120，上限 120",
+      [0, 1, 2, 3, 4, 5, 50].map { HelperRun.statusPause(afterTimeouts: $0) } == [0, 0, 30, 60, 120, 120, 120])
 let (fastCode, fastOut) = await VPNController.run("/bin/sh", ["-c", "echo reason vpn1 auth; echo fail vpn1; exit 1"], timeout: 5)
 check("時限內完成：照常回傳結束代碼與輸出", fastCode == 1 && fastOut == "reason vpn1 auth\nfail vpn1" && !HelperRun.isTimeout(code: fastCode, output: fastOut))
 let (bigCode, bigOut) = await VPNController.run("/bin/sh", ["-c", "yes 0123456789 | head -c 300000"], timeout: 5)
