@@ -17,7 +17,8 @@ ALL_GROUPS="reconnect export security settings diagnostic hostcheck update about
 files() {
   case $1 in
     reconnect)  echo Tests/ReconnectTests.swift $S/VPNController.swift $S/GatewayHistory.swift $S/DropNotifier.swift \
-                     $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift $S/LogStore.swift ;;
+                     $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift $S/LogStore.swift \
+                     $S/ProcessRunner.swift $S/DiagnosticReport.swift ;;
     export)     echo Tests/ExportTests.swift $S/ConfigExport.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
     security)   echo Tests/SecurityTests.swift $S/ConfigExport.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
     settings)   echo Tests/SettingsFormatTests.swift $S/SettingsLogic.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;

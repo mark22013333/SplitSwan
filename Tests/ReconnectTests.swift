@@ -298,6 +298,18 @@ let (nlCode, nlOut) = await VPNController.run("/bin/echo", ["ok"])
 check("不限時（brew、osascript 用）：行為不變", nlCode == 0 && nlOut == "ok")
 let (missCode, _) = await VPNController.run("/nonexistent/bin", [], timeout: 1)
 check("執行檔不存在 → 127", missCode == 127)
+// 共用的 ProcessRunner：預設寬限 1 秒（診斷、主機檢查、一鍵更新沿用），逾時本身不改寫結束代碼
+t1 = Date()
+// exec 讓 sleep 直接取代 sh（忽略 TERM 的設定會沿用），被 SIGKILL 後沒有孫程序握著 pipe，計時才準
+let pr = await ProcessRunner.execute("/bin/sh", ["-c", "trap '' TERM; exec sleep 10"], timeout: 1)
+took = Date().timeIntervalSince(t1)
+check("ProcessRunner：預設寬限 1 秒後 SIGKILL（\(String(format: "%.1f", took)) 秒）",
+      pr.timedOut && pr.code == SIGKILL && took >= 1.8 && took < 3.5)
+let prMiss = await ProcessRunner.runLimited("/nonexistent/bin", [], timeout: 1)
+check("ProcessRunner.runLimited：執行檔不存在 → 127 與說明", prMiss.code == 127 && !prMiss.timedOut
+      && prMiss.output.hasPrefix("無法執行 /nonexistent/bin"))
+let prEnv = await ProcessRunner.execute("/bin/sh", ["-c", "printf %s \"$SPLITSWAN_T\""], env: ["SPLITSWAN_T": "x1"], timeout: 5)
+check("ProcessRunner：env 會傳給子程序", prEnv.code == 0 && prEnv.output == "x1" && !prEnv.timedOut)
 
 // MARK: A3 app.log 落檔、權限、輪替
 let base = (CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : NSTemporaryDirectory()) + "/applog-\(getpid())"
