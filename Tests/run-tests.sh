@@ -10,7 +10,7 @@ S=Sources
 OUT=$(mktemp -d)
 trap 'command rm -r "$OUT"' EXIT
 
-ALL_GROUPS="reconnect export security settings diagnostic hostcheck update about"
+ALL_GROUPS="reconnect export security settings diagnostic hostcheck update about plugins"
 
 # 每組的測試檔與要一起編譯的原始檔（第一個是測試檔，會被複製成 main.swift）。
 # 新增 Sources 檔時，要加進用到它的每一組，否則該組會編譯失敗。
@@ -29,6 +29,8 @@ files() {
     update)     echo Tests/UpdateTests.swift $S/UpdateLogic.swift $S/UpdateInstaller.swift $S/ProcessRunner.swift $S/AboutInfo.swift \
                      $S/AppInfo.swift $S/DiagnosticReport.swift $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift ;;
     about)      echo Tests/AboutTests.swift $S/AboutInfo.swift $S/AppInfo.swift ;;
+    plugins)    echo Tests/PluginTests.swift $S/PluginLogic.swift $S/PluginRunner.swift $S/ProcessRunner.swift $S/DiagnosticReport.swift \
+                     $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
     *) return 1 ;;
   esac
 }
