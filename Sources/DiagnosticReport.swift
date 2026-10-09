@@ -49,7 +49,13 @@ enum DiagnosticReport {
         var httpsProbe: CommandResult
         var charonLog: LogRead
         var logPath: String
+        /// App 動作紀錄檔（app.log）。預設 missing，舊的呼叫端不用改
+        var appLog: LogRead = .missing
+        var appLogPath: String = ""
     }
+
+    /// App 動作紀錄取最後幾行
+    static let appLogTailLines = 200
 
     // MARK: 檔名
 
@@ -270,6 +276,18 @@ enum DiagnosticReport {
             line("（檔案大小 \(size) bytes）")
             let t = tail(text, lines: logTailLines)
             line(t.isEmpty ? "（log 檔是空的：可能還沒連線過，或設定尚未套用）" : t)
+        }
+
+        // App 的連線決策（重試、退避、喚醒重建、失敗原因）；跟其他段落一樣經過 build 的遮蔽
+        sec("App 連線紀錄（\(i.appLogPath) 最後 \(appLogTailLines) 行）")
+        switch i.appLog {
+        case .missing:
+            line("（沒有紀錄檔：這個版本之前的動作沒有寫入檔案）")
+        case .unreadable(let why):
+            line("無法讀取紀錄檔：\(why)")
+        case .content(let text, _):
+            let t = tail(text, lines: appLogTailLines)
+            line(t.isEmpty ? "（紀錄檔是空的）" : t)
         }
         return out
     }

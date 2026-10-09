@@ -4,7 +4,8 @@
 #
 #   splitswan-helper status        輸出一行：connected <conn> <虛擬IP> <本機IP> <已建立秒數> | connecting <conn> | disconnected
 #                                （舊版只輸出前三欄；App 要能處理兩種格式）
-#   splitswan-helper up [auto|1|2|3]
+#   splitswan-helper up [auto|1|2|3]  成功：ok vpnN；失敗：每台一行 reason vpnN <原因代碼>，最後 fail vpnN（或 fail all）
+#                                （舊版沒有 reason 行；App 要能處理兩種格式）
 #   splitswan-helper down
 #   splitswan-helper log           即時輸出 charon log
 #   splitswan-helper reload        重新載入設定（App 儲存設定後呼叫）
@@ -26,38 +27,129 @@ LOGFILE="$LOGDIR/charon.log"
 LOG_MAX=$((2 * 1024 * 1024))   # 超過這個大小才截斷
 LOG_KEEP=$((1024 * 1024))      # 截斷後保留最後這麼多
 
+# 暫存檔（swanctl 輸出）放這裡；tools/test-classify.sh 會把副本的這一行換成自己的暫存目錄
+HELPER_TMPDIR=/tmp
+
+# ---- 可被中斷的 swanctl 呼叫 ----
+# App 逾時會對 sudo 送 SIGTERM（sudo 轉給本程式）。bash 執行前景指令或命令替換時會把 trap 延後到
+# 指令結束才處理，swanctl 就會變成 root 孤兒；所以 swanctl 一律背景執行再 wait，
+# wait 期間收到訊號會立刻進 trap，把記下的子程序結束掉、清掉暫存檔再離開。
+# 不用 kill 0：本程式可能跟 App 在同一個 process group，會連 App 一起結束。
+CHILD=""
+TMPFILES=()
+cleanup_tmp() {
+  local f
+  for f in ${TMPFILES[@]+"${TMPFILES[@]}"}; do rm -f "$f"; done
+  TMPFILES=()
+}
+on_signal() {
+  trap '' TERM INT HUP
+  if [ -n "$CHILD" ]; then kill -TERM "$CHILD" 2>/dev/null; fi
+  cleanup_tmp
+  exit 143
+}
+trap on_signal TERM INT HUP
+trap cleanup_tmp EXIT
+
+# 建一個暫存檔，路徑放在 REPLY（不能用命令替換回傳，否則記錄不到 TMPFILES）
+track_tmp() {
+  REPLY=$(mktemp "$HELPER_TMPDIR/splitswan-helper.XXXXXX") || return 1
+  TMPFILES+=("$REPLY")
+}
+
+# swan <輸出檔或 /dev/null> <swanctl 參數…>：背景執行 swanctl 並等它結束，回傳它的結束代碼
+swan() {
+  local outf=$1 rc
+  shift
+  "$SWANCTL" "$@" </dev/null >"$outf" 2>&1 &
+  CHILD=$!
+  wait "$CHILD"; rc=$?
+  CHILD=""
+  return "$rc"
+}
+
 charon_running() { pgrep -x charon >/dev/null; }
 
 ensure_charon() {
   if ! charon_running; then
     nohup "$CHARON" </dev/null >/dev/null 2>&1 &
     for _ in $(seq 1 20); do
-      "$SWANCTL" --stats >/dev/null 2>&1 && break
+      swan /dev/null --stats && break
       sleep 0.25
     done
   fi
-  "$SWANCTL" --load-all --noprompt >/dev/null 2>&1
+  swan /dev/null --load-all --noprompt
 }
 
 terminate_all() {
   for c in "${CONNS[@]}"; do
-    "$SWANCTL" --terminate --ike "$c" --force --timeout 5 >/dev/null 2>&1
+    swan /dev/null --terminate --ike "$c" --force --timeout 5
   done
 }
 
+# >>> 連線與失敗分類（tools/test-classify.sh 會擷取這一段離線測試，標記行不要改）
+# 把 swanctl --initiate 的輸出（stdin）分類成一個原因代碼，只輸出代碼本身：
+#   auth        帳號、密碼或 PSK 錯（閘道回 AUTHENTICATION_FAILED、EAP 失敗、PSK 驗證不符）
+#   proposal    加密參數不符（NO_PROPOSAL_CHOSEN）
+#   ts          網段不被接受（TS_UNACCEPTABLE）
+#   unreachable 閘道沒回應或連不到（重送放棄、解析不到、送不出封包）
+#   timeout     swanctl --timeout 到了仍未建立
+#   unknown     以上都不是
+# 比對字串取自 strongSwan 6.x 的 charon／vici 訊息格式（本機 Homebrew 版二進位檔內的字串）。
+# 原始輸出含 IKE 身分（帳號）與位址，絕對不可以印出來，只印代碼。
+# 用 here-string 餵 grep，不用「printf | grep -q」：pipefail 下 grep -q 提早結束會讓 printf 收到 SIGPIPE，
+# 輸出大時整條管線被判成失敗（明明有命中）
+classify_fail() {
+  local t; t=$(cat)
+  if grep -qiE 'AUTHENTICATION_FAILED|EAP authentication failed|EAP_FAILURE|EAP method .* failed|MAC mismatched|no shared key found|authentication of .* failed|constraint check failed|no trusted .* public key found' <<<"$t"; then
+    echo auth
+  elif grep -qiE 'NO_PROPOSAL_CHOSEN|no acceptable proposal found|no matching proposal found|received proposals unacceptable|no proposal found' <<<"$t"; then
+    echo proposal
+  elif grep -qiE 'TS_UNACCEPTABLE|no acceptable traffic selectors|invalid traffic selectors' <<<"$t"; then
+    echo ts
+  elif grep -qiE 'giving up after [0-9]+ retransmits|peer not responding|unable to resolve|error writing to socket|Network is unreachable|No route to host|Host is down' <<<"$t"; then
+    echo unreachable
+  elif grep -qiE 'not established after [0-9]+ ?ms' <<<"$t"; then
+    echo timeout
+  else
+    echo unknown
+  fi
+}
+
+# 成功印「ok vpnN」；失敗另起一行印「reason vpnN <代碼>」，最後的「fail vpnN／fail all」由呼叫端照舊印。
+# 原因放在獨立的一行，舊版 App 只認「fail vpnN」整行比對，多一行不影響它。
+# swanctl 輸出先寫到暫存檔（600，用完即清；被中斷時由 trap 清）
 try_conn() {
-  local c=$1
-  if "$SWANCTL" --initiate --child corp --ike "$c" --timeout 20 >/dev/null 2>&1; then
+  local c=$1 f reason
+  if ! track_tmp; then
+    # 建不了暫存檔就不收輸出，照樣連線
+    if swan /dev/null --initiate --child corp --ike "$c" --timeout 20; then echo "ok $c"; return 0; fi
+    echo "reason $c unknown"
+    swan /dev/null --terminate --ike "$c" --force --timeout 5
+    return 1
+  fi
+  f=$REPLY
+  if swan "$f" --initiate --child corp --ike "$c" --timeout 20; then
+    cleanup_tmp
     echo "ok $c"
     return 0
   fi
-  "$SWANCTL" --terminate --ike "$c" --force --timeout 5 >/dev/null 2>&1
+  reason=$(classify_fail <"$f")
+  cleanup_tmp
+  echo "reason $c ${reason:-unknown}"
+  swan /dev/null --terminate --ike "$c" --force --timeout 5
   return 1
 }
+# <<< 連線與失敗分類
 
 cmd_status() {
   if ! charon_running; then echo "disconnected"; return; fi
-  local out; out=$("$SWANCTL" --list-sas 2>/dev/null)
+  local out=""
+  if track_tmp; then
+    swan "$REPLY" --list-sas
+    out=$(cat "$REPLY")
+    cleanup_tmp
+  fi
   for c in "${CONNS[@]}"; do
     local block; block=$(printf '%s\n' "$out" | awk -v c="$c:" '$1==c{p=1;print;next} /^[^ ]/{p=0} p')
     [ -z "$block" ] && continue
@@ -107,7 +199,9 @@ cmd_logtrim() {
       cat "$TRIM_TMP" >"$LOGFILE" || { echo "fail logtrim: 寫回失敗"; exit 1; }
     fi
     rm -f "$TRIM_TMP"
-    trap - EXIT INT TERM HUP
+    # 恢復共用的 trap（見檔頭「可被中斷的 swanctl 呼叫」）
+    trap on_signal TERM INT HUP
+    trap cleanup_tmp EXIT
   fi
   chown root:wheel "$LOGFILE" && chmod 644 "$LOGFILE" || { echo "fail logtrim: 無法設定 $LOGFILE 權限"; exit 1; }
   echo "ok logtrim $(stat -f %z "$LOGFILE")"
@@ -147,11 +241,11 @@ case "${1:-}" in
     exit 0 ;;
   reload)
     # App 儲存設定後呼叫：charon 在跑就重新載入 swanctl.conf 與 secrets.conf
-    if charon_running; then "$SWANCTL" --load-all --noprompt >/dev/null 2>&1; fi
+    if charon_running; then swan /dev/null --load-all --noprompt; fi
     echo "ok reload" ;;
   reload-settings)
     # App 更新重送參數或 log 設定後呼叫；已建立的通道不受影響，之後的交換才套用
-    if charon_running; then "$SWANCTL" --reload-settings >/dev/null 2>&1 || { echo "fail reload-settings"; exit 1; }; fi
+    if charon_running; then swan /dev/null --reload-settings || { echo "fail reload-settings"; exit 1; }; fi
     echo "ok reload-settings" ;;
   sas)
     # 唯讀：輸出 swanctl 原始 SA 清單（含雙方 traffic selector），排查用
