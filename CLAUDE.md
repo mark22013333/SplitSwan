@@ -14,6 +14,7 @@ bash build.sh --install       # 編譯並裝到 /Applications（先結束執行�
 bash make-dmg.sh              # 檢查版號＋跑測試＋編譯打包 dist/SplitSwan-<版本>.dmg＋.sha256＋.sig（--skip-tests、--no-sign）
 bash Tests/run-tests.sh       # 全部單元測試，各組並行（不連 VPN、不需 sudo、不寫系統設定）
 bash Tests/run-tests.sh security update   # 只跑指定的組
+bash tools/test-punch-example.sh          # 打卡提醒範例外掛的測試（暫存目錄、覆寫時間）
 bash tools/check-version.sh   # 檢查 build.sh 的 VERSION 與 README「版本：」一致
 open build/SplitSwan.app --args -InitialTab settings   # 直接開在指定分頁（settings / environment / about）
 ```
@@ -44,6 +45,7 @@ SplitSwan.app ──sudo -n──▶ /usr/local/libexec/splitswan-helper (root) 
 - **F4 閘道排序**：`GatewayHistory.swift` 存每台最近 10 筆 `up N` 結果（UserDefaults JSON），`order` 決定自動輪替順序（冷卻 10 分鐘排最後 → 上次成功 → 成功率／平均耗時 → 無紀錄 → 從未成功）。只有 helper 輸出 `fail vpnN` 才記失敗；連上不到 60 秒被踢、卡在連線中 30 秒會補記失敗。
 - **一鍵主機檢查**：設定頁「某台公司主機連不上？」由 `HostCheckPanel.swift`（UI 流程）、`HostCheck.swift`（輸入解析、網段涵蓋、結果文字的純函式，有 `Tests/HostCheckTests.swift`）、`HostCheckRunner.swift`（`dscacheutil`／`route -n get`／`nc -z`，不需 root）組成。確認後走 `SettingsTab.persist()` 存檔，再呼叫 `VPNController.reconnect(reason:)`（先 helper `reload` 再斷線重連）。表單有未儲存修改時一律擋下（`SettingsTab.isDirty`）。
 - **一鍵更新**：`UpdateCenter`（`@MainActor` 單例，「關於」頁與狀態列選單共用）負責檢查與每日排程（`AutoCheckUpdates`，預設關）；`UpdateInstaller` 下載 release 的 dmg 與 `.sig`、以 Ed25519 公鑰驗證、`hdiutil` 掛載後檢查 bundle id 與版本（必須等於 release 版本且比目前新，防降級）、`ditto` 複製並 `codesign --verify`，再把舊版移到暫存區、新版放回原位，最後由 `/bin/sh` 等本程序結束後重新開啟。純邏輯在 `UpdateLogic`，測試在 `Tests/UpdateTests.swift`（含用假 App 實際跑 `stage`／`swap`）。限時執行外部指令在 `ProcessRunner`（`DiagnosticRunner.runLimited` 轉呼叫它）；`VPNController.run` 呼叫輔助程式有時限時也走 `ProcessRunner.execute`（寬限 `HelperRun.termGrace` 秒，逾時回 `HelperRun.timeoutCode`），全 App 只有這一份逾時實作。
+- **外掛區塊**：設定頁開關 `PluginsEnabled`（預設關）。`PluginLogic.swift` 是純邏輯（檔名間隔、SwiftBar 子集輸出解析＋`notify` 擴充、href 只收 http(s)、bash 只收絕對路徑、通知每日去重、以 stat 結果判斷權限），有 `Tests/PluginTests.swift`（`plugins` 組，含在暫存目錄實跑假外掛的整合測試）。`PluginRunner.swift`（`@MainActor` 單例）掃描 `~/.config/splitswan/plugins/`、檢查擁有者與 group／other 不可寫（symlink 看解析後目標）、經 `ProcessRunner.runLimited` 以 `/usr/bin/env -i` 清空環境再由 `/bin/sh` 固定字串 exec 外掛（10 秒上限，stderr 寫到 `plugin-state/<名稱>/.stderr`），每 5 秒檢查到期。`PluginMenu.swift` 把結果畫在選單「結束」之前，`PluginSettingsView.swift` 是設定頁區塊；外掛通知經 `DropNotifier.sendPlugin`（userInfo `kind=plugin`，點擊開 href）。外掛**絕不經 sudo／helper**。範例在 `config/plugins/punch-reminder.1m.sh.example`（不可放公司名稱或真實打卡網址）。開發測試用啟動參數 `-PluginsDir`、`-PluginStateDir`、`-PluginsEnabled YES`、`-WantConnected NO`，不要動到 `~/.config/splitswan/plugins`。
 - **F3 診斷報告**：`DiagnosticReport.swift` 是組字與遮蔽的純函式（有 `Tests/DiagnosticTests.swift`），`DiagnosticRunner.swift` 限時執行外部指令並寫出報告（600）。charon 的 filelog 設定由 `ConfigStore` 寫進 `strongswan.d/splitswan.conf`，等級固定 1。
 
 ## 輸入驗證（改 ConfigStore／CompanyPreset／ConfigExport 時必守）
@@ -81,6 +83,7 @@ SplitSwan.app ──sudo -n──▶ /usr/local/libexec/splitswan-helper (root) 
 
 ## 本機環境注意事項
 
+- bash 腳本裡 `$VAR` 後面緊接全形字元（例：`$VAR（`）會被當成變數名稱的一部分，`set -u` 下直接報 unbound variable；一律寫成 `${VAR}`。
 - zsh 開了 `noclobber`：覆寫既有檔案要用 `>|`。BSD grep 不支援 `\s`，改用 `[[:space:]]`。
 - PreToolUse hook 會攔截指令文字裡出現的遞迴刪除、磁碟直寫、強制推送等字串（包括 heredoc 內文與 commit message）；需要寫到這類內容時改用 Write 工具落檔，或用中文描述。
 - 權限設定有 `Read()` deny 涵蓋 `./build`：讀 build 產物一律用絕對路徑。
@@ -90,5 +93,5 @@ SplitSwan.app ──sudo -n──▶ /usr/local/libexec/splitswan-helper (root) 
 - 用 AppleScript（System Events）自動點按鈕時，SwiftUI 按鈕沒有可讀的標籤（name 為 missing value），要用 `position`／`size` 辨認，點之前先截圖確認是哪一顆。
 - **通知只在 App 位於 Applications 資料夾時有效**（ad-hoc 簽章也可以）；從 `build/` 或 `/tmp` 執行會直接回 `Notifications are not allowed`。測通知要用 `build.sh --install`。
 - `build.sh --install` 會結束執行中的 App，但 charon 的通道不會斷；新 App 啟動後依 `WantConnected` 決定要不要自動連線。
-- `Tests/run-tests.sh` 共 8 組（reconnect、export、security、settings、diagnostic、hostcheck、update、about），並行完整跑一次約 25 秒；有其他程序同時改 Sources 時會出現「input file was modified during the build」，那不是測試失敗，重跑即可。
+- `Tests/run-tests.sh` 共 9 組（reconnect、export、security、settings、diagnostic、hostcheck、update、about、plugins），並行完整跑一次約 25 秒；有其他程序同時改 Sources 時會出現「input file was modified during the build」，那不是測試失敗，重跑即可。
 - 狀態列的 `gitstatusd` 會在 `.git/` 留下 0 byte 的殘留 `index.lock`，git 寫入失敗時先用 stat 連續取樣確認 mtime 不動、已是過去式，再清除。

@@ -149,6 +149,68 @@ App 取得閘道與網段的順序：
 - 雲端 VM 的公用 IP 如果是動態的，重開機後可能會變。原本能連、突然不能連時，先用步驟 1 確認 IP 有沒有變。
 - 如果本機網段（例如家裡路由器的網段）跟公司網段重疊，會互相衝突。
 
+## 外掛
+
+可以把與 VPN 無關的小工具（打卡提醒、會議倒數、CI 狀態…）寫成腳本，顯示在狀態列選單裡、必要時發通知。預設關閉，到「設定」頁的「外掛」區塊開啟。
+
+### 放在哪裡
+
+- 外掛資料夾：`~/.config/splitswan/plugins/`。App 不會自己建立，按設定頁的「開啟外掛資料夾」才建立（權限 700）。
+- 資料夾內每個**可執行的一般檔案**就是一個外掛；隱藏檔、不可執行的檔案、子資料夾都略過。最多 10 個，超過的依檔名排序後略過，設定頁會列出來。
+- 檔名格式同 SwiftBar：`<名稱>.<間隔>.<副檔名>`，例如 `punch-reminder.1m.sh`。間隔可寫 `30s`、`1m`、`5m`、`1h`、`1d`，最短 10 秒；沒寫間隔就是 5 分鐘。
+- App 啟動、睡眠喚醒、打開設定頁時各跑一次，之後依間隔執行；同一個外掛上一次還沒跑完不會重複執行。
+
+### 輸出格式（SwiftBar 的子集）
+
+```
+標題
+---
+一般項目
+有顏色的項目 | color=red
+開網頁 | href=https://example.com/punch
+執行腳本 | bash=/Users/me/.config/splitswan/plugins/x.sh param1=mark param2=in refresh=true
+有子選單
+--子項目
+---
+提醒 | notify=true notify_id=reminder-1 href=https://example.com/punch
+```
+
+- 第一個 `---` 之前的第一行是該外掛區段的標題，其餘 header 行忽略。`---` 之後每行一個選單項目，單獨一行 `---` 是分隔線，`--` 開頭是上一個項目的子選單（只支援一層）。
+- `|` 之後是空白分隔的 `key=value`，值有空白時用雙引號包起來。支援的參數：
+
+| 參數 | 說明 |
+|------|------|
+| `href=<網址>` | 點擊開網址，只接受 `http`、`https` |
+| `bash=<絕對路徑>`、`param1=`…`param9=` | 點擊時執行該程式（不開終端機，`terminal=` 忽略）；程式同樣要通過下面的擁有者／權限檢查，通常就是外掛自己（`bash="$0"`） |
+| `refresh=true` | 點擊的動作完成後立刻重跑這個外掛 |
+| `color=<#RRGGBB 或 red／orange／green／gray>` | 文字顏色 |
+| `notify=true`（SplitSwan 擴充） | 這一行另外發成通知：標題是外掛標題，內文是這一行的文字，點通知時若這行有 `href` 就開啟 |
+| `notify_id=<字串>`（SplitSwan 擴充） | 通知去重鍵，沒寫就用該行文字；同一外掛同一個鍵**每天只發一次**（本地日期） |
+
+不支援的參數一律忽略。外掛結束碼不是 0、逾時或權限不符時，選單中的標題後面會加「⚠︎」，子選單顯示原因（結束碼與 stderr 最後一行）。
+
+### 安全規則
+
+- 外掛以你的身分執行，**絕不經過 sudo 或輔助程式**。只放你看得懂的腳本。
+- 執行前檢查：外掛資料夾、外掛檔案（symlink 則看解析後的目標與它所在的資料夾）都必須屬於你，且不可被 group／other 寫入，否則不執行並在設定頁顯示原因。
+- 直接執行檔案本身，不把任何內容拼進 shell 指令。每次限時 10 秒，逾時先送 SIGTERM、1 秒後 SIGKILL。
+- 環境變數只給：`PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`、`HOME`、`SPLITSWAN=1`、`SPLITSWAN_PLUGIN_STATE`（`~/.config/splitswan/plugin-state/<名稱>`，App 建立，權限 700，可放外掛自己的狀態）。不傳 VPN 設定或任何秘密。stderr 寫到狀態資料夾的 `.stderr`。
+- 外掛輸出視為不受信任的資料：最多讀 64 KB、顯示 30 個項目，`href` 只接受 http／https，`bash=` 只接受絕對路徑。
+- 每日通知去重紀錄存在 `~/.config/splitswan/plugin-state/notified.json`（600）。
+
+### 範例：打卡提醒
+
+[`config/plugins/punch-reminder.1m.sh.example`](config/plugins/punch-reminder.1m.sh.example) 是彈性上班（08:30–09:00 打卡、下班＝上班＋10 小時）的提醒範例：上班提醒兩次（08:30、08:50），下班時間到了提醒一次、再過 30 分鐘還沒標記就用紅字再提醒一次。打卡後在選單點「標記上班已打卡」「標記下班已打卡」停止提醒。
+
+```bash
+mkdir -p ~/.config/splitswan/plugins && chmod 700 ~/.config/splitswan/plugins
+cp config/plugins/punch-reminder.1m.sh.example ~/.config/splitswan/plugins/punch-reminder.1m.sh
+chmod 700 ~/.config/splitswan/plugins/punch-reminder.1m.sh
+# 編輯檔案開頭的 PUNCH_URL（打卡頁網址）與時間設定
+```
+
+腳本可以不靠 App 直接測：`NOW=08:55 TODAY=2026-10-09 DOW=5 SPLITSWAN_PLUGIN_STATE=/tmp/punch-test bash punch-reminder.1m.sh`。
+
 ## 疑難排解
 
 | 狀況 | 處理方式 |
@@ -162,6 +224,8 @@ App 取得閘道與網段的順序：
 | 連上後外網全斷 | 通道網段被改成 `0.0.0.0/0` 了，按「從公司設定還原」 |
 | 系統元件顯示「需要更新」 | 更新 App 後內附的元件可能跟著更新，按「更新」重新授權一次 |
 | 診斷報告顯示「找不到 log 檔」 | 系統元件是舊版，到「環境檢查」按「更新」，再重新連線一次，之後的連線過程才會寫進 log |
+| 外掛顯示「可被其他使用者寫入」 | 對外掛檔案與外掛資料夾執行 `chmod go-w`；外掛資料夾建議 `chmod 700` |
+| 外掛沒有出現在選單 | 設定頁「外掛」要開啟；檔案要可執行（`chmod u+x`）；隱藏檔與 `.example` 結尾不可執行的範例不會被當成外掛 |
 | 存檔時顯示格式錯誤 | 訊息會指出是哪個欄位；網段要寫成 `a.b.c.d/遮罩`，用半形數字，不可用 `/0` |
 
 ## 解除安裝
@@ -197,6 +261,10 @@ bash make-dmg.sh          # 編譯並打包成 dist/SplitSwan-<版本>.dmg
 - 輔助程式連線失敗原因分類的測試：`bash tools/test-classify.sh`（一般權限，用假的 swanctl 跑副本，不連 VPN）。
 - 自動重連的實機測試：`sudo bash tools/test-dpd.sh`（暫時封鎖閘道，量失聯偵測與恢復秒數；斷線通知要在測試期間人工確認），驗收清單與結果見 [`docs/F1-實機驗收.md`](docs/F1-實機驗收.md)。
 - 開發時可以用 `open build/SplitSwan.app --args -InitialTab settings`（或 `environment`、`about`），直接開在指定分頁。
+- 外掛的單元與整合測試在 `run-tests.sh` 的 `plugins` 組（在暫存目錄放假外掛實跑，不碰 `~/.config/splitswan`）；打卡範例的測試：`bash tools/test-punch-example.sh`。
+- 測試外掛時不要動到自己的外掛資料夾，用啟動參數換掉路徑（只對這次啟動有效，不寫入設定）：
+  `open -n build/SplitSwan.app --args -PluginsEnabled YES -PluginsDir /絕對路徑/plugins -PluginStateDir /絕對路徑/state -WantConnected NO`。
+  `-WantConnected NO` 讓 build 版不會自動連線（它和 /Applications 的版本共用設定）。路徑必須是絕對路徑，資料夾權限要 700。
 
 ### 改名
 
@@ -265,6 +333,9 @@ swanctl ──vici──▶ charon（strongSwan daemon，root）──IKEv2─�
 | `Sources/EnvChecker.swift` | 環境檢查與一鍵安裝 |
 | `Sources/AppInfo.swift` | 從 Info.plist 讀 App 名稱與版本；GitHub repo 位址 |
 | `Sources/AboutInfo.swift` | 「關於」頁的版本資訊與檢查更新（版本比較、解析 GitHub 回應） |
+| `Sources/PluginLogic.swift` | 外掛的純邏輯：檔名間隔、輸出解析、href／bash 驗證、通知去重、權限判斷 |
+| `Sources/PluginRunner.swift` | 外掛的掃描、權限檢查、限時執行與排程 |
+| `Sources/PluginMenu.swift`、`PluginSettingsView.swift` | 外掛在狀態列選單的區段、設定頁的「外掛」區塊 |
 | `Sources/UpdateCenter.swift`、`UpdateInstaller.swift`、`UpdateLogic.swift` | 一鍵更新與每日自動檢查：下載、Ed25519 簽章驗證、檢查與替換 App |
 | `tools/release-sign.swift` | 發版時簽署 dmg（私鑰不在 repo） |
 | `tools/make-icon.swift` | 產生 App 圖示 |
@@ -279,6 +350,8 @@ swanctl ──vici──▶ charon（strongSwan daemon，root）──IKEv2─�
 | `diag.sh` | 連線診斷：自動連線、收集路由／DNS／SA，測試通道網段內的目標與外網，再自動斷線 |
 | `config/company.env.example` | 公司設定檔範本 |
 | `config/secrets.conf.example` | strongSwan 密碼檔範本（參考用，App 會自動產生） |
+| `config/plugins/punch-reminder.1m.sh.example` | 外掛範例：打卡提醒 |
+| `tools/test-punch-example.sh` | 測試打卡提醒範例（暫存 state 目錄、覆寫時間） |
 
 ### 安全
 
@@ -290,6 +363,7 @@ swanctl ──vici──▶ charon（strongSwan daemon，root）──IKEv2─�
 - 診斷報告寫入前會遮蔽密碼與 PSK：先用規則把 `secret`、`password`、`PSK`、`EAP` 等欄位的值換成 `***`，再把目前設定中 6 個字元以上的實際密碼與 PSK 精確取代。報告檔權限 600，但含閘道位址與通道網段，只傳給管理者。
 - charon log 等級固定為 1（基本控制訊息），不含金鑰。log 檔權限 644，本機其他帳號也能讀到連線過程與閘道位址。
 - 輸入會先驗證再寫入：帳號、閘道、網段只接受固定字元，避免換行、大括號等字元破壞設定檔結構；密碼與 PSK 會跳脫雙引號與反斜線。匯入的公司設定檔也用同一套規則驗證。
+- 外掛以使用者身分執行、不經 sudo；執行前檢查擁有者與寫入權限，輸出當成不受信任的資料處理（見「外掛」段）。
 - 免密碼 sudo 只放行 `/usr/local/libexec/splitswan-helper`。它是 root 擁有，一般使用者改不了。
 - 已知限制：Homebrew 安裝的 `charon`、`swanctl` 放在一般使用者可寫入的 `/opt/homebrew` 底下，被替換的話仍然能透過輔助程式取得 root。`/opt/homebrew/etc/strongswan.d/` 同樣可由一般使用者寫入，有心人可以改掉 filelog 路徑，讓以 root 執行的 charon 寫入任意檔案。改用每次輸入密碼也有同樣的風險，差別只在於需要使用者當下在場輸入。
 
