@@ -145,14 +145,6 @@ enum HelperRun {
     }
 }
 
-/// run 收集輸出的緩衝區（在 readabilityHandler 的背景執行緒寫入）
-private final class RunOutputBuffer: @unchecked Sendable {
-    private let lock = NSLock()
-    private var data = Data()
-    func append(_ d: Data) { lock.lock(); data.append(d); lock.unlock() }
-    var value: Data { lock.lock(); defer { lock.unlock() }; return data }
-}
-
 /// 自動重連用到的純邏輯，不碰系統狀態，方便單獨測試
 enum ReconnectPolicy {
     /// 一整輪都失敗後，第 n 次（從 0 起）重試前要等的秒數：5、15、30、60，之後固定 60
@@ -742,12 +734,18 @@ final class VPNController: ObservableObject {
     }
 
     /// 執行外部指令並收集輸出。timeout 為 nil 時不限時（brew install、管理者授權視窗要等使用者）；
-    /// 有時限時超過就先送 SIGTERM（sudo 會轉給輔助程式），1 秒後仍在就 SIGKILL，
-    /// 回傳 HelperRun.timeoutCode 與附上逾時說明的輸出。
-    /// 跟 ProcessRunner.runLimited 同一套作法；reconnect 測試組沒有編入 ProcessRunner，所以在這裡另寫一份
+    /// 有時限時交給 ProcessRunner.execute：超過就先送 SIGTERM（sudo 會轉給輔助程式），
+    /// HelperRun.termGrace 秒後仍在就 SIGKILL，回傳 HelperRun.timeoutCode 與附上逾時說明的輸出
     nonisolated static func run(_ exe: String, _ args: [String], env: [String: String]? = nil,
                                 timeout: TimeInterval? = nil) async -> (Int32, String) {
-        if let timeout { return await runLimited(exe, args, env: env, timeout: timeout) }
+        if let timeout {
+            let r = await ProcessRunner.execute(exe, args, env: env, timeout: timeout, termGrace: HelperRun.termGrace)
+            if r.launchError != nil { return (127, "") }
+            var out = r.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard r.timedOut else { return (r.code, out) }
+            out += (out.isEmpty ? "" : "\n") + HelperRun.timeoutNote(timeout)
+            return (HelperRun.timeoutCode, out)
+        }
         return await withCheckedContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
                 let p = Process()
@@ -766,59 +764,6 @@ final class VPNController: ObservableObject {
                     code = p.terminationStatus
                 } catch {}
                 let out = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                cont.resume(returning: (code, out))
-            }
-        }
-    }
-
-    nonisolated private static func runLimited(_ exe: String, _ args: [String], env: [String: String]?,
-                                               timeout: TimeInterval) async -> (Int32, String) {
-        await withCheckedContinuation { cont in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let p = Process()
-                p.executableURL = URL(fileURLWithPath: exe)
-                p.arguments = args
-                if let env { p.environment = env }
-                let pipe = Pipe()
-                p.standardOutput = pipe
-                p.standardError = pipe
-                p.standardInput = FileHandle.nullDevice
-                let buf = RunOutputBuffer()
-                let eof = DispatchSemaphore(value: 0)
-                // 持續讀取，輸出很多也不會因為 pipe 滿了而卡住
-                pipe.fileHandleForReading.readabilityHandler = { h in
-                    let d = h.availableData
-                    if d.isEmpty { h.readabilityHandler = nil; eof.signal() } else { buf.append(d) }
-                }
-                let exited = DispatchSemaphore(value: 0)
-                p.terminationHandler = { _ in exited.signal() }
-                do { try p.run() } catch {
-                    pipe.fileHandleForReading.readabilityHandler = nil
-                    cont.resume(returning: (127, ""))
-                    return
-                }
-                var timedOut = false
-                if exited.wait(timeout: .now() + timeout) == .timedOut {
-                    timedOut = true
-                    p.terminate()
-                    // 給輔助程式的 trap 時間結束 swanctl、清暫存檔；SIGKILL 無法經 sudo 轉送，只能當最後手段
-                    if exited.wait(timeout: .now() + HelperRun.termGrace) == .timedOut {
-                        kill(p.processIdentifier, SIGKILL)
-                        _ = exited.wait(timeout: .now() + 1)
-                    }
-                }
-                // 等剩下的輸出讀完；孫程序若還握著 pipe，最多再等 1 秒
-                if eof.wait(timeout: .now() + 1) == .timedOut {
-                    pipe.fileHandleForReading.readabilityHandler = nil
-                }
-                var out = String(decoding: buf.value, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-                let code: Int32
-                if timedOut {
-                    code = HelperRun.timeoutCode
-                    out += (out.isEmpty ? "" : "\n") + HelperRun.timeoutNote(timeout)
-                } else {
-                    code = p.isRunning ? -1 : p.terminationStatus
-                }
                 cont.resume(returning: (code, out))
             }
         }
