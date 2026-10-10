@@ -135,15 +135,16 @@ gen_csv() {  # 輸出檔：用 awk 一次產生（bash 3.2 大量 process substi
 }
 gen_csv "$FX/good.csv"
 LC_ALL=C grep -c '^2026' "$FX/good.csv" | grep -qx 365; check "fixture：365 天、含 BOM 與 CRLF" $?
-api_entry() { printf '{"resourceDescription":"%s","resourceDownloadUrl":"%s"}' "$1" "$2"; }
+api_entry() { printf '{"resourceDescription":"%s","resourceDownloadUrl":"%s","resourceFormat":"%s","resourceField":[{"name":"x"}]}' "$1" "$2" "${3:-CSV}"; }
 { printf '{"success":true,"result":{"distribution":['
   api_entry "114年中華民國政府行政機關辦公日曆表" "https://www.dgpa.gov.tw/FileConversion?filename=dgpa/files/202407/a.csv"; printf ','
   api_entry "115年中華民國政府行政機關辦公日曆表" "https://www.dgpa.gov.tw/FileConversion?filename=dgpa/files/202506/b.csv"; printf ','
   api_entry "115年中華民國政府行政機關辦公日曆表(1150901更新)" "https://www.dgpa.gov.tw/FileConversion?filename=dgpa/files/202509/c.csv"; printf ','
   api_entry "115年中華民國政府行政機關辦公日曆表_Google行事曆專用" "https://www.dgpa.gov.tw/FileConversion?filename=dgpa/files/202512/d.csv"; printf ','
-  api_entry "115年中華民國政府行政機關辦公日曆表(假網站)" "https://evil.example/FileConversion?filename=dgpa/files/202612/e.csv"
+  api_entry "115年中華民國政府行政機關辦公日曆表(假網站)" "https://evil.example/FileConversion?filename=dgpa/files/202612/e.csv"; printf ','
+  api_entry "115年中華民國政府行政機關辦公日曆表(JSON)" "https://www.dgpa.gov.tw/FileConversion?filename=dgpa/files/202611/f.json" JSON
   printf ']}}'; } >"$FX/api.json"
-[ "$(plutil -extract result.distribution raw -o - "$FX/api.json")" = 5 ]; check "fixture：清單 JSON 可被 plutil 解析（5 筆）" $?
+[ "$(plutil -extract result.distribution raw -o - "$FX/api.json")" = 6 ]; check "fixture：清單 JSON 可被 plutil 解析（6 筆）" $?
 g() {  # 情境名 TODAY DOW NOW [參數…]：用政府日曆 fixture 執行
   local s; s=$(st "$1"); local today=$2 dow=$3 now=$4; shift 4
   CAL_API_FILE="${API:-$FX/api.json}" CAL_CSV_FILE="${CSV:-$FX/good.csv}" HOLIDAY_SOURCE=tw-gov TODAY="$today" DOW="$dow" p "$s" "$now" "$@"
@@ -154,7 +155,7 @@ meta() { grep "^$2=" "$(st "$1")/calendar-2026.meta" | cut -d= -f2-; }
 out=$(g gov 2026-09-25 5 09:00)
 has "$out" "今天放假：中秋節" && ! has "$out" "notify=true" && has "$out" "日曆：政府 115 年（更新於 $(date +%m-%d)） | color=gray"; check "中秋節（週五）放假，資訊列顯示政府 115 年" $?
 has "$out" "重新抓取日曆 | bash=\"" && has "$out" "param1=refresh-calendar refresh=true"; check "有「重新抓取日曆」項目" $?
-[ "$(meta gov desc)" = "115年中華民國政府行政機關辦公日曆表(1150901更新)" ]; check "多版本取最新上傳的一般版，排除 Google 版與非政府網址（選到：$(meta gov desc)）" $?
+[ "$(meta gov desc)" = "115年中華民國政府行政機關辦公日曆表(1150901更新)" ]; check "多版本取最新上傳的一般版，排除 Google 版、非 CSV 與非政府網址（選到：$(meta gov desc)）" $?
 out=$(g gov 2026-02-14 6 09:00); has "$out" "上班：未打卡" && has "$out" "快遲到了"; check "週六補行上班：當工作日提醒" $?
 out=$(g gov 2026-05-01 5 09:00); has "$out" "今天放假：勞動節"; check "勞動節放假" $?
 out=$(g gov 2026-10-17 6 09:00); has "$out" "今天放假：週末"; check "一般週六：今天放假：週末" $?
@@ -222,6 +223,99 @@ got=$(export LC_COLLATE=zh_TW.UTF-8 LANG=zh_TW.UTF-8; g loc 2026-10-09 5 09:00);
 # 23. HOLIDAY_SOURCE=none：不用政府日曆、不連網、沒有重新抓取項目
 out=$(CAL_API_FILE="$FX/api.json" CAL_CSV_FILE="$FX/good.csv" HOLIDAY_SOURCE=none TODAY=2026-09-25 DOW=5 p "$(st none)" 09:00)
 has "$out" "上班：未打卡" && has "$out" "日曆：週一至週五" && ! has "$out" "重新抓取日曆" && [ ! -f "$(st none)/calendar-2026.csv" ]; check "HOLIDAY_SOURCE=none 只用週一至週五" $?
+
+# 24. 異常大的清單：999 筆在時限內失敗、留下 .fail、不留暫存檔（逐筆 plutil 時要 30 秒以上）
+{ printf '{"result":{"distribution":['
+  for ((i = 1; i <= 999; i++)); do [ $i = 1 ] || printf ','
+    api_entry "115年中華民國政府行政機關辦公日曆表($i)" "https://www.dgpa.gov.tw/FileConversion?filename=dgpa/files/202506/$i.csv"; done
+  printf ']}}'; } >"$FX/big.json"
+s=$(st big); t0=$(date +%s)
+out=$(API="$FX/big.json" g big 2026-10-12 1 09:00); el=$(( $(date +%s) - t0 ))
+[ "$el" -le 3 ] && [ -f "$s/calendar-2026.fail" ] && [ ! -f "$s/calendar-2026.csv" ] && has "$out" "抓取失敗"; check "999 筆清單：${el} 秒內失敗並留下 .fail" $?
+[ -z "$(ls -A "$s" | LC_ALL=C grep '^\.cal-')" ]; check "999 筆清單：不留暫存檔" $?
+
+# 25. 清單項目含控制字元（TAB、換行）就排除；退回較舊但乾淨的項目
+{ printf '{"result":{"distribution":['
+  api_entry '115年中華民國政府行政機關辦公日曆表\thttps://evil.example/x.csv' "https://www.dgpa.gov.tw/FileConversion?filename=dgpa/files/202512/t.csv"; printf ','
+  api_entry '115年中華民國政府行政機關辦公日曆表\nfetched=1' "https://www.dgpa.gov.tw/FileConversion?filename=dgpa/files/202511/n.csv"; printf ','
+  api_entry "115年中華民國政府行政機關辦公日曆表" "https://www.dgpa.gov.tw/FileConversion?filename=dgpa/files/202510/u.csv\tx"; printf ','
+  api_entry "115年中華民國政府行政機關辦公日曆表" "https://www.dgpa.gov.tw/FileConversion?filename=dgpa/files/202506/ok.csv"
+  printf ']}}'; } >"$FX/ctl.json"
+API="$FX/ctl.json" g ctl 2026-10-12 1 09:00 >/dev/null
+[ "$(meta ctl desc)" = "115年中華民國政府行政機關辦公日曆表" ]; check "描述或網址含 TAB／換行的項目被排除（選到：$(meta ctl desc)）" $?
+
+# 26. 嚴格驗證：日期重複、缺天、引號欄位
+{ head -1 "$FX/good.csv"; LC_ALL=C grep '^2026' "$FX/good.csv" | LC_ALL=C sed 's/^20260102,/20260101,/'; } >"$FX/dupday.csv"
+LC_ALL=C grep -c '^2026' "$FX/dupday.csv" | grep -qx 365; check "fixture：日期重複但仍是 365 行" $?
+out=$(CSV="$FX/dupday.csv" g dupday 2026-10-12 1 09:00); has "$out" "抓取失敗"; check "日期重複（湊滿 365 行）視為失敗" $?
+LC_ALL=C grep -v '^20260702,' "$FX/good.csv" >"$FX/missing.csv"
+out=$(CSV="$FX/missing.csv" g missing 2026-10-12 1 09:00); has "$out" "抓取失敗"; check "缺一天視為失敗" $?
+LC_ALL=C sed 's/^20261010,\([^,]*\),2,國慶日/"20261010","\1","2","國慶日"/' "$FX/good.csv" >"$FX/quoted.csv"
+out=$(CSV="$FX/quoted.csv" g quoted 2026-10-10 6 09:00); has "$out" "今天放假：國慶日"; check "引號欄位的 \" 去除後正常判斷" $?
+LC_ALL=C awk -F, 'BEGIN { OFS = "," } $1 == "20261010" { $4 = "國慶\033[31m日" } { print }' "$FX/good.csv" >"$FX/esc.csv"
+LC_ALL=C grep '^20261010' "$FX/esc.csv" | LC_ALL=C grep -q $'\x1b'; check "fixture：備註含 ESC" $?
+out=$(CSV="$FX/esc.csv" g esc 2026-10-10 6 09:00); line=$(grep '^今天放假' <<<"$out")
+[ "$line" = "今天放假：國慶[31m日" ] && ! LC_ALL=C grep -q $'\x1b' <<<"$line"; check "備註的控制字元（ESC）移除" $?
+
+# 27. 未來時間（時鐘倒退）不當成有效快取／失敗紀錄
+s=$(st future); g future 2026-10-12 1 09:00 >/dev/null; sumf=$(shasum "$s/calendar-2026.csv" | cut -c1-40)
+LC_ALL=C sed -i '' "s/^fetched=.*/fetched=$(( $(date +%s) + 30 * 86400 ))/" "$s/calendar-2026.meta"
+CSV="$FX/remark.csv" g future 2026-10-12 1 09:00 >/dev/null
+[ "$(shasum "$s/calendar-2026.csv" | cut -c1-40)" != "$sumf" ]; check "快取時間在未來：視為過期重抓" $?
+
+# 28. 連網路徑（以假 curl 模擬，不真的連網）：參數、非 0 結束碼、候選退回、逾時中斷
+FB="$RUN/fakebin"; mkdir -p "$FB"
+cat >"$FB/curl" <<'FAKE'
+#!/bin/bash
+echo "$*" >>"$FAKE_LOG"
+out=""; url=""
+while [ $# -gt 0 ]; do
+  case $1 in
+    -o|-m|--proto|--proto-redir|--max-filesize) [ "$1" = -o ] && out=$2; shift 2 ;;
+    -*) shift ;;
+    *) url=$1; shift ;;
+  esac
+done
+case "$FAKE_MODE:$url" in
+  sleep:*) sleep 30 ;;
+  *:*dataset/14718) cat "$FAKE_API" >"$out" ;;
+  *:*c.csv) printf 'garbage\n' >"$out" ;;
+  partial:*b.csv) cat "$FAKE_CSV" >"$out"; exit 28 ;;
+  *:*b.csv) cat "$FAKE_CSV" >"$out" ;;
+  *) exit 22 ;;
+esac
+FAKE
+chmod 700 "$FB/curl"
+{ printf '{"result":{"distribution":['
+  api_entry "115年中華民國政府行政機關辦公日曆表" "https://www.dgpa.gov.tw/FileConversion?filename=dgpa/files/202506/b.csv"; printf ','
+  api_entry "115年中華民國政府行政機關辦公日曆表(1150901更新)" "https://www.dgpa.gov.tw/FileConversion?filename=dgpa/files/202509/c.csv"
+  printf ']}}'; } >"$FX/net.json"
+net() {  # 模式 情境名 TODAY DOW [參數…]：走連網路徑，但 curl 是假的
+  local mode=$1 name=$2 today=$3 dow=$4; shift 4
+  PATH="$FB:$PATH" FAKE_MODE=$mode FAKE_LOG="$RUN/fake-$name.log" FAKE_API="$FX/net.json" FAKE_CSV="$FX/good.csv" \
+    HOLIDAY_SOURCE=tw-gov TODAY="$today" DOW="$dow" p "$(st "$name")" 09:00 "$@"
+}
+out=$(net ok netok 2026-10-09 5)
+has "$out" "今天放假：補假" && [ "$(meta netok desc)" = "115年中華民國政府行政機關辦公日曆表" ]; check "最新候選驗證失敗時改試下一個（選到：$(meta netok desc)）" $?
+[ "$(LC_ALL=C grep -c -- '^-g ' "$RUN/fake-netok.log")" = 3 ] && LC_ALL=C grep -q -- "--proto =https --proto-redir =https" "$RUN/fake-netok.log"; check "curl 帶 -g 與 https 限制（呼叫 3 次：清單＋2 個候選）" $?
+out=$(net partial netpart 2026-10-09 5); has "$out" "抓取失敗" && [ ! -f "$(st netpart)/calendar-2026.csv" ]; check "curl 非 0 結束碼（內容看似完整）一律視為失敗" $?
+# 逾時中斷：App 送 SIGTERM → 立刻結束、清掉暫存檔、留下 .fail；下一分鐘不重抓
+s=$(st netterm); mkdir -p "$s"
+( net sleep netterm 2026-10-12 1 >/dev/null ) & bg=$!
+sleep 1.5; t0=$(date +%s)
+kill -TERM "$(pgrep -P $bg)" 2>/dev/null
+wait $bg; el=$(( $(date +%s) - t0 ))
+[ "$el" -le 2 ] && [ -f "$s/calendar-2026.fail" ] && [ -z "$(ls -A "$s" | LC_ALL=C grep '^\.cal-')" ]; check "SIGTERM 中斷：${el} 秒內結束、留下 .fail、無暫存檔" $?
+calls=$(LC_ALL=C grep -c . "$RUN/fake-netterm.log")
+out=$(net ok netterm 2026-10-12 1); has "$out" "抓取失敗" && [ "$(LC_ALL=C grep -c . "$RUN/fake-netterm.log")" = "$calls" ]; check "中斷後下一次執行不重抓（6 小時內）" $?
+# SIGKILL（無法清理）：.fail 已在開始前寫入，所以同樣不會每分鐘重抓；殘留暫存檔在下一次執行時清掉
+s=$(st netkill); mkdir -p "$s"
+( net sleep netkill 2026-10-12 1 >/dev/null ) 2>/dev/null & bg=$!
+sleep 1.5; kill -KILL "$(pgrep -P $bg)" 2>/dev/null; wait $bg
+[ -f "$s/calendar-2026.fail" ]; check "SIGKILL 中斷：開始前已寫 .fail" $?
+calls=$(LC_ALL=C grep -c . "$RUN/fake-netkill.log")
+net ok netkill 2026-10-12 1 >/dev/null
+[ "$(LC_ALL=C grep -c . "$RUN/fake-netkill.log")" = "$calls" ] && [ -z "$(ls -A "$s" | LC_ALL=C grep '^\.cal-')" ]; check "SIGKILL 後不重抓，殘留暫存檔被清掉" $?
 
 echo "通過 ${pass}，失敗 $fail"
 [ "$fail" = 0 ]
