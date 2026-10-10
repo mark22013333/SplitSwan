@@ -20,7 +20,17 @@
 # 打卡後請在選單點「標記上班已打卡」「標記下班已打卡」，提醒才會停止。
 # 也可以直接在終端機執行：punch-reminder.1m.sh mark in｜mark off｜unmark in｜unmark off
 #
+# 工作日判斷（依序）：
+#   1. 覆寫檔 ~/.config/splitswan/punch-overrides.txt（不存在就略過）：每行「YYYY-MM-DD off|work [說明]」，# 開頭是註解，
+#      格式錯的行忽略；檔案必須屬於自己且他人不可寫，否則整個忽略並在選單提示。
+#   2. 政府行政機關辦公日曆表（HOLIDAY_SOURCE="tw-gov"）：資料來源 data.gov.tw 資料集 14718，
+#      從清單挑「<民國年>年中華民國政府行政機關辦公日曆表」（排除 Google 行事曆版，多版本取最新上傳的），
+#      快取在狀態資料夾 calendar-<西元年>.csv，7 天更新一次；抓取失敗 6 小時內不重試。
+#   3. 都沒有就用 WORKDAYS（週一到週五）。
+# 選單的「重新抓取日曆」會忽略 7 天與 6 小時的限制立刻重抓。
+#
 # 測試用環境變數：NOW=HH:MM、TODAY=YYYY-MM-DD、DOW=1..7（1＝週一），沒設就用目前時間。
+# 離線測試：CAL_API_FILE、CAL_CSV_FILE 指向本機的清單 JSON 與日曆 CSV（設定時完全不連網）。
 
 # ── 可調整的設定 ──────────────────────────────────────────
 PUNCH_URL="https://example.com/punch"   # 打卡頁網址
@@ -31,9 +41,12 @@ OFF_EARLIEST="18:30"                    # 最早下班時間
 OFF_SECOND_DELAY_MIN=30                 # 下班第一次提醒之後多久再提醒一次
 WORKDAYS="1 2 3 4 5"                    # 工作日（date +%u：1＝週一 … 7＝週日）
 KEEP_DAYS=14                            # 狀態檔保留天數
+HOLIDAY_SOURCE="${HOLIDAY_SOURCE:-tw-gov}"   # 政府辦公日曆；設成 none 就只用 WORKDAYS
 # ─────────────────────────────────────────────────────────
 
 set -u
+# 一律用 C locale：BSD awk 在 en_US.UTF-8 等 locale 下比較中文字串會誤判相等；之後只比對日期與 0／2 兩欄
+export LC_ALL=C
 STATE="${SPLITSWAN_PLUGIN_STATE:-$HOME/.config/splitswan/plugin-state/punch-reminder.1m.sh}"
 TODAY="${TODAY:-$(date +%Y-%m-%d)}"
 NOW="${NOW:-$(date +%H:%M)}"
@@ -53,8 +66,137 @@ valid_time "$NOW" || { echo "打卡 ⚠︎"; echo "---"; echo "NOW 格式錯誤�
 
 mkdir -p "$STATE" && chmod 700 "$STATE" || exit 1
 
+# ── 政府辦公日曆 ───────────────────────────────────────
+YEAR=${TODAY:0:4}
+ROC=$((10#$YEAR - 1911))
+CAL="$STATE/calendar-$YEAR.csv"
+META="$STATE/calendar-$YEAR.meta"
+FAIL="$STATE/calendar-$YEAR.fail"
+NOW_EPOCH=$(date +%s)
+CAL_API_URL="https://data.gov.tw/api/v2/rest/dataset/14718"
+# 只走 https、限檔案大小、不展開 [] {}（-g）。清單 API 實測常要 3～4.5 秒：清單給 5 秒，
+# CSV（實測約 0.2 秒）每個候選給 1.5 秒、最多試 2 個，合計 ≤ 8 秒
+CURL=(curl -g --proto '=https' --proto-redir '=https' -fsS --max-filesize 200000)
+MAX_RESOURCES=100        # 清單筆數上限，超過視為失敗（避免異常大的清單拖垮執行時間）
+
+meta_get() { [ -f "$2" ] && grep -m1 "^$1=" "$2" | cut -d= -f2-; }
+is_epoch() { [[ "$1" =~ ^[0-9]{1,12}$ ]]; }
+# 時間在 [現在 - 上限, 現在] 之內才算數（時鐘倒退造成的未來時間一律當過期）
+within() { is_epoch "$1" && [ "$1" -le "$NOW_EPOCH" ] && [ $((NOW_EPOCH - $1)) -lt "$2" ]; }
+
+# 依快取時間與上次失敗時間決定要不要抓（FORCE=1 忽略限制）
+need_fetch() {
+  [ "${FORCE:-0}" = 1 ] && return 0
+  [ -f "$CAL" ] && within "$(meta_get fetched "$META")" $((7 * 86400)) && return 1
+  within "$(head -c 20 "$FAIL" 2>/dev/null)" $((6 * 3600)) && return 1
+  return 0
+}
+
+# 清單 JSON → 「年月<TAB>描述<TAB>網址」，只列目標年、一般版（不含 Google）、格式 CSV、
+# 網址為 dgpa／data.gov.tw 的 https，依上傳年月由新到舊。整份只用 plutil 轉換一次，其餘用 awk 擷取。
+# 描述或網址含任何控制字元（含 TAB、換行）的項目排除；超過 MAX_RESOURCES 筆回傳失敗
+list_candidates() {
+  local api=$1 xml
+  xml=$(plutil -extract result.distribution xml1 -o - "$api" 2>/dev/null) || return 1
+  awk -v max="$MAX_RESOURCES" -v prefix="${ROC}年中華民國政府行政機關辦公日曆表" '
+    function unesc(s) { gsub(/&lt;/, "<", s); gsub(/&gt;/, ">", s); gsub(/&quot;/, "\"", s); gsub(/&apos;/, "\047", s); gsub(/&amp;/, "\\&", s); return s }
+    { sub(/^[ \t]+/, "") }
+    /^<dict>$/ { depth++; if (depth == 1) { n++; desc = ""; url = ""; fmt = ""; bad = 0 } ; next }
+    /^<\/dict>$/ {
+      if (depth == 1 && !bad && index(desc, prefix) == 1 && desc !~ /Google/ && toupper(fmt) == "CSV" &&
+          (url ~ /^https:\/\/www\.dgpa\.gov\.tw\// || url ~ /^https:\/\/data\.gov\.tw\//)) {
+        ym = "000000"; if (match(url, /dgpa\/files\/[0-9][0-9][0-9][0-9][0-9][0-9]\//)) ym = substr(url, RSTART + 11, 6)
+        printf "%s\t%s\t%s\n", ym, desc, url
+      }
+      depth--; next
+    }
+    depth == 1 && /^<key>/ { key = $0; sub(/^<key>/, "", key); sub(/<\/key>$/, "", key); want = key; next }
+    depth == 1 && want != "" {
+      v = $0
+      if (v == "<string/>") v = ""
+      else if (v ~ /^<string>.*<\/string>$/) { sub(/^<string>/, "", v); sub(/<\/string>$/, "", v) }
+      else { if (want ~ /^resource(Description|DownloadUrl|Format)$/) bad = 1; want = ""; next }   # 跨行（含換行）或非字串
+      v = unesc(v)
+      if (v ~ /[\001-\037\177]/ || v ~ /&#/) { if (want ~ /^resource(Description|DownloadUrl|Format)$/) bad = 1 }
+      if (want == "resourceDescription") desc = v
+      else if (want == "resourceDownloadUrl") url = v
+      else if (want == "resourceFormat") fmt = v
+      want = ""; next
+    }
+    END { if (n > max) exit 3 }
+  ' <<<"$xml" | sort -r -k1,1 -s
+  [ "${PIPESTATUS[0]}" = 0 ]
+}
+
+# 驗證：去 BOM、\r、引號與其他控制字元；只留 `日期,星期,0或2,` 開頭的行；
+# 日期必須是目標年、不重複、且涵蓋 1/1 到 12/31 每一天
+validate_csv() {  # 原始檔 輸出檔
+  tr -d '\r"\000-\011\013-\037\177' <"$1" | awk 'NR == 1 { sub(/^\357\273\277/, "") } { print }' \
+    | grep -E '^[0-9]{8},[^,]*,[02],' >"$2"
+  awk -F, -v y="$YEAR" '
+    BEGIN { split("31 28 31 30 31 30 31 31 30 31 30 31", md, " ")
+            if ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0) md[2] = 29
+            for (m = 1; m <= 12; m++) { days += md[m]; for (d = 1; d <= md[m]; d++) want[sprintf("%04d%02d%02d", y, m, d)] = 1 } }
+    { if (!($1 in want) || ($1 in seen)) bad = 1; seen[$1] = 1; n++ }
+    END { exit (bad || n != days) ? 1 : 0 }
+  ' "$2"
+}
+
+CURL_PID=""
+fetch_url() {  # 網址 輸出檔 秒數：curl 放背景再 wait，SIGTERM 才能立刻處理；非 0 結束碼一律失敗
+  "${CURL[@]}" -m "$3" -o "$2" "$1" 2>/dev/null &
+  CURL_PID=$!
+  wait "$CURL_PID"; local rc=$?
+  CURL_PID=""
+  return "$rc"
+}
+
+# 下載並驗證；成功才原子替換快取。開始前先寫失敗時間（被逾時中斷也不會每分鐘重抓），成功才清除
+fetch_calendar() {
+  local tmp="$STATE/.cal-$$" api csv desc url ym ok=0 tries=0 offline=0
+  api="$tmp.json"; csv="$tmp.csv"
+  CAL_TMP=$tmp                     # trap 在全域執行，看不到 local 變數
+  echo "$NOW_EPOCH" >| "$FAIL"
+  trap 'rm -f -- "$CAL_TMP".*' EXIT
+  trap '[ -n "$CURL_PID" ] && kill "$CURL_PID" 2>/dev/null; exit 143' TERM INT
+  # 離線測試：任一個 CAL_*_FILE 有設就完全不連網（沒設的那個視為抓取失敗）
+  [ -n "${CAL_API_FILE:-}${CAL_CSV_FILE:-}" ] && offline=1
+  if [ "$offline" = 1 ]; then
+    [ -n "${CAL_API_FILE:-}" ] && cp "$CAL_API_FILE" "$api" 2>/dev/null
+  else
+    fetch_url "$CAL_API_URL" "$api" 5 || : >| "$api"
+  fi
+  if [ -s "$api" ] && list_candidates "$api" >"$tmp.list"; then
+    while IFS=$'\t' read -r ym desc url && [ "$tries" -lt 2 ]; do
+      tries=$((tries + 1))
+      : >| "$csv.raw"
+      if [ "$offline" = 1 ]; then
+        [ -n "${CAL_CSV_FILE:-}" ] && cp "$CAL_CSV_FILE" "$csv.raw" 2>/dev/null
+      else
+        fetch_url "$url" "$csv.raw" 1.5 || continue
+      fi
+      [ -s "$csv.raw" ] && validate_csv "$csv.raw" "$csv" && { ok=1; break; }
+    done <"$tmp.list"
+  fi
+  if [ "$ok" = 1 ]; then
+    printf 'fetched=%s\ndesc=%s\n' "$NOW_EPOCH" "$desc" >"$tmp.meta"
+    mv -f "$csv" "$CAL" && mv -f "$tmp.meta" "$META" && rm -f -- "$FAIL"
+  fi
+  rm -f -- "$tmp".*
+  trap - EXIT TERM INT
+  [ "$ok" = 1 ]
+}
+
+# 先前被強制結束（SIGKILL）留下的暫存檔；同一外掛不會同時執行兩份，可以直接清
+for f in "$STATE"/.cal-*; do [ -f "$f" ] && [ ! -L "$f" ] && rm -f -- "$f"; done
+
+trunc20() { local LC_ALL=en_US.UTF-8; printf '%s' "${1:0:20}"; }
+
 # ── 標記／取消（選單點擊或終端機執行）─────────────────────
 case "${1:-}" in
+  refresh-calendar)
+    [ "$HOLIDAY_SOURCE" = tw-gov ] && FORCE=1 fetch_calendar
+    exit 0 ;;
   mark|unmark)
     kind="${2:-}"
     [ "$kind" = in ] || [ "$kind" = off ] || { echo "用法：$0 mark|unmark in|off" >&2; exit 2; }
@@ -62,7 +204,7 @@ case "${1:-}" in
     if [ "$1" = mark ]; then echo "$NOW" >| "$f"; else rm -f -- "$f"; fi
     exit 0 ;;
   "") ;;
-  *) echo "用法：$0 [mark|unmark in|off]" >&2; exit 2 ;;
+  *) echo "用法：$0 [mark|unmark in|off|refresh-calendar]" >&2; exit 2 ;;
 esac
 
 # ── 只保留最近 KEEP_DAYS 天的狀態檔（只動本目錄下「日期.in／日期.off」的一般檔案）──
@@ -82,11 +224,59 @@ read_mark() {  # 讀今天的標記時間，格式不對當作沒標記
   valid_time "$t" && echo "$t"
 }
 
-# ── 非工作日 ───────────────────────────────────────────
-if [[ " $WORKDAYS " != *" $DOW "* ]]; then
+# ── 今天要不要上班：覆寫檔 > 政府日曆 > WORKDAYS ─────────
+DAYTYPE=""; REASON=""; CALINFO=""; OVR_WARN=""
+OVR="$HOME/.config/splitswan/punch-overrides.txt"
+if [ -f "$OVR" ]; then
+  mode=$(stat -L -f %Lp "$OVR" 2>/dev/null); owner=$(stat -L -f %u "$OVR" 2>/dev/null)
+  if [ "$owner" != "$(id -u)" ] || ! [[ "$mode" =~ ^[0-7]+$ ]] || (( 8#$mode & 8#022 )); then
+    OVR_WARN="覆寫檔權限不安全，已忽略（請 chmod go-w）"
+  else
+    line=$(awk -v d="$TODAY" '$0 !~ /^#/ && $1 == d && ($2 == "off" || $2 == "work") { l = $0 } END { print l }' "$OVR")
+    if [ -n "$line" ]; then
+      read -r _ DAYTYPE note <<<"$line"
+      REASON=$(trunc20 "${note//|/}")
+      CALINFO="日曆：覆寫"
+    fi
+  fi
+fi
+if [ -z "$DAYTYPE" ] && [ "$HOLIDAY_SOURCE" = tw-gov ]; then
+  need_fetch && fetch_calendar
+  if [ -f "$CAL" ]; then
+    row=$(awk -F, -v d="${TODAY//-/}" '$1 == d { print $3 "," $4; exit }' "$CAL")
+    if [ -n "$row" ]; then
+      if [ "${row%%,*}" = 2 ]; then DAYTYPE=off; else DAYTYPE=work; fi
+      note=${row#*,}
+      REASON=$(trunc20 "${note//|/}")
+      t=$(meta_get fetched "$META")
+      if is_epoch "$t"; then upd=$(date -r "$t" +%m-%d); else upd="?"; fi
+      CALINFO="日曆：政府 ${ROC} 年（更新於 ${upd}）"
+    fi
+  fi
+  [ -z "$DAYTYPE" ] && CALINFO="日曆：抓取失敗，暫用週一至週五"
+fi
+if [ -z "$DAYTYPE" ]; then
+  if [[ " $WORKDAYS " == *" $DOW "* ]]; then DAYTYPE=work; else DAYTYPE=off; fi
+  [ -z "$CALINFO" ] && CALINFO="日曆：週一至週五"
+fi
+
+calendar_footer() {
+  echo "${CALINFO} | color=gray"
+  [ -n "$OVR_WARN" ] && echo "${OVR_WARN} | color=orange"
+  [ "$HOLIDAY_SOURCE" = tw-gov ] && echo "重新抓取日曆 | bash=\"$SELF\" param1=refresh-calendar refresh=true"
+  return 0
+}
+
+# ── 放假日 ─────────────────────────────────────────────
+if [ "$DAYTYPE" = off ]; then
+  if [ -z "$REASON" ]; then
+    if [ "$DOW" = 6 ] || [ "$DOW" = 7 ]; then REASON="週末"; else REASON="放假"; fi
+  fi
   echo "打卡"
   echo "---"
-  echo "今天不用打卡"
+  echo "今天放假：${REASON}"
+  echo "---"
+  calendar_footer
   exit 0
 fi
 
@@ -135,3 +325,5 @@ if [ -n "$OFF" ]; then
 else
   echo "標記下班已打卡 | bash=\"$SELF\" param1=mark param2=off refresh=true"
 fi
+echo "---"
+calendar_footer
