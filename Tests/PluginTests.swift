@@ -183,6 +183,21 @@ check("上層資料夾：自己或 root、不可被他人寫入（sticky 例外�
       && L.ancestorProblem(nil, path: "x", uid: me) != nil)
 
 // MARK: 整合測試：實跑假外掛
+// 時序原則（本機常有防毒掃描新執行檔、Spotlight 索引，負載平均可達上百）：
+// - 「某事應該發生」一律用 eventually 輪詢到成立為止，期限寬鬆；正常負載下條件一成立就往下走，不增加耗時。
+// - 「某事不應該發生」只能固定觀察一段時間，但取樣前要先確認進行中的事已經開始（或已經結束）。
+// - 外掛 timeout 一律遠大於腳本實際執行時間；只有專門驗證逾時的測試用短 timeout，且腳本確實會卡住。
+/// 每 50ms 檢查一次條件，成立立刻回 true；超過 timeout 秒仍不成立回 false（呼叫端照常斷言，不會卡死）
+@MainActor func eventually(_ timeout: Double = 15, _ cond: () -> Bool) async -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !cond() {
+        if Date() >= deadline { return false }
+        try? await Task.sleep(nanoseconds: 50_000_000)
+    }
+    return true
+}
+/// 足夠讓高負載下的短腳本跑完的外掛 timeout（不是驗證逾時用）
+let roomyTimeout: TimeInterval = 60
 let base = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : NSTemporaryDirectory()
 let root = base + "/plugin-it-\(getpid())"
 let fm = FileManager.default
@@ -210,7 +225,6 @@ if [ "$1" = mark ]; then date > "$SPLITSWAN_PLUGIN_STATE/marked"; fi
 echo "錯誤輸出" >&2
 """)
 put("writable.1m.sh", "#!/bin/bash\necho 不應該執行\ntouch \"$SPLITSWAN_PLUGIN_STATE/ran\"\n", mode: 0o770)
-put("slow.10s.sh", "#!/bin/bash\necho 慢\nsleep 30\n")
 put("bad.1m.sh", "#!/bin/bash\necho 壞掉的原因 >&2\nexit 3\n")
 put("notexec.1m.sh", "#!/bin/bash\necho x\n", mode: 0o600)
 put(".hidden.1m.sh", "#!/bin/bash\necho x\n")
@@ -224,15 +238,14 @@ try! fm.createSymbolicLink(atPath: pdir + "/linked.1m.sh", withDestinationPath: 
 
 var sent: [(String, String?, String, URL?)] = []
 let runner = PluginRunner(directory: URL(fileURLWithPath: pdir), stateRoot: URL(fileURLWithPath: sdir))
-runner.timeout = 2
+// 一般外掛用寬鬆 timeout（高負載下 bash 啟動加防毒掃描可能就要好幾秒）；逾時另外用 slowRunner 驗
+runner.timeout = roomyTimeout
 runner.notifier = { t, st, b, h in sent.append((t, st, b, h)) }
-let t0 = Date()
 await runner.refreshAll()
-let elapsed = Date().timeIntervalSince(t0)
 @MainActor func plugin(_ id: String) -> PluginRunner.Plugin? { runner.plugins.first { $0.id == id } }
 
 check("掃描：只列可執行一般檔案（略過隱藏、不可執行、子目錄）",
-      Set(runner.plugins.map(\.id)) == ["bad.1m.sh", "good.1m.sh", "linked.1m.sh", "slow.10s.sh", "writable.1m.sh"])
+      Set(runner.plugins.map(\.id)) == ["bad.1m.sh", "good.1m.sh", "linked.1m.sh", "writable.1m.sh"])
 let good = plugin("good.1m.sh")
 check("正常外掛解析成功", good?.failure == nil && good?.output?.title == "正常外掛")
 let texts = good?.output?.items.map(\.text) ?? []
@@ -245,21 +258,31 @@ let w = plugin("writable.1m.sh")
 check("group 可寫的外掛被拒且沒有執行", w?.problem?.contains("其他使用者寫入") == true && runner.lastRuns["writable.1m.sh"] == nil
       && !fm.fileExists(atPath: sdir + "/writable.1m.sh/ran"))
 check("symlink 依解析後目標檢查：所在資料夾 group 可寫被拒", plugin("linked.1m.sh")?.problem?.contains("資料夾") == true)
-let slow = plugin("slow.10s.sh")
-check("逾時外掛標錯誤", slow?.error?.contains("逾時") == true && slow?.output == nil)
-check("逾時不會拖住整體（並行、約 2～4 秒）", elapsed < 6)
 check("非 0 結束標錯誤並附 stderr 最後一行", plugin("bad.1m.sh")?.error == "結束碼 3：壞掉的原因")
+// 逾時：腳本 sleep 30 一定會卡住，timeout 2 秒；整體耗時遠小於 30 秒即代表沒有等腳本自己結束
+let slowDir = root + "/slowdir"
+try! fm.createDirectory(atPath: slowDir, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+put("slow.10s.sh", "#!/bin/bash\necho 慢\nsleep 30\n", dir: slowDir)
+let slowRunner = PluginRunner(directory: URL(fileURLWithPath: slowDir), stateRoot: URL(fileURLWithPath: sdir))
+slowRunner.timeout = 2
+let t0 = Date()
+await slowRunner.refreshAll()
+let elapsed = Date().timeIntervalSince(t0)
+let slow = slowRunner.plugins.first { $0.id == "slow.10s.sh" }
+check("逾時外掛標錯誤（\(slow?.error ?? "nil")）", slow?.error?.contains("逾時") == true && slow?.output == nil)
+check("逾時不會拖住整體（沒等 sleep 30 結束，實際 \(String(format: "%.1f", elapsed)) 秒）", elapsed < 20)
 check("間隔解析：slow.10s 拉高到 30 秒", slow?.interval == 30)
 check("notify：發出一則，標題固定「外掛：good」、輸出標題只放副標題、帶 href", sent.count == 1 && sent.first?.0 == "外掛：good"
       && sent.first?.1 == "正常外掛" && sent.first?.2 == "提醒" && sent.first?.3?.absoluteString == "https://example.com/punch")
 await runner.run("good.1m.sh")
 check("同一天再跑一次不重複通知", sent.count == 1)
 let notifiedFile = sdir + "/.notified/good.1m.sh.json"
-for _ in 0..<20 where !fm.fileExists(atPath: notifiedFile) { try? await Task.sleep(nanoseconds: 100_000_000) }
+// 紀錄檔在背景寫入（先寫暫存檔再改名、最後改權限），等到權限也到位
+_ = await eventually { (try? fm.attributesOfItem(atPath: notifiedFile)[.posixPermissions] as? Int) == 0o600 }
 check("每個外掛一份通知紀錄，600", (try? fm.attributesOfItem(atPath: notifiedFile)[.posixPermissions] as? Int) == 0o600)
 // 換一個新的 runner（模擬 App 重新啟動）：從檔案讀回紀錄，仍不重複
 let runner2 = PluginRunner(directory: URL(fileURLWithPath: pdir), stateRoot: URL(fileURLWithPath: sdir))
-runner2.timeout = 2
+runner2.timeout = roomyTimeout
 var sent2 = 0
 runner2.notifier = { _, _, _, _ in sent2 += 1 }
 runner2.scan()
@@ -270,11 +293,7 @@ check("重新啟動後讀回去重紀錄", sent2 == 0)
 if let mark = good?.output?.items.first(where: { $0.text == "標記" }) {
     check("bash= 是外掛自己的絕對路徑（\(mark.bash ?? "nil")｜\(mark.bashArgs)）", mark.bash.flatMap(PluginRunner.realPath) == PluginRunner.realPath(pdir + "/good.1m.sh") && mark.bashArgs == ["mark"])
     runner.perform(pluginID: "good.1m.sh", item: mark)
-    var ok = false
-    for _ in 0..<40 {
-        try? await Task.sleep(nanoseconds: 100_000_000)
-        if plugin("good.1m.sh")?.output?.items.contains(where: { $0.text == "已標記" }) == true { ok = true; break }
-    }
+    let ok = await eventually { plugin("good.1m.sh")?.output?.items.contains(where: { $0.text == "已標記" }) == true }
     check("點擊 bash= 動作後 refresh 重跑，看得到新狀態", ok)
 } else {
     check("找到「標記」項目", false)
@@ -287,9 +306,16 @@ check("點擊失敗：保留上次項目、只標 ⚠︎", plugin("good.1m.sh")?
 
 // bash= 位置限制（實際走 perform）：外部直譯器、資料夾外本人檔案、../ 跳脫、symlink 指出去都拒絕
 let pwn = root + "/pwned"
+/// 預期被拒的點擊：perform 當下就同步拒絕，再固定觀察 1.5 秒確認沒有執行（不應該發生的事只能固定等）
 @MainActor func tryClick(_ line: String) async -> String? {
     runner.perform(pluginID: "good.1m.sh", item: L.parseLine(line))
     try? await Task.sleep(nanoseconds: 1_500_000_000)
+    return plugin("good.1m.sh")?.actionError
+}
+/// 預期會執行的點擊：等到動作跑完（上一個被拒的錯誤被清掉）為止
+@MainActor func clickAndWait(_ line: String) async -> String? {
+    runner.perform(pluginID: "good.1m.sh", item: L.parseLine(line))
+    _ = await eventually { plugin("good.1m.sh")?.actionError == nil }
     return plugin("good.1m.sh")?.actionError
 }
 if fm.isExecutableFile(atPath: "/opt/homebrew/bin/python3") {
@@ -313,8 +339,8 @@ let okMark = root + "/helper-ran"
 put("helper.sh", "#!/bin/bash\necho ok > \"\(okMark)\"\n", dir: pdir + "/lib")
 let e5 = await tryClick("x | bash=\(pdir)/lib/helper.sh")
 check("外掛資料夾內的其他程式也被拒（只准外掛本身）", e5?.contains("外掛本身") == true && !fm.fileExists(atPath: okMark))
-let e6 = await tryClick("x | bash=\(pdir)/good.1m.sh param1=mark")
-check("正對照：bash= 指向外掛本身可執行", e6 == nil)
+let e6 = await clickAndWait("x | bash=\(pdir)/good.1m.sh param1=mark")
+check("正對照：bash= 指向外掛本身可執行（\(e6 ?? "nil")）", e6 == nil)
 
 // 輸出上限在讀取時生效：大量輸出不會讓記憶體暴增，仍會逾時／正常結束
 func maxRSS() -> Int { var u = rusage(); getrusage(RUSAGE_SELF, &u); return Int(u.ru_maxrss) }
@@ -329,7 +355,7 @@ let rss0 = maxRSS()
 await runner5.run("yes.1m.sh")
 let rss1 = maxRSS()
 // 3 MB 要能在時限內讀完：高負載下 2 秒不夠，這裡驗的是截斷不是逾時
-runner5.timeout = 10
+runner5.timeout = roomyTimeout
 await runner5.run("burst.1m.sh")
 let y5 = runner5.plugins.first { $0.id == "yes.1m.sh" }, b5 = runner5.plugins.first { $0.id == "burst.1m.sh" }
 check("無止盡輸出：仍正常逾時", y5?.error?.contains("逾時") == true)
@@ -338,9 +364,9 @@ check("3 MB 輸出後正常結束：成功解析並標記截斷、項目 ≤ 30"
       && (b5?.output?.items.count ?? 99) <= L.maxItems)
 let lim = await ProcessRunner.runLimited("/usr/bin/yes", [], timeout: 1, maxBytes: 1000)
 check("ProcessRunner maxBytes：收到的輸出 ≤ 上限且逾時", lim.output.utf8.count <= 1000 && lim.timedOut)
-let full = await ProcessRunner.execute("/bin/sh", ["-c", "/usr/bin/yes 0123456789 | head -c 200000"], timeout: 5)
+let full = await ProcessRunner.execute("/bin/sh", ["-c", "/usr/bin/yes 0123456789 | head -c 200000"], timeout: roomyTimeout)
 check("ProcessRunner 預設不限：200 KB 完整收到、未截斷", full.output.utf8.count == 200000 && !full.truncated && full.code == 0)
-let cut = await ProcessRunner.execute("/bin/sh", ["-c", "/usr/bin/yes 0123456789 | head -c 200000"], timeout: 5, maxBytes: 5000)
+let cut = await ProcessRunner.execute("/bin/sh", ["-c", "/usr/bin/yes 0123456789 | head -c 200000"], timeout: roomyTimeout, maxBytes: 5000)
 check("ProcessRunner maxBytes：超過標 truncated、程式照常結束", cut.output.utf8.count == 5000 && cut.truncated && cut.code == 0)
 
 // 選單只在內容變化時重建：內容沒變時 scan() 不發布
@@ -359,20 +385,26 @@ try! fm.createDirectory(atPath: ov, withIntermediateDirectories: false, attribut
 let slowLog = root + "/slow.log"
 put("slow.1m.sh", "#!/bin/bash\necho \"start $$\" >> \"\(slowLog)\"\nsleep 1\necho \"end $$\" >> \"\(slowLog)\"\necho S\necho ---\necho \"點 | bash=$0 param1=x\"\n", dir: ov)
 let runner6 = PluginRunner(directory: URL(fileURLWithPath: ov), stateRoot: URL(fileURLWithPath: sdir))
-runner6.timeout = 10   // 高負載下 sleep 1 的腳本也可能超過 3 秒
+runner6.timeout = roomyTimeout   // 高負載下 sleep 1 的腳本也可能超過好幾秒
 func maxDepth() -> (Int, Int) {
     let lines = ((try? String(contentsOfFile: slowLog, encoding: .utf8)) ?? "").split(separator: "\n")
     var d = 0, m = 0
     for l in lines { d += l.hasPrefix("start") ? 1 : -1; m = max(m, d) }
     return (m, lines.filter { $0.hasPrefix("start") }.count)
 }
+/// slow.log 的開始／結束次數
+func slowCounts() -> (starts: Int, ends: Int) {
+    let lines = ((try? String(contentsOfFile: slowLog, encoding: .utf8)) ?? "").split(separator: "\n")
+    return (lines.filter { $0.hasPrefix("start") }.count, lines.filter { $0.hasPrefix("end") }.count)
+}
 runner6.scan()
 let t6 = Task { await runner6.run("slow.1m.sh") }
-try? await Task.sleep(nanoseconds: 300_000_000)
+_ = await eventually { runner6.runningIDs.contains("slow.1m.sh") }   // 確定第一次已在執行中，再關閉重開
 runner6.setEnabled(false)
 runner6.setEnabled(true)
-try? await Task.sleep(nanoseconds: 2_500_000_000)
 _ = await t6.value
+// 重開後的補跑要等它真的跑完（開始＝結束），否則下面清空紀錄後才寫入的 end 會讓深度計算錯位
+_ = await eventually { let c = slowCounts(); return c.starts >= 2 && c.starts == c.ends }
 runner6.setEnabled(false)
 let (d1, cnt1) = maxDepth()
 check("關閉後立刻重開不重疊執行（最大同時 \(d1)，共 \(cnt1) 次）", d1 == 1 && cnt1 >= 1)
@@ -381,12 +413,12 @@ runner6.scan()
 await runner6.run("slow.1m.sh")
 try? "".write(toFile: slowLog, atomically: false, encoding: .utf8)
 let t7 = Task { await runner6.run("slow.1m.sh") }
-try? await Task.sleep(nanoseconds: 300_000_000)
+_ = await eventually { runner6.runningIDs.contains("slow.1m.sh") }   // 確定排程那次已在執行中，再點擊
 if let click = runner6.plugins.first(where: { $0.id == "slow.1m.sh" })?.output?.items.first(where: { $0.text == "點" }) {
     runner6.perform(pluginID: "slow.1m.sh", item: click)
 } else { check("找到「點」項目", false) }
 _ = await t7.value
-try? await Task.sleep(nanoseconds: 3_000_000_000)
+_ = await eventually { let c = slowCounts(); return c.starts >= 2 && c.starts == c.ends }   // 點擊那次也跑完
 let (d2, cnt2) = maxDepth()
 check("點擊 bash= 與排程執行不重疊（最大同時 \(d2)，共 \(cnt2) 次）", d2 == 1 && cnt2 == 2)
 
@@ -406,7 +438,7 @@ try! fm.createDirectory(atPath: perfDir, withIntermediateDirectories: false, att
 put("a.1m.sh", "#!/bin/bash\necho A\necho ---\necho $(date +%s%N)\n", dir: perfDir)
 put("b.5m.sh", "#!/bin/bash\necho B\n", dir: perfDir)
 let pr = PluginRunner(directory: URL(fileURLWithPath: perfDir), stateRoot: URL(fileURLWithPath: perfState))
-pr.timeout = 3
+pr.timeout = roomyTimeout
 pr.setEnabled(false)
 let r0 = pr.resources
 check("關閉（從未開啟）：0 個 timer、不監看、0 個事件訂閱", r0.timers == 0 && !r0.watching && r0.observers == 0)
@@ -415,14 +447,14 @@ pr.refreshIfEnabled()
 try? await Task.sleep(nanoseconds: 300_000_000)
 check("關閉時 refreshIfEnabled 不做事", pr.plugins.isEmpty && !fm.fileExists(atPath: perfState))
 pr.setEnabled(true)
-for _ in 0..<30 where pr.lastRuns.count < 2 { try? await Task.sleep(nanoseconds: 100_000_000) }
+_ = await eventually { pr.lastRuns.count >= 2 }
 let r1 = pr.resources
 check("開啟：每個外掛一個 timer、監看資料夾、訂閱 8 個睡眠／鎖定事件", r1.timers == 2 && r1.watching && r1.observers == 8)
 check("開啟後各跑一次", pr.lastRuns.count == 2)
 check("timer 容許誤差：1m → 6 秒、5m → 30 秒", pr.timerTolerance("a.1m.sh") == 6 && pr.timerTolerance("b.5m.sh") == 30)
 // 監看：新增外掛 → 約 1 秒後自動出現並執行（不靠輪詢）
 put("c.1m.sh", "#!/bin/bash\necho C\n", dir: perfDir)
-for _ in 0..<40 where pr.lastRuns["c.1m.sh"] == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
+_ = await eventually { pr.lastRuns["c.1m.sh"] != nil && pr.resources.timers == 3 }
 check("資料夾新增外掛：自動掃描、建立 timer 並執行", pr.plugins.contains { $0.id == "c.1m.sh" } && pr.lastRuns["c.1m.sh"] != nil
       && pr.resources.timers == 3)
 // 暫停：鎖定＋睡眠，兩個都解除才恢復
@@ -433,7 +465,7 @@ pr.resume(.sleep)
 try? await Task.sleep(nanoseconds: 500_000_000)
 check("只解除睡眠、仍鎖定：維持暫停、不執行", pr.resources.timers == 0 && pr.lastRuns["a.1m.sh"] == ranA)
 pr.resume(.locked)
-for _ in 0..<30 where pr.lastRuns["a.1m.sh"] == ranA { try? await Task.sleep(nanoseconds: 100_000_000) }
+_ = await eventually { pr.lastRuns["a.1m.sh"] != ranA }
 check("解鎖後各跑一次並恢復排程", pr.lastRuns["a.1m.sh"] != ranA && pr.resources.timers == 3)
 pr.resume(.screenSaver)
 check("沒暫停過的原因解除不會多跑", pr.resources.timers == 3)
@@ -443,8 +475,13 @@ check("再關閉：timer、監看、事件訂閱全部釋放", r2.timers == 0 &&
 // 同時執行上限 2
 let cc = root + "/cc", ccLog = root + "/cc.log"
 try! fm.createDirectory(atPath: cc, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-for i in 1...4 { put("c\(i).1m.sh", "#!/bin/bash\necho \"start\" >> \"\(ccLog)\"\nsleep 0.8\necho \"end\" >> \"\(ccLog)\"\necho C\n", dir: cc) }
+// 每支先寫 start，再等到紀錄裡至少有 2 個 start（最多 20 秒）才 sleep：高負載下啟動時間會錯開，
+// 不等的話前兩支可能根本沒同時執行，峰值變 1。上限若失效（4 支同時跑），峰值仍會超過 2
+for i in 1...4 {
+    put("c\(i).1m.sh", "#!/bin/bash\necho \"start\" >> \"\(ccLog)\"\nfor _ in {1..200}; do [ \"$(grep -c start \"\(ccLog)\")\" -ge 2 ] && break; sleep 0.1; done\nsleep 0.8\necho \"end\" >> \"\(ccLog)\"\necho C\n", dir: cc)
+}
 let ccr = PluginRunner(directory: URL(fileURLWithPath: cc), stateRoot: URL(fileURLWithPath: perfState))
+ccr.timeout = roomyTimeout
 let tc = Date()
 await ccr.refreshAll()
 let ccSec = Date().timeIntervalSince(tc)
@@ -512,6 +549,7 @@ let dupDir = mkPluginDir("dup"), dupState = root + "/sec-dup/state"
 put("a.1m.sh", "#!/bin/bash\necho \"$SPLITSWAN_PLUGIN_STATE\"\n", dir: dupDir)
 put("a.5m.py", "#!/bin/bash\necho \"$SPLITSWAN_PLUGIN_STATE\"\n", dir: dupDir)
 let dupR = PluginRunner(directory: URL(fileURLWithPath: dupDir), stateRoot: URL(fileURLWithPath: dupState))
+dupR.timeout = roomyTimeout
 await dupR.refreshAll()
 check("a.1m.sh 與 a.5m.py 各自的狀態資料夾", dupR.plugins.first { $0.id == "a.1m.sh" }?.output?.title == dupState + "/a.1m.sh"
       && dupR.plugins.first { $0.id == "a.5m.py" }?.output?.title == dupState + "/a.5m.py")
@@ -519,33 +557,40 @@ check("a.1m.sh 與 a.5m.py 各自的狀態資料夾", dupR.plugins.first { $0.id
 let errDir = mkPluginDir("stderr"), errState = root + "/sec-stderr/state"
 put("e.1m.sh", "#!/bin/bash\nhead -c 3000000 /dev/zero | tr '\\0' 'e' >&2\necho >&2\necho 最後一行 >&2\nexit 2\n", dir: errDir)
 let errR = PluginRunner(directory: URL(fileURLWithPath: errDir), stateRoot: URL(fileURLWithPath: errState))
-errR.timeout = 5
+errR.timeout = roomyTimeout
 await errR.refreshAll()
 let errMsg = errR.plugins.first?.error ?? ""
 check("大量 stderr：錯誤訊息有上限（\(errMsg.utf8.count) bytes）", errMsg.hasPrefix("結束碼 2") && errMsg.utf8.count < 700)
 check("大量 stderr 之後的最後一行仍顯示（保留最後 4 KB）", errMsg == "結束碼 2：最後一行")
 check("stderr 不再寫進狀態資料夾", !fm.fileExists(atPath: errState + "/e.1m.sh/.stderr"))
-let rawErr = await ProcessRunner.execute("/bin/sh", ["-c", "head -c 100000 /dev/zero >&2; echo out"], timeout: 5, stderrLimit: 4096)
+let rawErr = await ProcessRunner.execute("/bin/sh", ["-c", "head -c 100000 /dev/zero >&2; echo out"], timeout: roomyTimeout, stderrLimit: 4096)
 check("ProcessRunner stderrLimit：stderr 分開且 ≤ 4 KB、stdout 不混入", rawErr.errorOutput.utf8.count == 4096 && rawErr.output == "out\n")
-let tailErr = await ProcessRunner.execute("/bin/sh", ["-c", "echo FIRST >&2; head -c 100000 /dev/zero | tr '\\0' x >&2; echo; echo LAST >&2"], timeout: 5, stderrLimit: 4096)
+let tailErr = await ProcessRunner.execute("/bin/sh", ["-c", "echo FIRST >&2; head -c 100000 /dev/zero | tr '\\0' x >&2; echo; echo LAST >&2"], timeout: roomyTimeout, stderrLimit: 4096)
 check("stderr 保留最後 4 KB：有 LAST、沒有 FIRST", tailErr.errorOutput.hasSuffix("LAST\n") && !tailErr.errorOutput.contains("FIRST")
       && tailErr.errorOutput.utf8.count == 4096)
 // 關閉／暫停的完整性（M1）
 let m1Dir = mkPluginDir("m1"), m1Log = root + "/sec-m1/ran.log"
 for n in ["s1", "s2", "s3"] {
-    put("\(n).1m.sh", "#!/bin/bash\necho \(n) >> \"\(m1Log)\"\nsleep 2\necho T\necho ---\necho \"hi | notify=true notify_id=\(n)\"\n", dir: m1Dir)
+    put("\(n).1m.sh", "#!/bin/bash\necho \(n) >> \"\(m1Log)\"\nsleep 2\necho \(n) >> \"\(m1Log).done\"\necho T\necho ---\necho \"hi | notify=true notify_id=\(n)\"\n", dir: m1Dir)
 }
 let m1 = PluginRunner(directory: URL(fileURLWithPath: m1Dir), stateRoot: URL(fileURLWithPath: root + "/sec-m1/state"))
-m1.timeout = 5
+m1.timeout = roomyTimeout
 var m1Sent = 0
 m1.notifier = { _, _, _, _ in m1Sent += 1 }
 func m1Runs() -> Int { ((try? String(contentsOfFile: m1Log, encoding: .utf8)) ?? "").split(separator: "\n").count }
-/// 等到外掛真的寫下開始紀錄（最多 5 秒）；固定等待在高負載時會在程序已啟動、還沒寫紀錄的瞬間取樣
-func waitRuns(_ n: Int) async { for _ in 0..<250 where m1Runs() < n { try? await Task.sleep(nanoseconds: 20_000_000) } }
+/// 已經跑完 sleep 的次數（腳本結束前寫在 .done）
+func m1Done() -> Int { ((try? String(contentsOfFile: m1Log + ".done", encoding: .utf8)) ?? "").split(separator: "\n").count }
+/// 等到外掛真的寫下開始紀錄；固定等待在高負載時會在程序已啟動、還沒寫紀錄的瞬間取樣
+func waitRuns(_ n: Int) async { _ = await eventually(20) { m1Runs() >= n } }
+/// 「不該開始」的觀察：先等進行中的都跑完、釋出執行名額（排隊者若有 bug 會在這之後才開始），再多看 1 秒
+func waitSettled(_ n: Int) async {
+    _ = await eventually(20) { m1Done() >= n }
+    try? await Task.sleep(nanoseconds: 1_000_000_000)
+}
 m1.setEnabled(true)
 await waitRuns(2)
 m1.setEnabled(false)
-try? await Task.sleep(nanoseconds: 3_500_000_000)
+await waitSettled(2)
 check("關閉後：排隊中的第 3 個不開始（實際 \(m1Runs()) 個）", m1Runs() == 2)
 check("關閉後：進行中的完成也不發通知、不寫紀錄、不更新選單", m1Sent == 0 && m1.plugins.isEmpty
       && !fm.fileExists(atPath: root + "/sec-m1/state/.notified"))
@@ -553,11 +598,11 @@ m1.setEnabled(true)
 await waitRuns(4)   // 前一輪 2 個＋這一輪佔滿 2 個執行名額
 let runsBeforePause = m1Runs()
 m1.pause(.locked)
-try? await Task.sleep(nanoseconds: 3_500_000_000)
+await waitSettled(4)
 check("暫停後：排隊中的不開始、進行中的不發通知、不更新輸出（暫停前 \(runsBeforePause)、之後 \(m1Runs())、通知 \(m1Sent)）", m1Runs() == runsBeforePause && m1Sent == 0
       && m1.plugins.allSatisfy { $0.output == nil })
 m1.resume(.locked)
-for _ in 0..<150 where m1Sent < 3 { try? await Task.sleep(nanoseconds: 100_000_000) }
+_ = await eventually(30) { m1Sent >= 3 && m1.plugins.allSatisfy { $0.output != nil } }
 check("正對照：解除暫停後照常執行並發通知（\(m1Sent) 則）", m1Sent == 3 && m1.plugins.allSatisfy { $0.output != nil })
 m1.setEnabled(false)
 
@@ -575,26 +620,27 @@ for n in ["r1", "r2"] {
     put("\(n).1m.sh", "#!/bin/bash\necho +\(n) >> \"\(m1Log).depth\"\nsleep 1\necho -\(n) >> \"\(m1Log).depth\"\necho T\(n)\necho ---\necho \"hi | notify=true notify_id=\(n)\"\n", dir: rDir)
 }
 let rr = PluginRunner(directory: URL(fileURLWithPath: rDir), stateRoot: URL(fileURLWithPath: rState))
-rr.timeout = 5
+rr.timeout = roomyTimeout
 var rrSent = 0
 rr.notifier = { _, _, _, _ in rrSent += 1 }
 rr.setEnabled(true)
-try? await Task.sleep(nanoseconds: 400_000_000)
+_ = await eventually { rr.runningIDs.count == 2 }   // 確定兩支都已在執行中，再關閉重開
 rr.setEnabled(false); rr.setEnabled(true)
-for _ in 0..<40 where !(rr.plugins.count == 2 && rr.plugins.allSatisfy({ $0.output != nil })) { try? await Task.sleep(nanoseconds: 100_000_000) }
-check("關閉後立刻重開：舊的結束後補跑，約 2 秒內都有輸出（\(rr.plugins.map { $0.output?.title ?? "nil" })，通知 \(rrSent)）", rr.plugins.count == 2 && rr.plugins.allSatisfy { $0.output != nil } && rrSent == 2)
+// 輸出先更新、通知在讀完去重紀錄後才發，兩者都要等到
+_ = await eventually(30) { rr.plugins.count == 2 && rr.plugins.allSatisfy { $0.output != nil } && rrSent >= 2 }
+check("關閉後立刻重開：舊的結束後補跑，兩支都有輸出並發通知（\(rr.plugins.map { $0.output?.title ?? "nil" })，通知 \(rrSent)）", rr.plugins.count == 2 && rr.plugins.allSatisfy { $0.output != nil } && rrSent == 2)
 rr.setEnabled(false)
 let rr2 = PluginRunner(directory: URL(fileURLWithPath: rDir), stateRoot: URL(fileURLWithPath: rState + "2"))
-rr2.timeout = 5
+rr2.timeout = roomyTimeout
 var rr2Sent = 0
 rr2.notifier = { _, _, _, _ in rr2Sent += 1 }
 rr2.setEnabled(true)
-try? await Task.sleep(nanoseconds: 400_000_000)
+_ = await eventually { rr2.runningIDs.count == 2 }   // 確定兩支都已在執行中，再暫停
 rr2.pause(.locked)
 try? await Task.sleep(nanoseconds: 200_000_000)
 rr2.resume(.locked)                                   // 舊的那次還在跑
 check("暫停中途恢復：舊的那次結果不採用（M1）", rr2.plugins.allSatisfy { $0.output == nil } && rr2Sent == 0)
-for _ in 0..<40 where !(rr2.plugins.count == 2 && rr2.plugins.allSatisfy({ $0.output != nil })) { try? await Task.sleep(nanoseconds: 100_000_000) }
+_ = await eventually(30) { rr2.plugins.count == 2 && rr2.plugins.allSatisfy { $0.output != nil } && rr2Sent >= 2 }
 check("暫停中途恢復：舊的結束後補跑並發通知", rr2.plugins.count == 2 && rr2.plugins.allSatisfy { $0.output != nil } && rr2Sent == 2)
 rr2.setEnabled(false)
 check("補跑期間同一外掛不重疊（同一支最大同時 \(m1Depth())）", m1Depth() == 1)
