@@ -79,7 +79,7 @@ grep -q "^SWANCTL=$RUN/bin/swanctl\$" "$RUN/helper" && grep -q "^HELPER_TMPDIR=$
 check "副本的 swanctl 與暫存目錄已換掉（正對照）" $?
 
 out=$(FAKE_MODE=auth bash "$RUN/helper" up 2); rc=$?
-[ "$rc" = 1 ] && [ "$out" = "$(printf 'reason vpn2 auth\nfail vpn2')" ]; check "up 2 驗證失敗：reason vpn2 auth ＋ fail vpn2，結束代碼 1（實際：$(echo $out)）" $?
+[ "$rc" = 1 ] && [ "$out" = "$(printf 'reason vpn2 auth\nfail vpn2')" ]; s=$?; check "up 2 驗證失敗：reason vpn2 auth ＋ fail vpn2，結束代碼 1（實際：$(echo $out)）" $s
 printf '%s\n' "$out" | grep -qx 'fail vpn2'; check "舊版 App 認的「fail vpn2」整行仍在" $?
 ! printf '%s\n' "$out" | grep -qE 'user01|203\.0\.113|192\.0\.2'; check "輸出不含帳號與位址" $?
 
@@ -87,7 +87,7 @@ out=$(FAKE_MODE=ok bash "$RUN/helper" up 1); rc=$?
 [ "$rc" = 0 ] && [ "$out" = "ok vpn1" ]; check "up 1 成功：只有 ok vpn1（實際：${out}）" $?
 
 out=$(FAKE_MODE=mixed bash "$RUN/helper" up auto); rc=$?
-[ "$rc" = 0 ] && [ "$out" = "$(printf 'reason vpn1 auth\nreason vpn2 unreachable\nok vpn3')" ]; check "up auto：前兩台各一行原因，第三台成功（實際：$(echo $out)）" $?
+[ "$rc" = 0 ] && [ "$out" = "$(printf 'reason vpn1 auth\nreason vpn2 unreachable\nok vpn3')" ]; s=$?; check "up auto：前兩台各一行原因，第三台成功（實際：$(echo $out)）" $s
 
 out=$(FAKE_MODE=down bash "$RUN/helper" up auto); rc=$?
 [ "$rc" = 1 ] && [ "$(printf '%s\n' "$out" | tail -1)" = "fail all" ] && [ "$(printf '%s\n' "$out" | grep -c '^reason vpn[123] unreachable$')" = 3 ]

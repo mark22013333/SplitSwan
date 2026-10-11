@@ -56,4 +56,50 @@ check("結果含主機與連接埠", rep.contains("git.example.com") && rep.cont
 check("結果含介面與 TCP 結果", rep.contains("utun6") && rep.contains("有走 VPN") && rep.contains("TCP 443 連不上"))
 check("結果含新增網段與 VPN 位址", rep.contains("198.51.100.7/32") && rep.contains("203.0.113.200"))
 
+// MARK: 目前通道的網段（swanctl --list-sas）與路由建議
+let sas = """
+vpn1: #3, ESTABLISHED, IKEv2, 0123456789abcdef_i* fedcba9876543210_r
+  local  'user01' @ 192.0.2.5[4500] [10.0.0.77]
+  remote '203.0.113.10' @ 203.0.113.10[4500]
+  established 12s ago, rekeying in 10000s
+  corp: #4, reqid 1, INSTALLED, TUNNEL-in-UDP, ESP:AES_CBC-256/HMAC_SHA2_256_128
+    in  c1234567,      0 bytes,     0 packets
+    out c7654321,      0 bytes,     0 packets
+    local  10.0.0.77/32
+    remote 10.0.0.0/24 198.51.100.7/32[tcp/22]
+"""
+check("抽出 CHILD_SA 遠端網段（去掉協定與埠），不含 IKE 對端位址",
+      HostCheck.activeRemoteTS(fromListSas: sas) == "10.0.0.0/24,198.51.100.7/32")
+check("沒有 SA（charon 未執行）→ nil", HostCheck.activeRemoteTS(fromListSas: "charon 未執行") == nil)
+check("只有 IKE、沒有 CHILD_SA → nil", HostCheck.activeRemoteTS(fromListSas: "vpn1: #1, CONNECTING, IKEv2\n  remote '203.0.113.10' @ 203.0.113.10[500]") == nil)
+
+typealias R = HostCheck.IPResult
+let viaUtun = R(ip: "10.0.0.5", interface: "utun4", viaTunnel: true, portOK: nil)
+let viaEn0 = R(ip: "10.0.0.5", interface: "en0", viaTunnel: false, portOK: nil)
+let otherEn0 = R(ip: "10.0.9.5", interface: "en0", viaTunnel: false, portOK: nil)
+let ts = HostCheck.activeRemoteTS(fromListSas: sas)
+check("全部走 utun → viaTunnel", HostCheck.routeAdvice(results: [viaUtun], activeTS: ts) == .viaTunnel)
+check("IP 在通道網段內卻走 en0 → staleRoute（提示 VPN 服務異常並提供重新連線）",
+      HostCheck.routeAdvice(results: [viaEn0], activeTS: ts) == .staleRoute)
+check("IP 不在通道網段內 → notApplied（舊提示：確認已儲存並重新連線）",
+      HostCheck.routeAdvice(results: [otherEn0], activeTS: ts) == .notApplied)
+check("一個在網段內、一個不在 → notApplied（要先讓網段生效）",
+      HostCheck.routeAdvice(results: [viaEn0, otherEn0], activeTS: ts) == .notApplied)
+check("讀不到通道網段（舊版輔助程式、sudo 失敗）→ notApplied", HostCheck.routeAdvice(results: [viaEn0], activeTS: nil) == .notApplied)
+check("通道網段是 /0 不算涵蓋 → notApplied", HostCheck.routeAdvice(results: [viaEn0], activeTS: "0.0.0.0/0") == .notApplied)
+
+// MARK: staleRoute 的下一步（依系統元件版本與是否已重連過）
+check("系統元件需要更新 → 先更新（不論是否重連過）",
+      HostCheck.staleRouteHint(helperOutdated: true, retried: false) == .updateHelper
+      && HostCheck.staleRouteHint(helperOutdated: true, retried: true) == .updateHelper)
+check("新版、第一次 → 重新連線", HostCheck.staleRouteHint(helperOutdated: false, retried: false) == .reconnect)
+check("新版、按過重新連線仍沒走 VPN → 診斷報告（不再給同一個按鈕）",
+      HostCheck.staleRouteHint(helperOutdated: false, retried: true) == .report)
+let tUpd = HostCheck.staleRouteText(.updateHelper)
+check("舊版元件的文案：指向「環境檢查」更新，不承諾自動重啟", tUpd.contains("環境檢查") && tUpd.contains("更新") && !tUpd.contains("自動重啟"))
+check("新版元件的文案：說明重新連線會檢查並自動重啟", HostCheck.staleRouteText(.reconnect).contains("重新連線")
+      && HostCheck.staleRouteText(.reconnect).contains("自動重啟"))
+let tRep = HostCheck.staleRouteText(.report)
+check("重連後仍失敗的文案：自動修復沒有成功、產生診斷報告", tRep.contains("自動修復沒有成功") && tRep.contains("診斷報告"))
+
 print("通過 \(pass)，失敗 \(fail)")

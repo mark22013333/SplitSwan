@@ -252,6 +252,79 @@ check("只有 reason 行、沒有 fail vpnN：不記", !GatewayHistory.shouldRec
 check("App 端逾時：不記（原因不確定在閘道）", !GatewayHistory.shouldRecord(gateway: 1, success: false,
       output: HelperRun.timeoutNote(120), interrupted: false))
 
+// MARK: 路由沒走 utun 的自動處置（輔助程式 up N 的 route 行）
+// 以下輸出取自 tools/test-stale-route.sh 實際跑出的格式
+let fixedOut = "route vpn1 fixed en0\nok vpn1"
+let badOut = "route vpn2 bad en0\nok vpn2"
+let failedOut = "reason vpn3 unreachable\nroute vpn3 failed en0\nfail vpn3"
+check("route fixed → .fixed(en0)", RouteRepair.parse(fixedOut, gateway: 1) == .fixed(interface: "en0"))
+check("route bad → .bad(en0)", RouteRepair.parse(badOut, gateway: 2) == .bad(interface: "en0"))
+check("route failed → .failed(en0)", RouteRepair.parse(failedOut, gateway: 3) == .failed(interface: "en0"))
+check("新 App＋舊輸出（沒有 route 行）→ nil，行為不變",
+      RouteRepair.parse("ok vpn1", gateway: 1) == nil && RouteRepair.parse("reason vpn1 auth\nfail vpn1", gateway: 1) == nil
+      && RouteRepair.parse("sudo: a password is required", gateway: 1) == nil)
+check("台號不符：不採用", RouteRepair.parse(fixedOut, gateway: 2) == nil)
+check("認不得的狀態 → nil", RouteRepair.parse("route vpn1 weird en0\nok vpn1", gateway: 1) == nil)
+check("缺介面欄位也能解析", RouteRepair.parse("route vpn1 bad\nok vpn1", gateway: 1) == .bad(interface: "?"))
+check("連線紀錄文字含台號與介面", RouteRepair.fixed(interface: "en0").note(gateway: 1).contains("VPN1")
+      && RouteRepair.fixed(interface: "en0").note(gateway: 1).contains("en0")
+      && RouteRepair.bad(interface: "en0").note(gateway: 2).contains("仍未走 VPN")
+      && RouteRepair.failed(interface: "en0").note(gateway: 3).contains("重新連線失敗"))
+check("只有 bad 會在主畫面提示", RouteRepair.bad(interface: "en0").warning != nil
+      && RouteRepair.fixed(interface: "en0").warning == nil && RouteRepair.failed(interface: "en0").warning == nil)
+// 舊版 App 的解析規則套在新輸出上：成功與否、失敗原因、F4 記錄都不受 route 行影響
+check("新輸出 fixed／bad：沒有失敗原因（舊規則）", ConnectFailReason.parse(fixedOut, gateway: 1) == nil
+      && ConnectFailReason.parse(badOut, gateway: 2) == nil)
+check("新輸出 fixed／bad（結束代碼 0）：照樣記成功", GatewayHistory.shouldRecord(gateway: 1, success: true, output: fixedOut, interrupted: false))
+check("新輸出 failed：原因照舊解析為 unreachable", ConnectFailReason.from(code: 1, output: failedOut, gateway: 3) == .unreachable)
+check("新輸出 failed：「fail vpn3」整行仍在 → 照樣記失敗",
+      GatewayHistory.shouldRecord(gateway: 3, success: false, output: failedOut, interrupted: false))
+
+// killed、skip 行（取自 tools/test-stale-route.sh 的實際輸出）
+let killedOut = "route vpn1 killed\nroute vpn1 fixed en0\nok vpn1"
+let skipOut = "route vpn1 skip 3\nok vpn1"
+check("killed 行不影響 fixed 的解析", RouteRepair.parse(killedOut, gateway: 1) == .fixed(interface: "en0"))
+check("killed 解析", RouteRepair.killed(killedOut, gateway: 1) && !RouteRepair.killed(fixedOut, gateway: 1))
+check("skip 解析出略過數", RouteRepair.skipped(skipOut, gateway: 1) == 3 && RouteRepair.skipped(fixedOut, gateway: 1) == nil)
+check("skip 不算修復", RouteRepair.parse(skipOut, gateway: 1) == nil)
+let kn = RouteRepair.notes(killedOut, gateway: 1)
+check("killed＋fixed：兩則紀錄，強制結束的提醒含「重新開機」", kn.count == 2 && kn[0].contains("強制結束") && kn[0].contains("重新開機"))
+check("skip：一則紀錄，含略過數", RouteRepair.notes(skipOut, gateway: 1).count == 1 && RouteRepair.notes(skipOut, gateway: 1)[0].contains("3"))
+check("舊版輸出：沒有任何路由紀錄", RouteRepair.notes("ok vpn1", gateway: 1).isEmpty
+      && RouteRepair.notes("reason vpn1 auth\nfail vpn1", gateway: 1).isEmpty)
+check("新輸出 killed／skip：舊規則照樣不算失敗", ConnectFailReason.parse(killedOut, gateway: 1) == nil
+      && !GatewayHistory.shouldRecord(gateway: 1, success: false, output: skipOut, interrupted: false))
+
+// MARK: 路由修復期間暫停 F2（RepairWindow）
+var rw = RepairWindow()
+check("沒在跑 up：不暫停", !rw.observe(isConnected: false))
+rw.begin()
+check("up 進行中、還沒連上過：不暫停（一般連線嘗試照常計時）", !rw.observe(isConnected: false))
+check("up 進行中、連上了：不暫停", !rw.observe(isConnected: true))
+check("up 進行中、連上後又斷（輔助程式在重啟 strongSwan）：暫停", rw.observe(isConnected: false))
+rw.end()
+check("up 結束後：不暫停", !rw.observe(isConnected: false))
+rw.begin()
+check("下一次 up 重新開始判斷", !rw.observe(isConnected: false))
+// 跟 DropDetector 一起跑：修復期間斷線超過 30 秒也不發通知
+var dd2 = DropDetector()
+var rw2 = RepairWindow()
+func stepR(_ s: TimeInterval, _ connected: Bool) -> DropDetector.Action {
+    let p = rw2.observe(isConnected: connected)
+    return dd2.update(now: at(s), wantConnected: true, isConnected: connected, enabled: true, paused: p)
+}
+rw2.begin()
+let seq = [stepR(0, false), stepR(10, true), stepR(20, false), stepR(50, false), stepR(70, false)]
+check("修復中（連上→斷 50 秒）不發斷線通知", seq.allSatisfy { $0 == .none })
+rw2.end()
+check("修復結束後仍沒連上：重新計時，30 秒後才發", stepR(80, false) == .none && stepR(105, false) == .none && stepR(111, false) == .notifyDrop)
+var dd3 = DropDetector()
+var rw3 = RepairWindow()
+rw3.begin()
+let plain = [0, 10, 31].map { (s: TimeInterval) in dd3.update(now: at(s), wantConnected: true, isConnected: false, enabled: true,
+                                                               paused: rw3.observe(isConnected: false)) }
+check("正對照：一般連線嘗試（從沒連上）超過 30 秒照樣發通知", plain.last == .notifyDrop)
+
 // 畫面訊息
 check("單台＋原因", ConnectFailReason.message(order: [2], reasons: [2: .auth], isSingle: true)
       == "VPN2 連線失敗：帳號、密碼或預先共用金鑰（PSK）錯誤。將自動重試同一台")

@@ -132,6 +132,8 @@ App 取得閘道與網段的順序：
 3. 按「加入並重新連線」：儲存設定、斷線重連（目前連線會中斷幾秒），再檢查每個 IP 的路由是否走 `utun`；有填連接埠會一併測試 TCP 能否連線
 4. 走 VPN 了還是不通：按「複製結果」，把內容（主機、IP、連接埠、路由與測試結果）傳給管理者，確認公司端有沒有開放。如果是全公司都需要的主機，請管理者加進 `company.env` 重新發給大家
 
+IP 已經在通道網段內、路由卻沒走 `utun` 時，App 會查目前通道實際的網段來判斷：網段確實已生效，就提示「網段已在通道內，但目前路由沒走 VPN，可能是 VPN 服務（strongSwan）狀態異常」，並提供「重新連線」按鈕（見「已知問題」第 3 點）；系統元件不是最新版時改為提示先到「環境檢查」更新，重新連線後仍沒走 VPN 則提示產生診斷報告；網段尚未生效才顯示「確認網段已儲存且已重新連線」。
+
 設定表單有還沒儲存的修改時，一鍵加入會先擋下，請先按「儲存」或「還原」。
 
 ### 手動步驟
@@ -251,6 +253,7 @@ chmod 700 ~/.config/splitswan/plugins/punch-reminder.1m.sh
 | 顯示「輔助程式沒有回應，已逾時中止」 | strongSwan 卡住了。App 會照常自動重試；一直出現時，把 Mac 重新開機，或產生診斷報告給管理者 |
 | 沒有收到斷線通知 | 到「系統設定 → 通知 → SplitSwan」確認允許通知；「設定」頁的「VPN 中斷時通知」要打開 |
 | 連上後某台主機不通 | 見「某台主機連不上怎麼辦」 |
+| 顯示已連線，但所有公司主機都不通 | 可能是路由沒走 VPN（見「已知問題」第 3 點）：`route -n get <公司主機 IP>` 的 interface 是 `en0`，且 `sudo swanctl --list-sas` 的 CHILD_SA 收送 bytes 都是 0。新版系統元件連線時會自動偵測並重啟 strongSwan 再連一次；仍是如此時，按「斷線」再「連線」，或在設定頁「某台公司主機連不上？」檢查後按「重新連線」 |
 | 連上後外網全斷 | 通道網段被改成 `0.0.0.0/0` 了，按「從公司設定還原」 |
 | 系統元件顯示「需要更新」 | 更新 App 後內附的元件可能跟著更新，按「更新」重新授權一次 |
 | 診斷報告顯示「找不到 log 檔」 | 系統元件是舊版，到「環境檢查」按「更新」，再重新連線一次，之後的連線過程才會寫進 log |
@@ -292,6 +295,7 @@ bash make-dmg.sh          # 編譯並打包成 dist/SplitSwan-<版本>.dmg
 - 單元測試：`bash Tests/run-tests.sh`（不連 VPN、不需要 sudo、不寫入系統設定）。涵蓋自動重連、斷線通知判定、閘道排序、加密匯出入、注入攻擊回歸測試、網段格式轉換、診斷報告的密碼遮蔽、檢查更新的版本比較、一鍵更新的簽章驗證與替換流程。
 - 輔助程式 `logtrim` 的截斷測試：`bash tools/test-logtrim.sh`（一般權限，在暫存目錄操作副本）。
 - 輔助程式連線失敗原因分類的測試：`bash tools/test-classify.sh`（一般權限，用假的 swanctl 跑副本，不連 VPN）。
+- 輔助程式「路由沒走 utun 時重啟 charon」的測試：`bash tools/test-stale-route.sh`（一般權限，用假的 swanctl、charon、route 跑副本，不連 VPN、不碰真的 charon）。
 - 自動重連的實機測試：`sudo bash tools/test-dpd.sh`（暫時封鎖閘道，量失聯偵測與恢復秒數；斷線通知要在測試期間人工確認），驗收清單與結果見 [`docs/F1-實機驗收.md`](docs/F1-實機驗收.md)。
 - 開發時可以用 `open build/SplitSwan.app --args -InitialTab settings`（或 `environment`、`about`），直接開在指定分頁。
 - 外掛的單元與整合測試在 `run-tests.sh` 的 `plugins` 組（在暫存目錄放假外掛實跑，不碰 `~/.config/splitswan`）；打卡範例的測試：`bash tools/test-punch-example.sh`。
@@ -375,6 +379,7 @@ swanctl ──vici──▶ charon（strongSwan daemon，root）──IKEv2─�
 | `tools/test-dpd.sh` | 實機測試自動重連：暫時封鎖閘道，量失聯偵測與恢復秒數（需 sudo） |
 | `tools/test-logtrim.sh` | 測試輔助程式的 `logtrim` 截斷（一般權限，使用副本） |
 | `tools/test-classify.sh` | 測試輔助程式的連線失敗原因分類與 `up` 輸出格式（一般權限，使用副本與假 swanctl） |
+| `tools/test-stale-route.sh` | 測試輔助程式 `up` 的路由檢查與重啟 charon（一般權限，使用副本與假 swanctl／charon／route） |
 | `build.sh` | 編譯、產生圖示、內附系統元件、ad-hoc 簽章 |
 | `make-dmg.sh` | 打包 .dmg |
 | `splitswan-helper` | root 輔助程式 |
@@ -407,6 +412,11 @@ swanctl ──vici──▶ charon（strongSwan daemon，root）──IKEv2─�
    - 差異在於 strongSwan 把 DNS 加到 Wi-Fi（`en0`）的設定裡，讓系統解析綁在 `en0` 送出；FortiClient 則是綁在自己的 VPN 介面上。綁在 `en0` 為什麼會失敗，還沒查清楚。
    - 已排除的原因：閘道擋外網（同一個閘道用 FortiClient 全流量時外網正常）、MTU（VPN 下不可切割的封包一路通到 1400 bytes）。
 2. **登入時自動啟動是否會跳視窗**（待確認）：App 用 Apple Event 判斷是不是登入時啟動，這對 `SMAppService` 註冊的登入項目是否有效還沒實測。就算跳出來，關掉視窗即可。
+3. **路由沒走 VPN（strongSwan 長時間執行後）**（已有自動處置，成因未查證）
+   - 現象：IKE 與 CHILD_SA 都建立了、App 顯示已連線，但 charon 把遠端網段的路由裝到實體介面（`en0`，下一跳是家裡的路由器），沒有裝到虛擬 IP 所在的 `utun`，公司主機全部連不上。
+   - 判斷方式：`route -n get <公司主機 IP>` 的 interface 是 `en0` 而不是 `utun`；`sudo swanctl --list-sas` 的 CHILD_SA 收送 bytes 都是 0。
+   - 曾觀察到的條件：charon 已連續執行數天、經過多次睡眠喚醒與虛擬網卡增減。只斷線再連線（即使等 `utun` 介面消失）仍然一樣，重新啟動 charon 後路由恢復走 `utun`。
+   - App 的處置：輔助程式 `up` 連上後，用 `route -n get` 檢查 CHILD_SA 每一個遠端網段的路由（IPv6、位址範圍、`/0`，以及與本機網路直接相連網段重疊的會略過）；任一個不是 `utun` 就全部斷線、結束 charon（只結束執行檔路徑相符、而且以 root 執行的那一支；一般結束沒有回應時才強制結束，連線紀錄會提醒必要時重新開機）、重新啟動並載入設定、再連同一台，只做一次。修復期間不發斷線通知。連線紀錄會寫「偵測到路由沒走 VPN，已重啟 strongSwan 並重新連線」；重啟後仍未恢復時，「連線」頁會顯示提示。
 
 ## 授權
 

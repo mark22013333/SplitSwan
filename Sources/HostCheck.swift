@@ -89,6 +89,71 @@ enum HostCheck {
         var portOK: Bool?             // 沒指定連接埠時為 nil
     }
 
+    /// `swanctl --list-sas`（輔助程式 sas）輸出中，CHILD_SA 的遠端網段（逗號分隔）；沒有就 nil。
+    /// CHILD_SA 那行是「    remote 10.0.0.0/24 10.0.1.0/24」；IKE 那行是「  remote '<身分>' @ <位址>[埠]」，第二欄有引號，不算
+    static func activeRemoteTS(fromListSas output: String) -> String? {
+        var nets: [String] = []
+        for line in output.split(whereSeparator: \.isNewline) {
+            let p = line.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+            guard p.count >= 2, p[0] == "remote" else { continue }
+            for tok in p.dropFirst() {
+                // 可能帶協定／埠：10.0.0.0/24[tcp/22]
+                let cidr = String(tok.split(separator: "[", maxSplits: 1).first ?? "")
+                let parts = cidr.split(separator: "/")
+                guard parts.count == 2, isIPv4(String(parts[0])), let m = Int(parts[1]), (0...32).contains(m) else { continue }
+                if !nets.contains(cidr) { nets.append(cidr) }
+            }
+        }
+        return nets.isEmpty ? nil : nets.joined(separator: ",")
+    }
+
+    /// 路由檢查結果該給哪種建議
+    enum RouteAdvice: Equatable {
+        /// 全部走 VPN
+        case viaTunnel
+        /// 沒走 VPN 的 IP 都已在目前通道的網段內，路由卻沒走 utun：strongSwan 狀態異常，重新連線（新版輔助程式會自動重啟 strongSwan）
+        case staleRoute
+        /// 網段尚未生效（不在目前通道的網段內，或讀不到通道網段）：確認已儲存並重新連線
+        case notApplied
+    }
+
+    /// activeTS：目前 CHILD_SA 的遠端網段（activeRemoteTS 的結果）；讀不到時傳 nil，一律當成尚未生效
+    static func routeAdvice(results: [IPResult], activeTS: String?) -> RouteAdvice {
+        let off = results.filter { !$0.viaTunnel }
+        if off.isEmpty { return .viaTunnel }
+        guard let ts = activeTS, off.allSatisfy({ coveringSubnet(ip: $0.ip, in: ts) != nil }) else { return .notApplied }
+        return .staleRoute
+    }
+
+    /// staleRoute（網段已生效但路由沒走 VPN）時該給使用者哪一種下一步
+    enum StaleRouteHint: Equatable {
+        /// 已安裝的系統元件跟 App 內附的不同：舊版沒有自動修復，先到「環境檢查」更新
+        case updateHelper
+        /// 系統元件是新版：按「重新連線」，連上後輔助程式會檢查路由、必要時重啟 strongSwan
+        case reconnect
+        /// 已經按過重新連線、路由仍沒走 VPN：自動修復沒有成功，請產生診斷報告（不再提供同一個按鈕）
+        case report
+    }
+
+    /// helperOutdated：系統元件需要安裝或更新（EnvChecker 的比對結果）；retried：這次結果是按「重新連線」之後檢查的
+    static func staleRouteHint(helperOutdated: Bool, retried: Bool) -> StaleRouteHint {
+        if helperOutdated { return .updateHelper }
+        return retried ? .report : .reconnect
+    }
+
+    /// staleRoute 時顯示的說明
+    static func staleRouteText(_ hint: StaleRouteHint) -> String {
+        let head = "網段已在通道內，但目前路由沒走 VPN，可能是 VPN 服務（strongSwan）狀態異常。"
+        switch hint {
+        case .updateHelper:
+            return head + "目前安裝的系統元件不是最新版：請先到「環境檢查」按系統元件的「更新」，再回來按「再檢查一次」。"
+        case .reconnect:
+            return head + "按「重新連線」，連上後會檢查路由，必要時自動重啟 VPN 服務再連一次。"
+        case .report:
+            return "已重新連線，但路由仍沒走 VPN，自動修復沒有成功。請到「環境檢查」產生診斷報告，交給管理者。"
+        }
+    }
+
     /// 給管理員的結果文字（可直接貼上）
     static func report(target: Target, results: [IPResult], added: [String], vpnIP: String?) -> String {
         var lines = ["主機：\(target.host)" + (target.port.map { "，連接埠 \($0)" } ?? "")]
