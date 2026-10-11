@@ -35,21 +35,30 @@ files() {
   esac
 }
 
-# 編譯並執行一組，結果寫進 $OUT/<組名>/status：pass／fail／compile（編譯失敗）
-run_group() {
+# 編譯一組；失敗時 status 寫 compile
+compile_group() {
   local name=$1 dir="$OUT/$1"
   # shellcheck disable=SC2046
   set -- $(files "$name")
   local test=$1; shift
   cp "$test" "$dir/main.swift"
-  if ! swiftc -Onone -o "$dir/t" "$dir/main.swift" "$@" >"$dir/compile.log" 2>&1; then
-    echo compile >"$dir/status"; return
-  fi
+  swiftc -Onone -o "$dir/t" "$dir/main.swift" "$@" >"$dir/compile.log" 2>&1 || echo compile >"$dir/status"
+}
+
+# 執行已編譯好的一組，結果寫進 $OUT/<組名>/status：pass／fail
+exec_group() {
+  local dir="$OUT/$1"
+  [ -f "$dir/status" ] && return   # 編譯失敗
   "$dir/t" "$dir" >"$dir/log" 2>&1
   local rc=$?
   # 結尾那行是「通過 N，失敗 M」；M 必須剛好是 0，且程式正常結束
   if [ "$rc" = 0 ] && grep -Eq "失敗 0$" "$dir/log"; then echo pass >"$dir/status"; else echo fail >"$dir/status"; fi
 }
+
+# 含時序判斷（逾時、排程、暫停）的組，要等其他組編譯、執行都結束後再單獨跑，
+# 否則和並行編譯搶 CPU 時，固定的等待時間會偶發不夠
+SERIAL_GROUPS="plugins"
+is_serial() { case " $SERIAL_GROUPS " in *" $1 "*) return 0 ;; esac; return 1; }
 
 if [ $# -gt 0 ]; then SELECTED="$*"; else SELECTED=$ALL_GROUPS; fi
 QUEUE=""
@@ -60,8 +69,11 @@ for g in $SELECTED; do
 done
 
 START=$SECONDS
-for g in $QUEUE; do run_group "$g" & done
+for g in $QUEUE; do compile_group "$g" & done
 wait
+for g in $QUEUE; do is_serial "$g" || exec_group "$g" & done
+wait
+for g in $QUEUE; do is_serial "$g" && exec_group "$g"; done
 
 # 依組別順序輸出，每組的結果集中在一起，不會和其他組交錯
 FAILED=0

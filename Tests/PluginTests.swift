@@ -328,6 +328,8 @@ runner5.scan()
 let rss0 = maxRSS()
 await runner5.run("yes.1m.sh")
 let rss1 = maxRSS()
+// 3 MB 要能在時限內讀完：高負載下 2 秒不夠，這裡驗的是截斷不是逾時
+runner5.timeout = 10
 await runner5.run("burst.1m.sh")
 let y5 = runner5.plugins.first { $0.id == "yes.1m.sh" }, b5 = runner5.plugins.first { $0.id == "burst.1m.sh" }
 check("無止盡輸出：仍正常逾時", y5?.error?.contains("逾時") == true)
@@ -357,7 +359,7 @@ try! fm.createDirectory(atPath: ov, withIntermediateDirectories: false, attribut
 let slowLog = root + "/slow.log"
 put("slow.1m.sh", "#!/bin/bash\necho \"start $$\" >> \"\(slowLog)\"\nsleep 1\necho \"end $$\" >> \"\(slowLog)\"\necho S\necho ---\necho \"點 | bash=$0 param1=x\"\n", dir: ov)
 let runner6 = PluginRunner(directory: URL(fileURLWithPath: ov), stateRoot: URL(fileURLWithPath: sdir))
-runner6.timeout = 3
+runner6.timeout = 10   // 高負載下 sleep 1 的腳本也可能超過 3 秒
 func maxDepth() -> (Int, Int) {
     let lines = ((try? String(contentsOfFile: slowLog, encoding: .utf8)) ?? "").split(separator: "\n")
     var d = 0, m = 0
@@ -531,29 +533,31 @@ check("stderr 保留最後 4 KB：有 LAST、沒有 FIRST", tailErr.errorOutput.
 // 關閉／暫停的完整性（M1）
 let m1Dir = mkPluginDir("m1"), m1Log = root + "/sec-m1/ran.log"
 for n in ["s1", "s2", "s3"] {
-    put("\(n).1m.sh", "#!/bin/bash\necho \(n) >> \"\(m1Log)\"\nsleep 1\necho T\necho ---\necho \"hi | notify=true notify_id=\(n)\"\n", dir: m1Dir)
+    put("\(n).1m.sh", "#!/bin/bash\necho \(n) >> \"\(m1Log)\"\nsleep 2\necho T\necho ---\necho \"hi | notify=true notify_id=\(n)\"\n", dir: m1Dir)
 }
 let m1 = PluginRunner(directory: URL(fileURLWithPath: m1Dir), stateRoot: URL(fileURLWithPath: root + "/sec-m1/state"))
 m1.timeout = 5
 var m1Sent = 0
 m1.notifier = { _, _, _, _ in m1Sent += 1 }
 func m1Runs() -> Int { ((try? String(contentsOfFile: m1Log, encoding: .utf8)) ?? "").split(separator: "\n").count }
+/// 等到外掛真的寫下開始紀錄（最多 5 秒）；固定等待在高負載時會在程序已啟動、還沒寫紀錄的瞬間取樣
+func waitRuns(_ n: Int) async { for _ in 0..<250 where m1Runs() < n { try? await Task.sleep(nanoseconds: 20_000_000) } }
 m1.setEnabled(true)
-try? await Task.sleep(nanoseconds: 400_000_000)
+await waitRuns(2)
 m1.setEnabled(false)
-try? await Task.sleep(nanoseconds: 2_500_000_000)
+try? await Task.sleep(nanoseconds: 3_500_000_000)
 check("關閉後：排隊中的第 3 個不開始（實際 \(m1Runs()) 個）", m1Runs() == 2)
 check("關閉後：進行中的完成也不發通知、不寫紀錄、不更新選單", m1Sent == 0 && m1.plugins.isEmpty
       && !fm.fileExists(atPath: root + "/sec-m1/state/.notified"))
 m1.setEnabled(true)
-try? await Task.sleep(nanoseconds: 400_000_000)
+await waitRuns(4)   // 前一輪 2 個＋這一輪佔滿 2 個執行名額
 let runsBeforePause = m1Runs()
 m1.pause(.locked)
-try? await Task.sleep(nanoseconds: 2_500_000_000)
-check("暫停後：排隊中的不開始、進行中的不發通知、不更新輸出", m1Runs() == runsBeforePause && m1Sent == 0
+try? await Task.sleep(nanoseconds: 3_500_000_000)
+check("暫停後：排隊中的不開始、進行中的不發通知、不更新輸出（暫停前 \(runsBeforePause)、之後 \(m1Runs())、通知 \(m1Sent)）", m1Runs() == runsBeforePause && m1Sent == 0
       && m1.plugins.allSatisfy { $0.output == nil })
 m1.resume(.locked)
-for _ in 0..<60 where m1Sent < 3 { try? await Task.sleep(nanoseconds: 100_000_000) }
+for _ in 0..<150 where m1Sent < 3 { try? await Task.sleep(nanoseconds: 100_000_000) }
 check("正對照：解除暫停後照常執行並發通知（\(m1Sent) 則）", m1Sent == 3 && m1.plugins.allSatisfy { $0.output != nil })
 m1.setEnabled(false)
 
