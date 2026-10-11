@@ -76,9 +76,36 @@ enum HostCheck {
         ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"].contains { contains(cidr: $0, ip: ip) }
     }
 
-    /// 還沒被涵蓋的 IP → 要新增的 `IP/32`
+    /// 還沒被涵蓋的 IP → 要新增的 `IP/32`（「檢查並加入」直接加入這些；「只檢查」則列為待加入）
     static func proposal(ips: [String], existing remoteTS: String) -> [String] {
         ips.filter { coveringSubnet(ip: $0, in: remoteTS) == nil }.map { "\($0)/32" }
+    }
+
+    /// 網段清單（`IP/32`）中屬於公網的 IP（去掉前綴長度）；只看單一主機 /32，其他格式略過
+    static func publicIPs(in subnets: [String]) -> [String] {
+        subnets.compactMap { s -> String? in
+            let p = s.trimmingCharacters(in: .whitespaces).split(separator: "/")
+            guard p.count == 2, p[1] == "32", isIPv4(String(p[0])), !isPrivate(String(p[0])) else { return nil }
+            return String(p[0])
+        }
+    }
+
+    /// 加入（或準備加入）公網位址時的警告；沒有公網位址回 nil
+    static func publicWarning(_ publicIPs: [String]) -> String? {
+        guard !publicIPs.isEmpty else { return nil }
+        return "\(publicIPs.joined(separator: ", ")) 是公網位址，可能是 DNS 沒有走公司端。加入後，連到這個位址的流量都會改走 VPN。"
+    }
+
+    /// 結果最上方的「已加入」摘要；沒有加入任何網段回 nil
+    static func addedSummary(_ added: [String]) -> String? {
+        added.isEmpty ? nil : "已加入：\(added.joined(separator: ", "))"
+    }
+
+    /// 「只檢查」發現有 IP 不在通道網段內時的說明；connected 決定按鈕名稱
+    static func pendingText(_ pending: [String], connected: Bool) -> String? {
+        guard !pending.isEmpty else { return nil }
+        let action = connected ? "加入並重新連線" : "加入網段"
+        return "\(pending.joined(separator: ", ")) 不在通道網段內，流量不會走 VPN。按「\(action)」加入（不會改動其他設定）。"
     }
 
     /// 每個 IP 的驗證結果
@@ -155,10 +182,11 @@ enum HostCheck {
     }
 
     /// 給管理員的結果文字（可直接貼上）
-    static func report(target: Target, results: [IPResult], added: [String], vpnIP: String?) -> String {
+    static func report(target: Target, results: [IPResult], added: [String], vpnIP: String?, pending: [String] = []) -> String {
         var lines = ["主機：\(target.host)" + (target.port.map { "，連接埠 \($0)" } ?? "")]
         if let v = vpnIP { lines.append("我的 VPN 位址：\(v)") }
         if !added.isEmpty { lines.append("本次新增網段：\(added.joined(separator: ", "))") }
+        if !pending.isEmpty { lines.append("不在通道網段內：\(pending.joined(separator: ", "))") }
         for r in results {
             var s = "\(r.ip)：路由 \(r.interface ?? "查不到")（\(r.viaTunnel ? "有走 VPN" : "沒走 VPN")）"
             if let ok = r.portOK, let p = target.port { s += "，TCP \(p) \(ok ? "可連線" : "連不上")" }
