@@ -47,6 +47,25 @@ check("172.32、RFC 5737 不是私有", !HostCheck.isPrivate("172.32.0.1") && !H
 // MARK: 提議
 check("已涵蓋的不重複提議", HostCheck.proposal(ips: ["203.0.113.70", "198.51.100.7"], existing: "203.0.113.64/26") == ["198.51.100.7/32"])
 check("全部涵蓋 → 空", HostCheck.proposal(ips: ["203.0.113.70"], existing: "203.0.113.64/26") == [])
+check("現有網段為空 → 每個 IP 都要加入、保留順序",
+      HostCheck.proposal(ips: ["198.51.100.8", "10.1.2.3"], existing: "") == ["198.51.100.8/32", "10.1.2.3/32"])
+
+// MARK: 一鍵加入：公網警告、已加入摘要、待加入說明
+check("加入的網段中挑出公網 IP（私有略過）",
+      HostCheck.publicIPs(in: ["10.1.2.3/32", "198.51.100.7/32", "192.168.1.5/32"]) == ["198.51.100.7"])
+check("非 /32 或格式錯誤不算", HostCheck.publicIPs(in: ["198.51.100.0/24", "abc", "198.51.100.7"]) == [])
+check("沒有公網 → 不顯示警告", HostCheck.publicWarning([]) == nil)
+let pw = HostCheck.publicWarning(["198.51.100.7", "203.0.113.9"]) ?? ""
+check("公網警告含位址與原確認畫面的說明", pw.contains("198.51.100.7, 203.0.113.9") && pw.contains("公網位址")
+      && pw.contains("DNS 沒有走公司端") && pw.contains("改走 VPN"))
+check("已加入摘要", HostCheck.addedSummary(["198.51.100.7/32", "10.1.2.3/32"]) == "已加入：198.51.100.7/32, 10.1.2.3/32")
+check("沒加入 → 不顯示摘要", HostCheck.addedSummary([]) == nil)
+check("沒有待加入 → 不顯示說明", HostCheck.pendingText([], connected: true) == nil)
+let pt1 = HostCheck.pendingText(["198.51.100.7/32"], connected: true) ?? ""
+let pt2 = HostCheck.pendingText(["198.51.100.7/32"], connected: false) ?? ""
+check("只檢查、已連線：列出待加入網段並指向「加入並重新連線」", pt1.contains("198.51.100.7/32") && pt1.contains("不在通道網段內")
+      && pt1.contains("「加入並重新連線」"))
+check("只檢查、未連線：指向「加入網段」", pt2.contains("「加入網段」") && !pt2.contains("重新連線"))
 
 // MARK: 結果文字
 let rep = HostCheck.report(target: T(host: "git.example.com", port: 443),
@@ -55,6 +74,11 @@ let rep = HostCheck.report(target: T(host: "git.example.com", port: 443),
 check("結果含主機與連接埠", rep.contains("git.example.com") && rep.contains("連接埠 443"))
 check("結果含介面與 TCP 結果", rep.contains("utun6") && rep.contains("有走 VPN") && rep.contains("TCP 443 連不上"))
 check("結果含新增網段與 VPN 位址", rep.contains("198.51.100.7/32") && rep.contains("203.0.113.200"))
+check("沒有待加入 → 不出現「不在通道網段內」", !rep.contains("不在通道網段內"))
+let repPending = HostCheck.report(target: T(host: "git.example.com", port: nil),
+                                  results: [HostCheck.IPResult(ip: "198.51.100.9", interface: "en0", viaTunnel: false, portOK: nil)],
+                                  added: [], vpnIP: nil, pending: ["198.51.100.9/32"])
+check("只檢查的結果文字列出待加入網段", repPending.contains("不在通道網段內：198.51.100.9/32") && !repPending.contains("本次新增網段"))
 
 // MARK: 目前通道的網段（swanctl --list-sas）與路由建議
 let sas = """
