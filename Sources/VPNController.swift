@@ -101,6 +101,51 @@ enum ConnectFailReason: String, Equatable, CaseIterable {
     }
 }
 
+/// 輔助程式 `up N` 連上後的路由檢查結果。新版輔助程式發現遠端網段的路由沒走 utun 時，
+/// 會重啟 strongSwan（charon）再連一次，並另起一行「route vpnN fixed|bad|failed <原本的介面>」；
+/// 舊版沒有這一行（解析結果為 nil，行為不變）。「ok vpnN／fail vpnN」那一行照舊，成敗仍看結束代碼
+enum RouteRepair: Equatable {
+    /// 重啟後路由改走 utun
+    case fixed(interface: String)
+    /// 重啟後路由仍沒走 utun（通道本身已建立，結束代碼 0）
+    case bad(interface: String)
+    /// 重啟後重新連線失敗（結束代碼非 0，原因在 reason 行）
+    case failed(interface: String)
+
+    static func parse(_ output: String, gateway n: Int) -> RouteRepair? {
+        for line in output.split(whereSeparator: \.isNewline) {
+            let p = line.split(separator: " ").map(String.init)
+            guard p.count >= 3, p[0] == "route", p[1] == "vpn\(n)" else { continue }
+            let iface = p.count >= 4 ? p[3] : "?"
+            switch p[2] {
+            case "fixed": return .fixed(interface: iface)
+            case "bad": return .bad(interface: iface)
+            case "failed": return .failed(interface: iface)
+            default: return nil       // 認不得的狀態（更新版輔助程式）：當作沒有這一行
+            }
+        }
+        return nil
+    }
+
+    /// 寫進連線紀錄的一句話
+    func note(gateway n: Int) -> String {
+        switch self {
+        case .fixed(let i):
+            return "VPN\(n) 偵測到路由沒走 VPN（走 \(i)），已重啟 strongSwan 並重新連線，路由已恢復"
+        case .bad(let i):
+            return "VPN\(n) 偵測到路由沒走 VPN，重啟 strongSwan 並重新連線後路由仍未走 VPN（走 \(i)）"
+        case .failed(let i):
+            return "VPN\(n) 偵測到路由沒走 VPN（走 \(i)），已重啟 strongSwan，但重新連線失敗"
+        }
+    }
+
+    /// 連上了但路由仍沒走 VPN 時顯示在主畫面的提示；其他情況 nil
+    var warning: String? {
+        guard case .bad = self else { return nil }
+        return "已連線，但路由沒走 VPN，公司主機可能連不上。請斷線後再連線；若仍如此，請在「環境檢查」產生診斷報告交給管理者"
+    }
+}
+
 /// 呼叫輔助程式的時限（A2）。值依子命令與 splitswan-helper 內部的 swanctl --timeout 推得
 enum HelperRun {
     /// 逾時時 run 回傳的結束代碼（跟 coreutils timeout 相同）
@@ -115,7 +160,9 @@ enum HelperRun {
             return nil
         case "up":
             // 啟動 charon 最多等 5 秒、terminate_all 3 台各 5 秒、每台 initiate 20 秒＋失敗後 terminate 5 秒；
-            // up auto 輪完三台約 95 秒，再留餘裕
+            // up auto 輪完三台約 95 秒（App 只呼叫 up N）。
+            // up N 連上後路由沒走 utun 時會再做一輪：terminate_all 15、結束 charon 最多約 7、啟動 5、
+            // initiate 20＋失敗後 terminate 5 秒，單台最壞約 5＋15＋20＋52＝92 秒，仍在時限內
             return 120
         case "down":
             return 30      // terminate_all：3 台各 5 秒
@@ -583,6 +630,7 @@ final class VPNController: ObservableObject {
             await Self.trimCharonLog()
             var ok = false
             var reasons: [Int: ConnectFailReason] = [:]   // A1：各台的失敗原因（舊版輔助程式沒有）
+            var routeWarning: String?                       // 連上了但路由仍沒走 VPN（舊版輔助程式沒有）
             for n in order {
                 if self.pendingDown || !self.wantConnected || !self.networkUp { break }
                 self.busyText = "連線 VPN\(n)…"
@@ -590,7 +638,14 @@ final class VPNController: ObservableObject {
                 let started = Date()
                 let (code, out) = await Self.runHelper(["up", "\(n)"])
                 self.recordAttempt(n, address: address, success: code == 0, output: out, started: started)
-                if code == 0 { ok = true; self.lastUpAt = Date(); self.note("VPN\(n) 已連線"); break }
+                // 輔助程式自動處置過路由（重啟 strongSwan 再連）：寫進連線紀錄；成敗仍照結束代碼判斷
+                let repair = RouteRepair.parse(out, gateway: n)
+                if let repair { self.note(repair.note(gateway: n)) }
+                if code == 0 {
+                    ok = true; self.lastUpAt = Date(); self.note("VPN\(n) 已連線")
+                    routeWarning = repair?.warning
+                    break
+                }
                 if let r = ConnectFailReason.from(code: code, output: out, gateway: n) {
                     reasons[n] = r
                     note("VPN\(n) 連線失敗：\(r.text)")
@@ -608,7 +663,8 @@ final class VPNController: ObservableObject {
             self.retrySoon = false
             if ok {
                 // 退避要等連線穩定 60 秒才歸零（見 apply）
-                self.lastError = nil
+                // 路由仍沒走 VPN 時只提示，不當成斷線（狀態與 F2 斷線通知仍依 status 判斷）
+                self.lastError = routeWarning
             } else if !self.networkUp {
                 self.retryNote = "沒有網路，恢復後自動重連"
             } else {

@@ -6,6 +6,9 @@
 #                                （舊版只輸出前三欄；App 要能處理兩種格式）
 #   splitswan-helper up [auto|1|2|3]  成功：ok vpnN；失敗：每台一行 reason vpnN <原因代碼>，最後 fail vpnN（或 fail all）
 #                                （舊版沒有 reason 行；App 要能處理兩種格式）
+#                                連上後若遠端網段的路由沒走 utun，會重啟 charon 再連一次（只一次），
+#                                並在 ok／reason 之前另起一行：route vpnN fixed|bad|failed <原本的介面>
+#                                （舊版沒有 route 行；App 要能處理兩種格式）
 #   splitswan-helper down
 #   splitswan-helper log           即時輸出 charon log
 #   splitswan-helper reload        重新載入設定（App 儲存設定後呼叫）
@@ -20,6 +23,8 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin
 SS=/opt/homebrew/opt/strongswan
 SWANCTL="$SS/bin/swanctl"
 CHARON="$SS/libexec/ipsec/charon"
+# 查路由用；tools/test-stale-route.sh 會把副本的這一行換成假程式
+ROUTE=/sbin/route
 CONNS=(vpn1 vpn2 vpn3)
 # charon 的 filelog（由 App 產生的 strongswan.d/splitswan.conf 指定）。固定路徑，不接受參數
 LOGDIR=/var/log/splitswan
@@ -57,31 +62,82 @@ track_tmp() {
   TMPFILES+=("$REPLY")
 }
 
-# swan <輸出檔或 /dev/null> <swanctl 參數…>：背景執行 swanctl 並等它結束，回傳它的結束代碼
-swan() {
+# bg <輸出檔或 /dev/null> <指令…>：背景執行指令並等它結束，回傳它的結束代碼（中斷時由 on_signal 結束它）
+bg() {
   local outf=$1 rc
   shift
-  "$SWANCTL" "$@" </dev/null >"$outf" 2>&1 &
+  "$@" </dev/null >"$outf" 2>&1 &
   CHILD=$!
   wait "$CHILD"; rc=$?
   CHILD=""
   return "$rc"
 }
 
+# swan <輸出檔或 /dev/null> <swanctl 參數…>
+swan() {
+  local outf=$1
+  shift
+  bg "$outf" "$SWANCTL" "$@"
+}
+
 charon_running() { pgrep -x charon >/dev/null; }
 
+# 啟動 charon（不檢查是否已在跑），最多等 5 秒讓 vici 可以連線
+start_charon() {
+  nohup "$CHARON" </dev/null >/dev/null 2>&1 &
+  for _ in $(seq 1 20); do
+    swan /dev/null --stats && break
+    sleep 0.25
+  done
+}
+
 ensure_charon() {
-  if ! charon_running; then
-    nohup "$CHARON" </dev/null >/dev/null 2>&1 &
-    for _ in $(seq 1 20); do
-      swan /dev/null --stats && break
-      sleep 0.25
-    done
-  fi
+  charon_running || start_charon
   swan /dev/null --load-all --noprompt
 }
 
+# 程序還在（殭屍不算）
+pid_alive() {
+  local s; s=$(ps -o stat= -p "$1" 2>/dev/null) || return 1
+  [ -n "$s" ] && [ "${s#Z}" = "$s" ]
+}
+
+# 本程式負責的 charon：名稱是 charon、而且執行檔路徑逐字等於 $CHARON。
+# 同名但路徑不同的程序（別的安裝、別人的程式）一律不碰
+own_charon_pids() {
+  local p
+  for p in $(pgrep -x charon); do
+    [ "$(ps -o comm= -p "$p" 2>/dev/null)" = "$CHARON" ] && echo "$p"
+  done
+}
+
+# 結束本程式負責的 charon：先 TERM，最多等 5 秒，仍在才 KILL（KILL 前再比對一次路徑，避免 PID 被重用）
+stop_charon() {
+  local pids p alive
+  pids=$(own_charon_pids)
+  [ -z "$pids" ] && return 0
+  for p in $pids; do kill -TERM "$p" 2>/dev/null; done
+  for _ in $(seq 1 20); do
+    alive=""
+    for p in $pids; do pid_alive "$p" && alive="$alive $p"; done
+    [ -z "$alive" ] && return 0
+    sleep 0.25
+  done
+  for p in $alive; do
+    [ "$(ps -o comm= -p "$p" 2>/dev/null)" = "$CHARON" ] && kill -KILL "$p" 2>/dev/null
+  done
+  for _ in $(seq 1 8); do
+    alive=""
+    for p in $pids; do pid_alive "$p" && alive="$alive $p"; done
+    [ -z "$alive" ] && return 0
+    sleep 0.25
+  done
+  return 1
+}
+
 terminate_all() {
+  # c 一定要 local：bash 是動態作用域，呼叫端（try_conn）的 c 會被覆蓋
+  local c
   for c in "${CONNS[@]}"; do
     swan /dev/null --terminate --ike "$c" --force --timeout 5
   done
@@ -116,14 +172,15 @@ classify_fail() {
   fi
 }
 
-# 成功印「ok vpnN」；失敗另起一行印「reason vpnN <代碼>」，最後的「fail vpnN／fail all」由呼叫端照舊印。
+# 建立連線。成功回 0、不印任何東西；失敗另起一行印「reason vpnN <代碼>」並回 1，
+# 最後的「fail vpnN／fail all」由呼叫端照舊印。
 # 原因放在獨立的一行，舊版 App 只認「fail vpnN」整行比對，多一行不影響它。
 # swanctl 輸出先寫到暫存檔（600，用完即清；被中斷時由 trap 清）
-try_conn() {
+initiate_conn() {
   local c=$1 f reason
   if ! track_tmp; then
     # 建不了暫存檔就不收輸出，照樣連線
-    if swan /dev/null --initiate --child corp --ike "$c" --timeout 20; then echo "ok $c"; return 0; fi
+    if swan /dev/null --initiate --child corp --ike "$c" --timeout 20; then return 0; fi
     echo "reason $c unknown"
     swan /dev/null --terminate --ike "$c" --force --timeout 5
     return 1
@@ -131,7 +188,6 @@ try_conn() {
   f=$REPLY
   if swan "$f" --initiate --child corp --ike "$c" --timeout 20; then
     cleanup_tmp
-    echo "ok $c"
     return 0
   fi
   reason=$(classify_fail <"$f")
@@ -141,6 +197,81 @@ try_conn() {
   return 1
 }
 # <<< 連線與失敗分類
+
+# ---- 連上後檢查路由 ----
+# 曾觀察到長時間執行的 charon 把遠端網段的路由裝到實體介面（下一跳是本地路由器），
+# 通道建立了但流量沒進去；重新啟動 charon 後路由恢復走 utun。成因未查證，這裡只偵測與處置。
+
+# 這兩個函式的結果放在 RESULT，不用命令替換回傳：命令替換裡的子程序收不到 trap、
+# 暫存檔也記不進 TMPFILES，逾時中止時會留下孤兒與暫存檔
+
+# 連線 c 的 CHILD_SA 第一個遠端網段的網路位址（IPv4、非 /0）；取不到就是空字串。
+# 只取位址，不輸出 swanctl 原始內容（含帳號）
+first_remote_net() {
+  local c=$1 f
+  RESULT=""
+  track_tmp || return 0
+  f=$REPLY
+  swan "$f" --list-sas --ike "$c"
+  # CHILD_SA 的遠端網段行：「    remote 10.0.0.0/24 10.1.0.0/16」（IKE 那行是「remote '<身分>' @ …」，第二欄有引號）
+  RESULT=$(awk '$1=="remote" && $2 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+/ {
+                  n=$2; sub(/\[.*/, "", n); split(n, a, "/");
+                  if (a[2] != "0") { print a[1]; exit } }' "$f")
+  cleanup_tmp
+}
+
+# 往 ip 的路由走哪個介面；查不到就是空字串
+route_iface() {
+  local f
+  RESULT=""
+  track_tmp || return 0
+  f=$REPLY
+  bg "$f" "$ROUTE" -n get "$1"
+  RESULT=$(awk '$1=="interface:"{print $2; exit}' "$f")
+  cleanup_tmp
+}
+
+# 檢查連線 c 的路由；有問題時把錯的介面放在 REPLY 並回 1。
+# 取不到網段或介面（例：只有 IPv6、查詢失敗）一律當作正常，不做任何處置
+route_check() {
+  first_remote_net "$1"
+  REPLY=""
+  [ -z "$RESULT" ] && return 0
+  route_iface "$RESULT"
+  [ -z "$RESULT" ] && return 0
+  case "$RESULT" in utun*) return 0 ;; esac
+  REPLY=$RESULT
+  return 1
+}
+
+# 成功印「ok vpnN」；失敗由 initiate_conn 印 reason 行。
+# 連上但路由沒走 utun：全部斷線、重啟 charon、重新載入設定、再連同一台，只做一次。
+#   修好：route vpnN fixed <原本介面>，接著 ok vpnN
+#   仍錯：route vpnN bad <介面>，接著照舊 ok vpnN（通道本身已建立）
+#   重連失敗：reason 行，接著 route vpnN failed <原本介面>（呼叫端再印 fail vpnN）
+# route 行在 ok／fail 之前另起一行，舊版 App 只認「ok vpnN／fail vpnN」整行，多一行不影響它
+try_conn() {
+  local c=$1 bad
+  initiate_conn "$c" || return 1
+  if route_check "$c"; then echo "ok $c"; return 0; fi
+  bad=$REPLY
+  terminate_all
+  stop_charon
+  start_charon
+  swan /dev/null --load-all --noprompt
+  if ! initiate_conn "$c"; then
+    # initiate_conn 已印 reason 行
+    echo "route $c failed $bad"
+    return 1
+  fi
+  if route_check "$c"; then
+    echo "route $c fixed $bad"
+  else
+    echo "route $c bad ${REPLY:-$bad}"
+  fi
+  echo "ok $c"
+  return 0
+}
 
 cmd_status() {
   if ! charon_running; then echo "disconnected"; return; fi

@@ -252,6 +252,34 @@ check("只有 reason 行、沒有 fail vpnN：不記", !GatewayHistory.shouldRec
 check("App 端逾時：不記（原因不確定在閘道）", !GatewayHistory.shouldRecord(gateway: 1, success: false,
       output: HelperRun.timeoutNote(120), interrupted: false))
 
+// MARK: 路由沒走 utun 的自動處置（輔助程式 up N 的 route 行）
+// 以下輸出取自 tools/test-stale-route.sh 實際跑出的格式
+let fixedOut = "route vpn1 fixed en0\nok vpn1"
+let badOut = "route vpn2 bad en0\nok vpn2"
+let failedOut = "reason vpn3 unreachable\nroute vpn3 failed en0\nfail vpn3"
+check("route fixed → .fixed(en0)", RouteRepair.parse(fixedOut, gateway: 1) == .fixed(interface: "en0"))
+check("route bad → .bad(en0)", RouteRepair.parse(badOut, gateway: 2) == .bad(interface: "en0"))
+check("route failed → .failed(en0)", RouteRepair.parse(failedOut, gateway: 3) == .failed(interface: "en0"))
+check("新 App＋舊輸出（沒有 route 行）→ nil，行為不變",
+      RouteRepair.parse("ok vpn1", gateway: 1) == nil && RouteRepair.parse("reason vpn1 auth\nfail vpn1", gateway: 1) == nil
+      && RouteRepair.parse("sudo: a password is required", gateway: 1) == nil)
+check("台號不符：不採用", RouteRepair.parse(fixedOut, gateway: 2) == nil)
+check("認不得的狀態 → nil", RouteRepair.parse("route vpn1 weird en0\nok vpn1", gateway: 1) == nil)
+check("缺介面欄位也能解析", RouteRepair.parse("route vpn1 bad\nok vpn1", gateway: 1) == .bad(interface: "?"))
+check("連線紀錄文字含台號與介面", RouteRepair.fixed(interface: "en0").note(gateway: 1).contains("VPN1")
+      && RouteRepair.fixed(interface: "en0").note(gateway: 1).contains("en0")
+      && RouteRepair.bad(interface: "en0").note(gateway: 2).contains("仍未走 VPN")
+      && RouteRepair.failed(interface: "en0").note(gateway: 3).contains("重新連線失敗"))
+check("只有 bad 會在主畫面提示", RouteRepair.bad(interface: "en0").warning != nil
+      && RouteRepair.fixed(interface: "en0").warning == nil && RouteRepair.failed(interface: "en0").warning == nil)
+// 舊版 App 的解析規則套在新輸出上：成功與否、失敗原因、F4 記錄都不受 route 行影響
+check("新輸出 fixed／bad：沒有失敗原因（舊規則）", ConnectFailReason.parse(fixedOut, gateway: 1) == nil
+      && ConnectFailReason.parse(badOut, gateway: 2) == nil)
+check("新輸出 fixed／bad（結束代碼 0）：照樣記成功", GatewayHistory.shouldRecord(gateway: 1, success: true, output: fixedOut, interrupted: false))
+check("新輸出 failed：原因照舊解析為 unreachable", ConnectFailReason.from(code: 1, output: failedOut, gateway: 3) == .unreachable)
+check("新輸出 failed：「fail vpn3」整行仍在 → 照樣記失敗",
+      GatewayHistory.shouldRecord(gateway: 3, success: false, output: failedOut, interrupted: false))
+
 // 畫面訊息
 check("單台＋原因", ConnectFailReason.message(order: [2], reasons: [2: .auth], isSingle: true)
       == "VPN2 連線失敗：帳號、密碼或預先共用金鑰（PSK）錯誤。將自動重試同一台")

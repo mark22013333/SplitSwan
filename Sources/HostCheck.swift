@@ -89,6 +89,42 @@ enum HostCheck {
         var portOK: Bool?             // 沒指定連接埠時為 nil
     }
 
+    /// `swanctl --list-sas`（輔助程式 sas）輸出中，CHILD_SA 的遠端網段（逗號分隔）；沒有就 nil。
+    /// CHILD_SA 那行是「    remote 10.0.0.0/24 10.0.1.0/24」；IKE 那行是「  remote '<身分>' @ <位址>[埠]」，第二欄有引號，不算
+    static func activeRemoteTS(fromListSas output: String) -> String? {
+        var nets: [String] = []
+        for line in output.split(whereSeparator: \.isNewline) {
+            let p = line.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+            guard p.count >= 2, p[0] == "remote" else { continue }
+            for tok in p.dropFirst() {
+                // 可能帶協定／埠：10.0.0.0/24[tcp/22]
+                let cidr = String(tok.split(separator: "[", maxSplits: 1).first ?? "")
+                let parts = cidr.split(separator: "/")
+                guard parts.count == 2, isIPv4(String(parts[0])), let m = Int(parts[1]), (0...32).contains(m) else { continue }
+                if !nets.contains(cidr) { nets.append(cidr) }
+            }
+        }
+        return nets.isEmpty ? nil : nets.joined(separator: ",")
+    }
+
+    /// 路由檢查結果該給哪種建議
+    enum RouteAdvice: Equatable {
+        /// 全部走 VPN
+        case viaTunnel
+        /// 沒走 VPN 的 IP 都已在目前通道的網段內，路由卻沒走 utun：strongSwan 狀態異常，重新連線（新版輔助程式會自動重啟 strongSwan）
+        case staleRoute
+        /// 網段尚未生效（不在目前通道的網段內，或讀不到通道網段）：確認已儲存並重新連線
+        case notApplied
+    }
+
+    /// activeTS：目前 CHILD_SA 的遠端網段（activeRemoteTS 的結果）；讀不到時傳 nil，一律當成尚未生效
+    static func routeAdvice(results: [IPResult], activeTS: String?) -> RouteAdvice {
+        let off = results.filter { !$0.viaTunnel }
+        if off.isEmpty { return .viaTunnel }
+        guard let ts = activeTS, off.allSatisfy({ coveringSubnet(ip: $0.ip, in: ts) != nil }) else { return .notApplied }
+        return .staleRoute
+    }
+
     /// 給管理員的結果文字（可直接貼上）
     static func report(target: Target, results: [IPResult], added: [String], vpnIP: String?) -> String {
         var lines = ["主機：\(target.host)" + (target.port.map { "，連接埠 \($0)" } ?? "")]
