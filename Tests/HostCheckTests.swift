@@ -88,4 +88,18 @@ check("一個在網段內、一個不在 → notApplied（要先讓網段生效�
 check("讀不到通道網段（舊版輔助程式、sudo 失敗）→ notApplied", HostCheck.routeAdvice(results: [viaEn0], activeTS: nil) == .notApplied)
 check("通道網段是 /0 不算涵蓋 → notApplied", HostCheck.routeAdvice(results: [viaEn0], activeTS: "0.0.0.0/0") == .notApplied)
 
+// MARK: staleRoute 的下一步（依系統元件版本與是否已重連過）
+check("系統元件需要更新 → 先更新（不論是否重連過）",
+      HostCheck.staleRouteHint(helperOutdated: true, retried: false) == .updateHelper
+      && HostCheck.staleRouteHint(helperOutdated: true, retried: true) == .updateHelper)
+check("新版、第一次 → 重新連線", HostCheck.staleRouteHint(helperOutdated: false, retried: false) == .reconnect)
+check("新版、按過重新連線仍沒走 VPN → 診斷報告（不再給同一個按鈕）",
+      HostCheck.staleRouteHint(helperOutdated: false, retried: true) == .report)
+let tUpd = HostCheck.staleRouteText(.updateHelper)
+check("舊版元件的文案：指向「環境檢查」更新，不承諾自動重啟", tUpd.contains("環境檢查") && tUpd.contains("更新") && !tUpd.contains("自動重啟"))
+check("新版元件的文案：說明重新連線會檢查並自動重啟", HostCheck.staleRouteText(.reconnect).contains("重新連線")
+      && HostCheck.staleRouteText(.reconnect).contains("自動重啟"))
+let tRep = HostCheck.staleRouteText(.report)
+check("重連後仍失敗的文案：自動修復沒有成功、產生診斷報告", tRep.contains("自動修復沒有成功") && tRep.contains("診斷報告"))
+
 print("通過 \(pass)，失敗 \(fail)")

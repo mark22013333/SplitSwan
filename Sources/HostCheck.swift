@@ -125,6 +125,35 @@ enum HostCheck {
         return .staleRoute
     }
 
+    /// staleRoute（網段已生效但路由沒走 VPN）時該給使用者哪一種下一步
+    enum StaleRouteHint: Equatable {
+        /// 已安裝的系統元件跟 App 內附的不同：舊版沒有自動修復，先到「環境檢查」更新
+        case updateHelper
+        /// 系統元件是新版：按「重新連線」，連上後輔助程式會檢查路由、必要時重啟 strongSwan
+        case reconnect
+        /// 已經按過重新連線、路由仍沒走 VPN：自動修復沒有成功，請產生診斷報告（不再提供同一個按鈕）
+        case report
+    }
+
+    /// helperOutdated：系統元件需要安裝或更新（EnvChecker 的比對結果）；retried：這次結果是按「重新連線」之後檢查的
+    static func staleRouteHint(helperOutdated: Bool, retried: Bool) -> StaleRouteHint {
+        if helperOutdated { return .updateHelper }
+        return retried ? .report : .reconnect
+    }
+
+    /// staleRoute 時顯示的說明
+    static func staleRouteText(_ hint: StaleRouteHint) -> String {
+        let head = "網段已在通道內，但目前路由沒走 VPN，可能是 VPN 服務（strongSwan）狀態異常。"
+        switch hint {
+        case .updateHelper:
+            return head + "目前安裝的系統元件不是最新版：請先到「環境檢查」按系統元件的「更新」，再回來按「再檢查一次」。"
+        case .reconnect:
+            return head + "按「重新連線」，連上後會檢查路由，必要時自動重啟 VPN 服務再連一次。"
+        case .report:
+            return "已重新連線，但路由仍沒走 VPN，自動修復沒有成功。請到「環境檢查」產生診斷報告，交給管理者。"
+        }
+    }
+
     /// 給管理員的結果文字（可直接貼上）
     static func report(target: Target, results: [IPResult], added: [String], vpnIP: String?) -> String {
         var lines = ["主機：\(target.host)" + (target.port.map { "，連接埠 \($0)" } ?? "")]

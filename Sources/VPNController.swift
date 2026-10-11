@@ -121,10 +121,44 @@ enum RouteRepair: Equatable {
             case "fixed": return .fixed(interface: iface)
             case "bad": return .bad(interface: iface)
             case "failed": return .failed(interface: iface)
-            default: return nil       // 認不得的狀態（更新版輔助程式）：當作沒有這一行
+            default: continue         // killed、skip 另外解析；認不得的狀態（更新版輔助程式）當作沒有這一行
             }
         }
         return nil
+    }
+
+    /// 這一行的狀態欄（第 3 欄）等於 status 的 route 行，回傳其餘欄位
+    private static func line(_ output: String, gateway n: Int, status: String) -> [String]? {
+        for line in output.split(whereSeparator: \.isNewline) {
+            let p = line.split(separator: " ").map(String.init)
+            if p.count >= 3, p[0] == "route", p[1] == "vpn\(n)", p[2] == status { return Array(p.dropFirst(3)) }
+        }
+        return nil
+    }
+
+    /// 「route vpnN killed」：結束 charon 時 TERM 無效、動用了 KILL
+    static func killed(_ output: String, gateway n: Int) -> Bool {
+        line(output, gateway: n, status: "killed") != nil
+    }
+
+    /// 「route vpnN skip <略過數>」：遠端網段都無法判斷（IPv6、位址範圍、/0、與本機網路重疊），沒有做路由檢查。
+    /// 沒有這一行回 nil；略過數讀不到時回 0
+    static func skipped(_ output: String, gateway n: Int) -> Int? {
+        guard let rest = line(output, gateway: n, status: "skip") else { return nil }
+        return rest.first.flatMap { Int($0) } ?? 0
+    }
+
+    /// up N 的輸出中所有要寫進連線紀錄的路由訊息（依處理順序）；舊版輔助程式回空陣列
+    static func notes(_ output: String, gateway n: Int) -> [String] {
+        var out: [String] = []
+        if let k = skipped(output, gateway: n) {
+            out.append("VPN\(n) 的通道網段都無法檢查路由（IPv6、位址範圍或與本機網路重疊，略過 \(k) 個），未做路由檢查")
+        }
+        if killed(output, gateway: n) {
+            out.append("VPN\(n) 重啟 strongSwan 時一般結束沒有回應，已強制結束；若之後連線異常，請重新開機")
+        }
+        if let r = parse(output, gateway: n) { out.append(r.note(gateway: n)) }
+        return out
     }
 
     /// 寫進連線紀錄的一句話
@@ -162,7 +196,9 @@ enum HelperRun {
             // 啟動 charon 最多等 5 秒、terminate_all 3 台各 5 秒、每台 initiate 20 秒＋失敗後 terminate 5 秒；
             // up auto 輪完三台約 95 秒（App 只呼叫 up N）。
             // up N 連上後路由沒走 utun 時會再做一輪：terminate_all 15、結束 charon 最多約 7、啟動 5、
-            // initiate 20＋失敗後 terminate 5 秒，單台最壞約 5＋15＋20＋52＝92 秒，仍在時限內
+            // initiate 20＋失敗後 terminate 5 秒，單台最壞約 5＋15＋20＋52＝92 秒，仍在時限內。
+            // 路由檢查每次查 SA、ifconfig 與每個可判斷網段各一次 route get（都是本機查詢、毫秒級），共兩輪。
+            // 設定頁主機檢查等連線的上限（HostCheckPanel.waitConnected 130 秒）要大於這個值
             return 120
         case "down":
             return 30      // terminate_all：3 台各 5 秒
@@ -205,6 +241,25 @@ enum ReconnectPolicy {
     /// 是不是 VPN 自己的介面（連線、斷線時會增減，不能當成「換網路」）
     static func isTunnelInterface(_ name: String) -> Bool {
         name.hasPrefix("utun") || name.hasPrefix("ipsec") || name.hasPrefix("ppp")
+    }
+}
+
+/// 輔助程式 up N 的路由自我修復期間，暫停 F2 斷線計時（純邏輯，方便單獨測試）。
+/// 修復的樣子是：up 還在跑、狀態先變成已連線，接著輔助程式斷線並重啟 strongSwan，再連一次。
+/// 判準：up 進行中、而且這次 up 期間曾觀察到已連線，之後又沒連上 → 暫停。
+/// 一般的連線嘗試（從沒連上過）照常計時，F2 的 30 秒不受影響
+struct RepairWindow {
+    private(set) var upRunning = false
+    private(set) var sawConnected = false
+
+    mutating func begin() { upRunning = true; sawConnected = false }
+    mutating func end() { upRunning = false; sawConnected = false }
+
+    /// 每次狀態更新呼叫一次；回傳 F2 這次要不要暫停
+    mutating func observe(isConnected: Bool) -> Bool {
+        guard upRunning else { return false }
+        if isConnected { sawConnected = true; return false }
+        return sawConnected
     }
 }
 
@@ -315,6 +370,7 @@ final class VPNController: ObservableObject {
     private var retryTargets: [Int]?                 // 手動指定單台失敗時，重試同一台；nil 代表自動輪替
     private var retrySoon = false                    // 連線動作執行中網路恢復：失敗後 1 秒就重試
     private var dropDetector = DropDetector()        // F2 非預期斷線通知的判定
+    private var repairWindow = RepairWindow()        // 路由自我修復期間暫停 F2 計時
 
     // 網路監聽
     private let pathMonitor = NWPathMonitor()
@@ -514,9 +570,10 @@ final class VPNController: ObservableObject {
     /// F2：想連線但沒連上超過 30 秒發掉線通知，之後恢復時發恢復通知（規格 §4）。
     /// App 自己重建通道時的 down 也照算，30 秒內接回就不發
     private func checkDrop(_ state: VPNState) {
+        let repairing = repairWindow.observe(isConnected: state.isConnected)
         let action = dropDetector.update(now: Date(), wantConnected: wantConnected,
                                          isConnected: state.isConnected, enabled: DropDetector.enabled,
-                                         paused: !networkUp || state == .helperMissing)
+                                         paused: !networkUp || state == .helperMissing || repairing)
         switch action {
         case .notifyDrop:
             note("中斷超過 \(Int(DropDetector.grace)) 秒，發送斷線通知")
@@ -636,11 +693,13 @@ final class VPNController: ObservableObject {
                 self.busyText = "連線 VPN\(n)…"
                 let address = self.settings.gateways.indices.contains(n - 1) ? self.settings.gateways[n - 1] : ""
                 let started = Date()
+                self.repairWindow.begin()
                 let (code, out) = await Self.runHelper(["up", "\(n)"])
+                self.repairWindow.end()
                 self.recordAttempt(n, address: address, success: code == 0, output: out, started: started)
                 // 輔助程式自動處置過路由（重啟 strongSwan 再連）：寫進連線紀錄；成敗仍照結束代碼判斷
                 let repair = RouteRepair.parse(out, gateway: n)
-                if let repair { self.note(repair.note(gateway: n)) }
+                for s in RouteRepair.notes(out, gateway: n) { self.note(s) }
                 if code == 0 {
                     ok = true; self.lastUpAt = Date(); self.note("VPN\(n) 已連線")
                     routeWarning = repair?.warning

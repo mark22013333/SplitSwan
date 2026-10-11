@@ -20,7 +20,7 @@ struct MainView: View {
             ConnectionTab(vpn: vpn, env: env, window: window)
                 .tabItem { Label("連線", systemImage: "network") }
                 .tag(MainTab.connection)
-            SettingsTab(vpn: vpn, env: env)
+            SettingsTab(vpn: vpn, env: env, window: window)
                 .tabItem { Label("設定", systemImage: "gearshape") }
                 .tag(MainTab.settings)
             EnvironmentTab(env: env, window: window)
@@ -154,6 +154,7 @@ struct ConnectionTab: View {
 struct SettingsTab: View {
     @ObservedObject var vpn: VPNController
     @ObservedObject var env: EnvChecker
+    @ObservedObject var window: WindowModel
 
     @State private var draft = VPNSettings()
     @State private var password = ""
@@ -231,7 +232,10 @@ struct SettingsTab: View {
                         HostCheckPanel(vpn: vpn,
                                        savedTS: { ConfigStore.load().remoteTS },
                                        isDirty: { isDirty },
-                                       apply: { add in try addSubnets(add) })
+                                       apply: { add in try addSubnets(add) },
+                                       // 系統元件需要安裝或更新：沿用 EnvChecker 逐 byte 比對的結果
+                                       helperOutdated: { env.items.contains { $0.id == "helper" && $0.action == .installHelper } },
+                                       openEnvironment: { window.tab = .environment })
                         DisclosureGroup("手動排查步驟", isExpanded: $showHelp) {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("1. 查出主機的 IP：終端機執行 `dig +short 主機網域`")

@@ -78,8 +78,8 @@ vpn1: #3, ESTABLISHED, IKEv2, 0123456789abcdef_i* fedcba9876543210_r
     in  c1234567,      0 bytes,     0 packets
     out c7654321,      0 bytes,     0 packets
     local  10.0.0.77/32
-    remote 10.0.0.0/24 10.0.1.0/24
 SAS
+    echo "    remote \${FAKE_TS:-10.0.0.0/24 10.0.1.0/24}"
     exit 0 ;;
   *) exit 0 ;;
 esac
@@ -100,13 +100,26 @@ echo "       mask: 255.255.255.0"
 echo "  interface: \$iface"
 echo "      flags: <UP,DONE,STATIC>"
 EOF
-chmod 755 "$RUN/bin/charon" "$RUN/other/charon" "$RUN/bin/swanctl" "$RUN/bin/route"
+# 假 ifconfig：en0 是 FAKE_LAN（「位址 遮罩」，預設 192.0.2.5/24），另有 utun4（虛擬 IP，不算 LAN）與 lo0
+cat >"$RUN/bin/ifconfig" <<EOF
+#!/bin/bash
+set -- \${FAKE_LAN:-192.0.2.5 0xffffff00}
+echo "lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST> mtu 16384"
+echo "	inet 127.0.0.1 netmask 0xff000000"
+echo "en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500"
+echo "	ether 00:00:5e:00:53:01"
+echo "	inet \$1 netmask \$2 broadcast 192.0.2.255"
+echo "utun4: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1400"
+echo "	inet 10.0.0.77 --> 10.0.0.77 netmask 0xffffffff"
+EOF
+chmod 755 "$RUN/bin/charon" "$RUN/other/charon" "$RUN/bin/swanctl" "$RUN/bin/route" "$RUN/bin/ifconfig"
 
 sed -e "s#^SWANCTL=.*#SWANCTL=$RUN/bin/swanctl#" -e "s#^CHARON=.*#CHARON=$RUN/bin/charon#" \
-    -e "s#^ROUTE=.*#ROUTE=$RUN/bin/route#" -e "s#^HELPER_TMPDIR=.*#HELPER_TMPDIR=$RUN/tmp#" "$SRC" >"$RUN/helper"
+    -e "s#^ROUTE=.*#ROUTE=$RUN/bin/route#" -e "s#^IFCONFIG=.*#IFCONFIG=$RUN/bin/ifconfig#" -e "s#^CHARON_UID=.*#CHARON_UID=$(id -u)#" -e "s#^HELPER_TMPDIR=.*#HELPER_TMPDIR=$RUN/tmp#" "$SRC" >"$RUN/helper"
 grep -q "^ROUTE=$RUN/bin/route\$" "$RUN/helper" && grep -q "^CHARON=$RUN/bin/charon\$" "$RUN/helper" \
-  && grep -q "^HELPER_TMPDIR=$RUN/tmp\$" "$RUN/helper"
-check "副本的 charon／route／暫存目錄已換掉（正對照）" $?
+  && grep -q "^HELPER_TMPDIR=$RUN/tmp\$" "$RUN/helper" && grep -q "^IFCONFIG=$RUN/bin/ifconfig\$" "$RUN/helper" \
+  && grep -q "^CHARON_UID=$(id -u)\$" "$RUN/helper"
+check "副本的 charon／route／ifconfig／uid／暫存目錄已換掉（正對照）" $?
 
 # 每個情境前：清掉計數、只留一支「長期執行」的假 charon 與一支誘餌
 reset_state() {
@@ -137,7 +150,7 @@ out=$(FAKE_ROUTES="utun4" bash "$RUN/helper" up 1); rc=$?
 [ "${rc}" = 0 ] && [ "$out" = "ok vpn1" ]; s=$?; check "路由正常：只印 ok vpn1（實際：$(lines "$out")）" $s
 [ "$(starts)" = 0 ] && pid_still=$(pids_by_path "$RUN/bin/charon") && [ "$pid_still" = "${OLD}" ]
 check "路由正常：沒有重啟 charon（原 PID ${OLD} 還在）" $?
-[ "$(cat "$RUN/state/route-queries")" = "10.0.0.0" ]; check "查的是第一個遠端網段的網路位址 10.0.0.0（不是 IKE 對端位址）" $?
+[ "$(tr "\n" " " <"$RUN/state/route-queries")" = "10.0.0.0 10.0.1.0 " ]; check "每個遠端網段都查了（10.0.0.0、10.0.1.0 的網路位址，不是 IKE 對端位址）" $?
 
 # ---- 2. en0 → 重啟 → utun ----
 reset_state
@@ -172,10 +185,54 @@ reset_state 1
 t0=$SECONDS
 out=$(FAKE_ROUTES="en0 utun4" bash "$RUN/helper" up 1); rc=$?
 el=$((SECONDS - t0))
-[ "${rc}" = 0 ] && [ "$out" = "$(printf 'route vpn1 fixed en0\nok vpn1')" ] && ! kill -0 "${OLD}" 2>/dev/null
-check "charon 不理 TERM：改送 KILL 後照樣修復（耗時 ${el} 秒）" $?
+[ "${rc}" = 0 ] && [ "$out" = "$(printf 'route vpn1 killed\nroute vpn1 fixed en0\nok vpn1')" ] && ! kill -0 "${OLD}" 2>/dev/null
+s=$?; check "charon 不理 TERM：改送 KILL、多印 route vpn1 killed，照樣修復（$(lines "$out")）（耗時 ${el} 秒）" $s
 [ "${el}" -ge 4 ] && [ "${el}" -le 10 ]; check "TERM 後等約 5 秒才 KILL（實際 ${el} 秒）" $?
 kill -0 "${DECOY}" 2>/dev/null; check "誘餌仍在" $?
+
+queries() { tr "\n" " " <"$RUN/state/route-queries"; }
+
+# ---- 5a. 家用 LAN 與通道網段重疊：route get 本來就會走 en0，不可誤判 ----
+reset_state
+out=$(FAKE_TS="10.0.0.0/24" FAKE_LAN="10.0.0.20 0xffffff00" FAKE_ROUTES="en0" bash "$RUN/helper" up 1); rc=$?; OUT5A=$out
+[ "${rc}" = 0 ] && [ "$out" = "$(printf 'route vpn1 skip 1\nok vpn1')" ]
+s=$?; check "LAN 10.0.0.0/24 與唯一的通道網段重疊：route vpn1 skip 1 ＋ ok，不重啟（實際：$(lines "$out")）" $s
+[ "$(starts)" = 0 ] && [ -z "$(queries)" ] && kill -0 "${OLD}" 2>/dev/null; check "LAN 重疊：沒查路由、原 charon 還在" $?
+reset_state
+out=$(FAKE_TS="10.0.0.0/24 10.0.1.0/24" FAKE_LAN="10.0.0.20 0xffffff00" FAKE_ROUTES="utun4" bash "$RUN/helper" up 1); rc=$?
+[ "${rc}" = 0 ] && [ "$out" = "ok vpn1" ] && [ "$(queries)" = "10.0.1.0 " ]
+s=$?; check "部分重疊：只查不重疊的 10.0.1.0、走 utun 就正常（實際：$(lines "$out")，查詢：$(queries)）" $s
+reset_state
+out=$(FAKE_TS="10.0.0.0/8" FAKE_LAN="10.5.0.20 0xffffff00" FAKE_ROUTES="en0 utun4" bash "$RUN/helper" up 1); rc=$?
+[ "${rc}" = 0 ] && [ "$out" = "$(printf 'route vpn1 fixed en0\nok vpn1')" ]
+s=$?; check "正對照：LAN 10.5.0.0/24 不含通道網段的網路位址 10.0.0.0 → 照樣判斷並修復（實際：$(lines "$out")）" $s
+
+# ---- 5b. 只有第二個網段的路由壞掉 ----
+reset_state
+out=$(FAKE_TS="10.0.0.0/24 10.0.1.0/24" FAKE_ROUTES="utun4 en0 utun4" bash "$RUN/helper" up 1); rc=$?; OUT5B=$out
+[ "${rc}" = 0 ] && [ "$out" = "$(printf 'route vpn1 fixed en0\nok vpn1')" ]
+s=$?; check "第一個網段走 utun、第二個走 en0：抓得到並修復（實際：$(lines "$out")）" $s
+[ "$(queries)" = "10.0.0.0 10.0.1.0 10.0.0.0 10.0.1.0 " ] && [ "$(starts)" = 1 ]
+s=$?; check "第二個網段壞：修復前後各查兩個網段、重啟一次（查詢：$(queries)）" $s
+
+# ---- 5c. 沒有可判斷的網段（IPv6、位址範圍、/0） ----
+reset_state
+out=$(FAKE_TS="fd00:1::/64 10.0.0.1..10.0.0.9 0.0.0.0/0" FAKE_ROUTES="en0" bash "$RUN/helper" up 1); rc=$?
+[ "${rc}" = 0 ] && [ "$out" = "$(printf 'route vpn1 skip 3\nok vpn1')" ] && [ "$(starts)" = 0 ] && [ -z "$(queries)" ]
+s=$?; check "全部是 IPv6／範圍／0：route vpn1 skip 3 ＋ ok，不查路由、不重啟（實際：$(lines "$out")）" $s
+reset_state
+out=$(FAKE_TS="fd00:1::/64 10.0.1.0/24[tcp/22]" FAKE_ROUTES="en0 utun4" bash "$RUN/helper" up 1); rc=$?
+[ "${rc}" = 0 ] && [ "$out" = "$(printf 'route vpn1 fixed en0\nok vpn1')" ] && [ "$(queries)" = "10.0.1.0 10.0.1.0 " ]
+s=$?; check "IPv6 略過、帶協定埠的 IPv4 網段照樣判斷（實際：$(lines "$out")，查詢：$(queries)）" $s
+
+# ---- 5d. argv[0] 偽造成 $CHARON、但擁有者不是預期 uid 的程序不可被結束 ----
+# 測試環境沒有 root：另做一份副本把預期 uid 設成 0（正式值），此時測試者的假 charon 就是「偽造的非 root 程序」
+sed -e "s#^CHARON_UID=.*#CHARON_UID=0#" "$RUN/helper" >"$RUN/helper-uid0"
+grep -q '^CHARON_UID=0$' "$RUN/helper-uid0"; check "副本的預期 uid 已換成 0（正對照）" $?
+reset_state
+[ "$(ps -o comm= -p "${OLD}")" = "$RUN/bin/charon" ]; check "偽造程序的 argv[0] 確實等於 \$CHARON（正對照）" $?
+out=$(FAKE_ROUTES="en0 en0" bash "$RUN/helper-uid0" up 1); rc=$?
+kill -0 "${OLD}" 2>/dev/null; s=$?; check "非 root 的偽造 charon（PID ${OLD}）沒有被結束（輸出：$(lines "$out")）" $s
 
 # ---- 6. 修復途中被 TERM ----
 HT_STARTED=1; HT_ORPHAN=1; HT_RC=0

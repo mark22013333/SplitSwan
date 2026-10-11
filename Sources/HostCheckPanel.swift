@@ -7,13 +7,15 @@ struct HostCheckPanel: View {
     let savedTS: () -> String              // 已儲存的通道網段
     let isDirty: () -> Bool                // 表單是否有未儲存的修改
     let apply: ([String]) throws -> Void   // 加入網段並存檔
+    let helperOutdated: () -> Bool         // 系統元件需要安裝或更新（EnvChecker 的比對結果）
+    let openEnvironment: () -> Void        // 切到「環境檢查」頁（更新系統元件、產生診斷報告）
 
     enum Phase {
         case idle
         case working(String)
         case confirm(target: HostCheck.Target, ips: [String], add: [String])
         case needConnect(target: HostCheck.Target, ips: [String], added: [String])
-        case done(target: HostCheck.Target, results: [HostCheck.IPResult], added: [String], advice: HostCheck.RouteAdvice)
+        case done(target: HostCheck.Target, results: [HostCheck.IPResult], added: [String], advice: HostCheck.RouteAdvice, retried: Bool)
         case failed(String)
     }
 
@@ -59,8 +61,8 @@ struct HostCheckPanel: View {
                     .font(.callout).fixedSize(horizontal: false, vertical: true)
                 Button("連線並驗證") { connectAndVerify(target: target, ips: ips, added: added) }
             }
-        case let .done(target, results, added, advice):
-            resultView(target: target, results: results, added: added, advice: advice)
+        case let .done(target, results, added, advice, retried):
+            resultView(target: target, results: results, added: added, advice: advice, retried: retried)
         }
     }
 
@@ -92,7 +94,8 @@ struct HostCheckPanel: View {
     }
 
     private func resultView(target: HostCheck.Target, results: [HostCheck.IPResult], added: [String],
-                            advice: HostCheck.RouteAdvice) -> some View {
+                            advice: HostCheck.RouteAdvice, retried: Bool) -> some View {
+        let hint = HostCheck.staleRouteHint(helperOutdated: helperOutdated(), retried: retried)
         let portOK = results.allSatisfy { $0.portOK ?? true }
         let report = HostCheck.report(target: target, results: results, added: added, vpnIP: vpnIP)
         return VStack(alignment: .leading, spacing: 6) {
@@ -104,7 +107,7 @@ struct HostCheckPanel: View {
             }
             Group {
                 if advice == .staleRoute {
-                    Text("網段已在通道內，但目前路由沒走 VPN，可能是 VPN 服務（strongSwan）狀態異常。按「重新連線」會自動重啟 VPN 服務並重新連線。")
+                    Text(HostCheck.staleRouteText(hint))
                 } else if advice == .notApplied {
                     Text("還沒走 VPN：確認網段已儲存且已重新連線；若剛重連，稍等幾秒再按一次「檢查」。")
                 } else if !portOK {
@@ -118,8 +121,15 @@ struct HostCheckPanel: View {
             .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 10) {
                 if advice == .staleRoute {
-                    Button("重新連線") { reconnectAndVerify(target: target, ips: results.map(\.ip), added: added) }
-                        .buttonStyle(.borderedProminent)
+                    switch hint {
+                    case .reconnect:
+                        Button("重新連線") { reconnectAndVerify(target: target, ips: results.map(\.ip), added: added) }
+                            .buttonStyle(.borderedProminent)
+                    case .updateHelper:
+                        Button("前往環境檢查") { openEnvironment() }.buttonStyle(.borderedProminent)
+                    case .report:
+                        Button("前往產生診斷報告") { openEnvironment() }.buttonStyle(.borderedProminent)
+                    }
                 }
                 Button("複製結果") {
                     NSPasteboard.general.clearContents()
@@ -198,18 +208,19 @@ struct HostCheckPanel: View {
         }
     }
 
-    /// 先等協調器開始動作，再等到連線完成，最多 60 秒
+    /// 先等協調器開始動作，再等到連線完成，最多 130 秒：要大於輔助程式 up 單台最壞耗時（含路由修復），
+    /// 否則修復還在進行就會誤報「沒有連上」
     private func waitConnected() async {
         try? await Task.sleep(for: .seconds(2))
-        for _ in 0..<58 {
+        for _ in 0..<128 {
             if vpn.state.isConnected && !vpn.busy { return }
             try? await Task.sleep(for: .seconds(1))
         }
     }
 
-    private func verify(target: HostCheck.Target, ips: [String], added: [String]) async {
+    private func verify(target: HostCheck.Target, ips: [String], added: [String], retried: Bool = false) async {
         guard vpn.state.isConnected else {
-            phase = .failed("60 秒內沒有連上 VPN，請看主畫面的連線紀錄"); return
+            phase = .failed("130 秒內沒有連上 VPN，請看主畫面的連線紀錄"); return
         }
         phase = .working("檢查路由" + (target.port.map { "與連接埠 \($0)" } ?? "") + "…")
         let results = await HostCheckRunner.verify(ips: ips, port: target.port)
@@ -217,7 +228,7 @@ struct HostCheckPanel: View {
         var activeTS: String?
         if !results.allSatisfy(\.viaTunnel) { activeTS = await HostCheckRunner.activeRemoteTS() }
         phase = .done(target: target, results: results, added: added,
-                      advice: HostCheck.routeAdvice(results: results, activeTS: activeTS))
+                      advice: HostCheck.routeAdvice(results: results, activeTS: activeTS), retried: retried)
     }
 
     /// 網段已在通道內但路由沒走 VPN：重新連線（新版輔助程式連上後會檢查路由，必要時重啟 strongSwan），再驗證一次
@@ -229,7 +240,7 @@ struct HostCheckPanel: View {
                 return
             }
             await waitConnected()
-            await verify(target: target, ips: ips, added: added)
+            await verify(target: target, ips: ips, added: added, retried: true)
         }
     }
 }
