@@ -1,0 +1,398 @@
+{
+  "schema_version": 2,
+  "slug": "plugin-menu-hierarchy",
+  "name": "外掛選單分層與可擴充架構",
+  "type": "feature",
+  "inferred": false,
+  "phase": "close",
+  "next": {
+    "command": null,
+    "reason": "任務已結案（close 完成），可用 /plan-start 開新任務"
+  },
+  "steps": {
+    "start": {
+      "status": "done",
+      "at": "2026-10-12T08:56:14+08:00",
+      "commit": "2993430114b8aab83a9822021996a152d7c2e10f",
+      "reason": null
+    },
+    "spec": {
+      "status": "done",
+      "at": "2026-10-12T09:22:27+08:00",
+      "commit": null,
+      "reason": null
+    },
+    "db": {
+      "status": "skipped",
+      "at": "2026-10-12T09:22:27+08:00",
+      "commit": null,
+      "reason": "DB_REQUIRED=false"
+    },
+    "arch": {
+      "status": "done",
+      "at": "2026-10-12T11:05:22+08:00",
+      "commit": null,
+      "reason": null
+    },
+    "build": {
+      "status": "done",
+      "at": "2026-10-12T23:42:35+08:00",
+      "commit": null,
+      "reason": null
+    },
+    "security": {
+      "status": "done",
+      "at": "2026-10-12T23:52:58+08:00",
+      "commit": null,
+      "reason": null
+    },
+    "verify": {
+      "status": "done",
+      "at": "2026-10-12T23:53:07+08:00",
+      "commit": null,
+      "reason": null
+    },
+    "review": {
+      "status": "done",
+      "at": "2026-10-13T00:00:29+08:00",
+      "commit": null,
+      "reason": null
+    },
+    "close": {
+      "status": "done",
+      "at": "2026-10-13T00:24:28+08:00",
+      "commit": null,
+      "reason": null
+    }
+  },
+  "work_unit": {
+    "skill": null,
+    "done": 0,
+    "total": 0,
+    "label": "",
+    "remaining": [],
+    "evidence": [],
+    "ambiguities": []
+  },
+  "gates": {
+    "requirement": {
+      "status": "approved",
+      "at": "2026-10-12T09:22:27+08:00",
+      "by": "human",
+      "reason": "user explicitly approved current spec"
+    },
+    "architecture": {
+      "status": "approved",
+      "at": "2026-10-12T11:05:22+08:00",
+      "by": "human",
+      "reason": "user explicitly approved current architecture"
+    },
+    "uat": {
+      "status": "approved",
+      "at": "2026-10-13T00:09:47+08:00",
+      "by": "human",
+      "reason": "user explicitly accepted current feature delivery"
+    }
+  },
+  "resume_hint": {
+    "branch": "feature/plugin-menu-hierarchy",
+    "services": [],
+    "read_first": []
+  },
+  "results": {
+    "verify": {
+      "health_score": 97,
+      "passed": 14,
+      "warning": 1,
+      "failed": 0,
+      "blocked": 0,
+      "skipped": 0,
+      "manual": 0,
+      "mode": "full",
+      "status": "WARN"
+    },
+    "review": {
+      "critical": 0,
+      "warning": 0,
+      "files": 8,
+      "mode": "full",
+      "status": "PASS"
+    },
+    "security": {
+      "critical": 0,
+      "warning": 0,
+      "files": 8,
+      "mode": "full",
+      "status": "PASS"
+    }
+  },
+  "git": {
+    "branch": "feature/plugin-menu-hierarchy",
+    "base": "main",
+    "last_commit": "e313cbb"
+  },
+  "notion": {
+    "page_id": "3f7a401b-e0f5-8113-b525-e7cc08292cb6",
+    "mirrored_status": "已完成",
+    "last_synced_at": "2026-10-13T00:24:28+08:00"
+  },
+  "deploy": {
+    "steps_total": 0,
+    "steps_confirmed": 0
+  },
+  "parked": null,
+  "history": [
+    {
+      "at": "2026-10-12T08:56:14+08:00",
+      "event": "set",
+      "detail": "git.base=main；git.last_commit；notion.mirrored_status=進行中；notion.last_synced_at"
+    },
+    {
+      "at": "2026-10-12T09:22:27+08:00",
+      "event": "set",
+      "detail": "steps.spec=done；phase=spec"
+    },
+    {
+      "at": "2026-10-12T09:22:27+08:00",
+      "event": "gate",
+      "detail": "requirement=approved by=human reason=user explicitly approved current spec"
+    },
+    {
+      "at": "2026-10-12T09:22:27+08:00",
+      "event": "set",
+      "detail": "steps.db=skipped"
+    },
+    {
+      "at": "2026-10-12T09:24:28+08:00",
+      "event": "gate",
+      "detail": "architecture=pending by=crew reason=architecture revised; human re-approval required"
+    },
+    {
+      "at": "2026-10-12T11:05:22+08:00",
+      "event": "set",
+      "detail": "steps.arch=done；phase=arch"
+    },
+    {
+      "at": "2026-10-12T11:05:22+08:00",
+      "event": "gate",
+      "detail": "architecture=approved by=human reason=user explicitly approved current architecture"
+    },
+    {
+      "at": "2026-10-12T12:29:16+08:00",
+      "event": "unit",
+      "detail": "plan-build 0/2"
+    },
+    {
+      "at": "2026-10-12T12:37:21+08:00",
+      "event": "unit",
+      "detail": "plan-build 1/2"
+    },
+    {
+      "at": "2026-10-12T12:45:13+08:00",
+      "event": "unit",
+      "detail": "plan-build 2/2"
+    },
+    {
+      "at": "2026-10-12T12:45:13+08:00",
+      "event": "unit",
+      "detail": "清空工作單元"
+    },
+    {
+      "at": "2026-10-12T12:45:13+08:00",
+      "event": "set",
+      "detail": "steps.build=done；phase=build；git.last_commit"
+    },
+    {
+      "at": "2026-10-12T19:01:30+08:00",
+      "event": "result",
+      "detail": "security: {\"critical\": 0, \"warning\": 1, \"files\": 7, \"mode\": \"full\", \"status\": \"WARN\"}"
+    },
+    {
+      "at": "2026-10-12T19:01:30+08:00",
+      "event": "set",
+      "detail": "steps.security=done；phase=security"
+    },
+    {
+      "at": "2026-10-12T19:56:27+08:00",
+      "event": "unit",
+      "detail": "plan-verify 1/15"
+    },
+    {
+      "at": "2026-10-12T19:56:27+08:00",
+      "event": "unit",
+      "detail": "plan-verify 2/15"
+    },
+    {
+      "at": "2026-10-12T19:56:28+08:00",
+      "event": "unit",
+      "detail": "plan-verify 3/15"
+    },
+    {
+      "at": "2026-10-12T19:56:28+08:00",
+      "event": "unit",
+      "detail": "plan-verify 4/15"
+    },
+    {
+      "at": "2026-10-12T19:56:28+08:00",
+      "event": "unit",
+      "detail": "plan-verify 5/15"
+    },
+    {
+      "at": "2026-10-12T19:56:29+08:00",
+      "event": "unit",
+      "detail": "plan-verify 6/15"
+    },
+    {
+      "at": "2026-10-12T19:56:29+08:00",
+      "event": "unit",
+      "detail": "plan-verify 7/15"
+    },
+    {
+      "at": "2026-10-12T19:56:30+08:00",
+      "event": "unit",
+      "detail": "plan-verify 8/15"
+    },
+    {
+      "at": "2026-10-12T19:56:31+08:00",
+      "event": "unit",
+      "detail": "plan-verify 9/15"
+    },
+    {
+      "at": "2026-10-12T19:56:32+08:00",
+      "event": "unit",
+      "detail": "plan-verify 10/15"
+    },
+    {
+      "at": "2026-10-12T19:56:32+08:00",
+      "event": "unit",
+      "detail": "plan-verify 11/15"
+    },
+    {
+      "at": "2026-10-12T19:56:33+08:00",
+      "event": "unit",
+      "detail": "plan-verify 12/15"
+    },
+    {
+      "at": "2026-10-12T19:56:33+08:00",
+      "event": "unit",
+      "detail": "plan-verify 13/15"
+    },
+    {
+      "at": "2026-10-12T19:56:33+08:00",
+      "event": "unit",
+      "detail": "plan-verify 14/15"
+    },
+    {
+      "at": "2026-10-12T19:56:34+08:00",
+      "event": "unit",
+      "detail": "plan-verify 15/15"
+    },
+    {
+      "at": "2026-10-12T19:56:34+08:00",
+      "event": "result",
+      "detail": "verify: {\"health_score\": 97, \"passed\": 14, \"warning\": 1, \"failed\": 0, \"blocked\": 0, \"skipped\": 0, \"manual\": 0, \"mode\": \"full\", \"status\": \"WARN\"}"
+    },
+    {
+      "at": "2026-10-12T19:56:34+08:00",
+      "event": "unit",
+      "detail": "清空工作單元"
+    },
+    {
+      "at": "2026-10-12T19:56:35+08:00",
+      "event": "set",
+      "detail": "steps.verify=done；phase=verify"
+    },
+    {
+      "at": "2026-10-12T20:56:17+08:00",
+      "event": "result",
+      "detail": "review: {\"critical\": 1, \"warning\": 2, \"files\": 7, \"mode\": \"full\", \"status\": \"FAIL\"}"
+    },
+    {
+      "at": "2026-10-12T20:56:17+08:00",
+      "event": "set",
+      "detail": "steps.review=done；phase=review"
+    },
+    {
+      "at": "2026-10-12T23:28:07+08:00",
+      "event": "unit",
+      "detail": "plan-build 0/1"
+    },
+    {
+      "at": "2026-10-12T23:42:34+08:00",
+      "event": "unit",
+      "detail": "plan-build 1/1"
+    },
+    {
+      "at": "2026-10-12T23:42:34+08:00",
+      "event": "unit",
+      "detail": "清空工作單元"
+    },
+    {
+      "at": "2026-10-12T23:42:35+08:00",
+      "event": "set",
+      "detail": "steps.build=done；phase=build；git.last_commit"
+    },
+    {
+      "at": "2026-10-12T23:52:58+08:00",
+      "event": "result",
+      "detail": "security: {\"critical\": 0, \"warning\": 0, \"files\": 8, \"mode\": \"full\", \"status\": \"PASS\"}"
+    },
+    {
+      "at": "2026-10-12T23:52:58+08:00",
+      "event": "set",
+      "detail": "steps.security=done；phase=security"
+    },
+    {
+      "at": "2026-10-12T23:53:07+08:00",
+      "event": "unit",
+      "detail": "plan-verify 15/15"
+    },
+    {
+      "at": "2026-10-12T23:53:07+08:00",
+      "event": "result",
+      "detail": "verify: {\"health_score\": 97, \"passed\": 14, \"warning\": 1, \"failed\": 0, \"blocked\": 0, \"skipped\": 0, \"manual\": 0, \"mode\": \"full\", \"status\": \"WARN\"}"
+    },
+    {
+      "at": "2026-10-12T23:53:07+08:00",
+      "event": "unit",
+      "detail": "清空工作單元"
+    },
+    {
+      "at": "2026-10-12T23:53:07+08:00",
+      "event": "set",
+      "detail": "steps.verify=done；phase=verify"
+    },
+    {
+      "at": "2026-10-13T00:00:29+08:00",
+      "event": "result",
+      "detail": "review: {\"critical\": 0, \"warning\": 0, \"files\": 8, \"mode\": \"full\", \"status\": \"PASS\"}"
+    },
+    {
+      "at": "2026-10-13T00:00:29+08:00",
+      "event": "set",
+      "detail": "steps.review=done；phase=review"
+    },
+    {
+      "at": "2026-10-13T00:00:41+08:00",
+      "event": "gate",
+      "detail": "uat=pending by=crew reason=plan-close requires fresh human acceptance for current delivery"
+    },
+    {
+      "at": "2026-10-13T00:09:47+08:00",
+      "event": "gate",
+      "detail": "uat=approved by=human reason=user explicitly accepted current feature delivery"
+    },
+    {
+      "at": "2026-10-13T00:22:21+08:00",
+      "event": "set",
+      "detail": "git.last_commit"
+    },
+    {
+      "at": "2026-10-13T00:24:28+08:00",
+      "event": "set",
+      "detail": "steps.close=done；phase=close；git.last_commit；notion.mirrored_status=已完成；notion.last_synced_at"
+    }
+  ],
+  "created": "2026-10-12T08:56:14+08:00",
+  "updated": "2026-10-13T00:24:28+08:00"
+}

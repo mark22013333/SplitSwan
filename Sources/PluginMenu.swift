@@ -1,75 +1,191 @@
-// 外掛在狀態列選單中的區段：分隔線＋標題＋項目。外掛輸出是不受信任的資料，
-// 這裡只負責把 PluginLogic 解析、驗證過的結果畫成 NSMenuItem，點擊交給 PluginRunner.perform。
+// 外掛選單分成兩層：純值型別投影負責所有顯示規則，AppKit Adapter 只負責建立 NSMenuItem。
+// 外掛輸出是不受信任的資料；點擊命令只攜帶 PluginLogic 已解析、驗證過的原始項目。
+import Foundation
+
+#if canImport(AppKit)
 import AppKit
+#endif
 
 enum PluginMenu {
-    /// 掛在 NSMenuItem.representedObject 上的點擊資訊
-    final class Action: NSObject {
-        let pluginID: String
-        let item: PluginLogic.Item
-        init(pluginID: String, item: PluginLogic.Item) { self.pluginID = pluginID; self.item = item }
-    }
+    /// 不含 Runner、計時器或其他服務參照的外掛快照。
+    struct PluginSnapshot: Equatable, Sendable {
+        struct Output: Equatable, Sendable {
+            let items: [PluginLogic.Item]
+            let truncated: Bool
 
-    /// 每個外掛一個區段；外掛錯誤時標題後加「⚠︎」，標題的子選單顯示一行原因
-    @MainActor
-    static func sections(_ plugins: [PluginRunner.Plugin], target: AnyObject, action: Selector) -> [NSMenuItem] {
-        var out: [NSMenuItem] = []
-        for p in plugins {
-            out.append(.separator())
-            let header = NSMenuItem(title: p.title, action: nil, keyEquivalent: "")
-            if let why = p.failure {
-                header.title = p.title + " ⚠︎"
-                let sub = NSMenu()
-                sub.autoenablesItems = false
-                let reason = NSMenuItem(title: why, action: nil, keyEquivalent: "")
-                reason.isEnabled = false
-                sub.addItem(reason)
-                header.submenu = sub
-                header.isEnabled = true
-            } else {
-                header.isEnabled = false
-            }
-            out.append(header)
-            // 執行失敗或權限不符只顯示原因；點擊動作失敗（actionError）則保留上次的項目
-            if p.blocking != nil { continue }
-            guard let o = p.output else {
-                let wait = NSMenuItem(title: "執行中…", action: nil, keyEquivalent: "")
-                wait.isEnabled = false
-                out.append(wait)
-                continue
-            }
-            out.append(contentsOf: o.items.map { menuItem($0, pluginID: p.id, target: target, action: action) })
-            if o.truncated {
-                let t = NSMenuItem(title: "（輸出過長，只顯示前面部分）", action: nil, keyEquivalent: "")
-                t.isEnabled = false
-                out.append(t)
+            init(items: [PluginLogic.Item], truncated: Bool = false) {
+                self.items = items
+                self.truncated = truncated
             }
         }
-        return out
+
+        let id: String
+        let title: String
+        let blockingError: String?
+        let actionError: String?
+        let output: Output?
+
+        init(
+            id: String,
+            title: String,
+            blockingError: String? = nil,
+            actionError: String? = nil,
+            output: Output? = nil
+        ) {
+            self.id = id
+            self.title = title
+            self.blockingError = blockingError
+            self.actionError = actionError
+            self.output = output
+        }
+    }
+
+    /// 所有可點擊項目共用的命令 payload；呈現層不執行命令。
+    enum Command: Equatable, Sendable {
+        case pluginAction(pluginID: String, item: PluginLogic.Item)
+        case settings
+        case refreshAll
+    }
+
+    /// 可在沒有 AppKit 的環境直接比對的純選單樹。
+    struct Tree: Equatable, Sendable {
+        struct Item: Equatable, Sendable {
+            enum Style: Equatable, Sendable {
+                case text(color: String?)
+                case separator
+            }
+
+            let title: String
+            let isEnabled: Bool
+            let style: Style
+            let command: Command?
+            let children: [Item]?
+
+            init(
+                title: String,
+                isEnabled: Bool,
+                style: Style = .text(color: nil),
+                command: Command? = nil,
+                children: [Item]? = nil
+            ) {
+                self.title = title
+                self.isEnabled = isEnabled
+                self.style = style
+                self.command = command
+                self.children = children
+            }
+
+            static let separator = Item(title: "", isEnabled: false, style: .separator)
+        }
+
+        let root: Item
+    }
+
+    /// 將執行期狀態投影成固定的「外掛」根選單。
+    static func project(isActive: Bool, plugins: [PluginSnapshot]) -> Tree {
+        var children: [Tree.Item]
+        if !isActive {
+            children = [disabled("外掛功能未啟用")]
+        } else if plugins.isEmpty {
+            children = [disabled("沒有可用的外掛")]
+        } else {
+            children = plugins.map(pluginItem)
+        }
+
+        children.append(.separator)
+        children.append(Tree.Item(title: "外掛設定…", isEnabled: true, command: .settings))
+        children.append(Tree.Item(title: "全部重新整理", isEnabled: isActive, command: .refreshAll))
+        return Tree(root: Tree.Item(title: "外掛", isEnabled: true, children: children))
+    }
+
+    private static func pluginItem(_ plugin: PluginSnapshot) -> Tree.Item {
+        let hasFailure = plugin.blockingError != nil || plugin.actionError != nil
+        let title = plugin.title + (hasFailure ? " ⚠︎" : "")
+
+        if let reason = plugin.blockingError {
+            return Tree.Item(title: title, isEnabled: true, children: [disabled(reason)])
+        }
+
+        var children: [Tree.Item] = []
+        if let reason = plugin.actionError {
+            children.append(disabled(reason))
+        }
+
+        if let output = plugin.output {
+            if plugin.actionError != nil, !output.items.isEmpty || output.truncated {
+                children.append(.separator)
+            }
+            children.append(contentsOf: output.items.map { outputItem($0, pluginID: plugin.id) })
+            if output.truncated {
+                children.append(disabled("（輸出過長，只顯示前面部分）"))
+            } else if output.items.isEmpty, plugin.actionError == nil {
+                children.append(disabled("沒有可顯示的輸出"))
+            }
+        } else {
+            if plugin.actionError != nil { children.append(.separator) }
+            children.append(disabled("執行中…"))
+        }
+
+        return Tree.Item(title: title, isEnabled: true, children: children)
+    }
+
+    private static func outputItem(_ item: PluginLogic.Item, pluginID: String) -> Tree.Item {
+        if item.isSeparator { return .separator }
+        let command: Command? = item.href != nil || item.bash != nil || item.refresh
+            ? .pluginAction(pluginID: pluginID, item: item)
+            : nil
+        let children = item.children.isEmpty
+            ? nil
+            : item.children.map { outputItem($0, pluginID: pluginID) }
+        return Tree.Item(
+            title: item.text,
+            isEnabled: true,
+            style: .text(color: item.color),
+            command: command,
+            children: children
+        )
+    }
+
+    private static func disabled(_ title: String) -> Tree.Item {
+        Tree.Item(title: title, isEnabled: false)
+    }
+
+    #if canImport(AppKit)
+    // MARK: - AppKit Adapter
+
+    /// Adapter 只把純選單樹轉成 AppKit，不讀取 Runner／UserDefaults，也不執行命令。
+    @MainActor
+    static func rootItem(_ tree: Tree, target: AnyObject, action: Selector) -> NSMenuItem {
+        appKitItem(tree.root, target: target, action: action)
     }
 
     @MainActor
-    private static func menuItem(_ item: PluginLogic.Item, pluginID: String, target: AnyObject, action: Selector) -> NSMenuItem {
-        if item.isSeparator { return .separator() }
-        let m = NSMenuItem(title: item.text, action: nil, keyEquivalent: "")
-        if let c = item.color.flatMap(nsColor) {
-            m.attributedTitle = NSAttributedString(string: item.text, attributes: [
-                .foregroundColor: c, .font: NSFont.menuFont(ofSize: 0),
+    private static func appKitItem(_ item: Tree.Item, target: AnyObject, action: Selector) -> NSMenuItem {
+        if item.style == .separator { return .separator() }
+
+        let result = NSMenuItem(title: item.title, action: nil, keyEquivalent: "")
+        if case .text(let colorName) = item.style,
+           let color = colorName.flatMap(nsColor) {
+            result.attributedTitle = NSAttributedString(string: item.title, attributes: [
+                .foregroundColor: color,
+                .font: NSFont.menuFont(ofSize: 0),
             ])
         }
-        if item.href != nil || item.bash != nil || item.refresh {
-            m.action = action
-            m.target = target
-            m.representedObject = Action(pluginID: pluginID, item: item)
+        if let command = item.command {
+            result.action = action
+            result.target = target
+            result.representedObject = command
         }
-        if !item.children.isEmpty {
-            let sub = NSMenu()
-            sub.autoenablesItems = false
-            for c in item.children { sub.addItem(menuItem(c, pluginID: pluginID, target: target, action: action)) }
-            m.submenu = sub
+        if let children = item.children {
+            let submenu = NSMenu()
+            submenu.autoenablesItems = false
+            for child in children {
+                submenu.addItem(appKitItem(child, target: target, action: action))
+            }
+            result.submenu = submenu
         }
-        m.isEnabled = true
-        return m
+        result.isEnabled = item.isEnabled
+        return result
     }
 
     static func nsColor(_ name: String) -> NSColor? {
@@ -83,4 +199,5 @@ enum PluginMenu {
             return NSColor(srgbRed: r, green: g, blue: b, alpha: 1)
         }
     }
+    #endif
 }

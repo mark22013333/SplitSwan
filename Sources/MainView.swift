@@ -3,11 +3,18 @@ import SwiftUI
 import ServiceManagement
 
 enum MainTab: Hashable { case connection, settings, environment, about }
+private enum SettingsSection: Hashable { case plugins }
 
 @MainActor
 final class WindowModel: ObservableObject {
     @Published var tab: MainTab = .connection
     @Published var showLog = false
+    @Published private(set) var pluginSettingsRequest = 0
+
+    func focusPluginSettings() {
+        tab = .settings
+        pluginSettingsRequest &+= 1
+    }
 }
 
 struct MainView: View {
@@ -168,11 +175,13 @@ struct SettingsTab: View {
     @State private var notifyDenied = false          // macOS 通知權限被拒絕
     @State private var tsText = ""                  // 通道網段編輯框：一行一個
     @State private var showHelp = false
+    @State private var handledPluginSettingsRequest = 0
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
                     SettingsCard("帳號") {
                         FieldRow("使用者名稱") {
                             TextField("", text: $draft.username, prompt: Text("VPN 帳號"))
@@ -256,6 +265,7 @@ struct SettingsTab: View {
                     SettingsCard("外掛") {
                         PluginSettingsView()
                     }
+                    .id(SettingsSection.plugins)
 
                     SettingsCard("其他") {
                         Toggle("登入時自動啟動", isOn: $launchAtLogin)
@@ -269,8 +279,15 @@ struct SettingsTab: View {
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }
+                    }
+                    .padding(4)
                 }
-                .padding(4)
+                .onAppear {
+                    scrollToPluginSettings(request: window.pluginSettingsRequest, proxy: proxy)
+                }
+                .onChange(of: window.pluginSettingsRequest) { _, request in
+                    scrollToPluginSettings(request: request, proxy: proxy)
+                }
             }
 
             Divider().padding(.vertical, 10)
@@ -290,6 +307,14 @@ struct SettingsTab: View {
         }
         .textFieldStyle(.roundedBorder)
         .onAppear { loadDraft(); checkNotifyPermission(); PluginRunner.shared.refreshIfEnabled() }
+    }
+
+    private func scrollToPluginSettings(request: Int, proxy: ScrollViewProxy) {
+        guard request > handledPluginSettingsRequest else { return }
+        handledPluginSettingsRequest = request
+        withAnimation(.easeInOut(duration: 0.2)) {
+            proxy.scrollTo(SettingsSection.plugins, anchor: .top)
+        }
     }
 
     private func checkNotifyPermission() {

@@ -6,6 +6,125 @@ var pass = 0, fail = 0
 func check(_ n: String, _ ok: Bool) { print((ok ? "✅ " : "❌ ") + n); ok ? (pass += 1) : (fail += 1) }
 typealias L = PluginLogic
 typealias Item = PluginLogic.Item
+typealias M = PluginMenu
+
+// MARK: 選單樹投影（AC-14）
+let menuOutput = L.parseOutput("""
+甲輸出
+---
+純文字
+---
+紅色動作 | color=red href=https://example.com/action
+父項
+--重新整理子項 | refresh=true
+""")
+let secondOutput = L.parseOutput("""
+乙輸出
+---
+另一項
+""")
+let menuPlugins = [
+    M.PluginSnapshot(id: "alpha.1m.sh", title: "甲外掛", output: .init(items: menuOutput.items)),
+    M.PluginSnapshot(id: "beta.5m.sh", title: "乙外掛", output: .init(items: secondOutput.items)),
+]
+
+let menuOff = M.project(isActive: false, plugins: menuPlugins)
+let offChildren = menuOff.root.children ?? []
+check("選單樹：功能關閉仍只有單一啟用的「外掛」根節點",
+      menuOff.root.title == "外掛" && menuOff.root.isEnabled && menuOff.root.command == nil
+      && menuOff.root.style == .text(color: nil))
+check("選單樹：功能關閉忽略外掛快照並顯示停用空狀態",
+      offChildren.map(\.title) == ["外掛功能未啟用", "", "外掛設定…", "全部重新整理"]
+      && !offChildren[0].isEnabled && offChildren[0].children == nil)
+check("選單樹：功能關閉時底部設定可用、全部重新整理停用且命令 payload 正確",
+      offChildren[1].style == .separator
+      && offChildren[2].isEnabled && offChildren[2].command == .settings
+      && !offChildren[3].isEnabled && offChildren[3].command == .refreshAll)
+
+let menuEmpty = M.project(isActive: true, plugins: [])
+let emptyChildren = menuEmpty.root.children ?? []
+check("選單樹：功能啟用但零外掛時顯示停用空狀態、全部重新整理可用",
+      menuEmpty.root.title == "外掛" && menuEmpty.root.isEnabled
+      && emptyChildren.map(\.title) == ["沒有可用的外掛", "", "外掛設定…", "全部重新整理"]
+      && !emptyChildren[0].isEnabled && emptyChildren[3].isEnabled && emptyChildren[3].command == .refreshAll)
+
+let menuActive = M.project(isActive: true, plugins: menuPlugins)
+let activeChildren = menuActive.root.children ?? []
+check("選單樹：多外掛依快照順序各自建立子選單",
+      activeChildren.prefix(2).map(\.title) == ["甲外掛", "乙外掛"]
+      && activeChildren.prefix(2).allSatisfy { $0.isEnabled && $0.children != nil })
+let alphaChildren = activeChildren.first?.children ?? []
+check("選單樹：保留文字、分隔線、顏色與原輸出順序",
+      alphaChildren.map(\.title) == ["純文字", "", "紅色動作", "父項"]
+      && alphaChildren[0].style == .text(color: nil) && alphaChildren[0].command == nil
+      && alphaChildren[1].style == .separator
+      && alphaChildren[2].style == .text(color: "red"))
+check("選單樹：動作與既有子項目保留原外掛 ID／原項目 payload",
+      alphaChildren[2].command == .pluginAction(pluginID: "alpha.1m.sh", item: menuOutput.items[2])
+      && alphaChildren[3].children?.map(\.title) == ["重新整理子項"]
+      && alphaChildren[3].children?.first?.command
+          == .pluginAction(pluginID: "alpha.1m.sh", item: menuOutput.items[3].children[0]))
+check("選單樹：底部固定為分隔線、外掛設定、全部重新整理且 payload 正確",
+      activeChildren.suffix(3).map(\.title) == ["", "外掛設定…", "全部重新整理"]
+      && activeChildren[activeChildren.count - 3].style == .separator
+      && activeChildren[activeChildren.count - 2].command == .settings
+      && activeChildren.last?.command == .refreshAll && activeChildren.last?.isEnabled == true)
+
+let menuRunning = M.project(isActive: true, plugins: [.init(id: "run.sh", title: "執行外掛")])
+let runningChildren = menuRunning.root.children?.first?.children ?? []
+check("選單樹：output nil 顯示停用的執行中狀態",
+      runningChildren.count == 1 && runningChildren[0].title == "執行中…" && !runningChildren[0].isEnabled)
+
+let menuNoOutput = M.project(isActive: true, plugins: [
+    .init(id: "empty.sh", title: "空輸出", output: .init(items: [])),
+])
+let noOutputChildren = menuNoOutput.root.children?.first?.children ?? []
+check("選單樹：已有輸出但無項目時顯示停用空狀態",
+      noOutputChildren.count == 1 && noOutputChildren[0].title == "沒有可顯示的輸出"
+      && !noOutputChildren[0].isEnabled)
+
+let menuNoOutputAfterError = M.project(isActive: true, plugins: [
+    .init(id: "empty-error.sh", title: "空輸出", actionError: "點擊原因", output: .init(items: [])),
+])
+let noOutputAfterErrorChildren = menuNoOutputAfterError.root.children?.first?.children ?? []
+check("選單樹：空輸出已有點擊錯誤時只保留原因、不留孤立分隔線",
+      noOutputAfterErrorChildren.count == 1 && noOutputAfterErrorChildren[0].title == "點擊原因"
+      && noOutputAfterErrorChildren[0].style != .separator)
+
+let menuEmptyTruncated = M.project(isActive: true, plugins: [
+    .init(id: "empty-long.sh", title: "截斷輸出", output: .init(items: [], truncated: true)),
+])
+let emptyTruncatedChildren = menuEmptyTruncated.root.children?.first?.children ?? []
+check("選單樹：無項目但已截斷時只顯示截斷提示",
+      emptyTruncatedChildren.count == 1 && emptyTruncatedChildren[0].title == "（輸出過長，只顯示前面部分）")
+
+let menuTruncated = M.project(isActive: true, plugins: [
+    .init(id: "long.sh", title: "長輸出", output: .init(items: [L.parseLine("內容")], truncated: true)),
+])
+let truncatedChildren = menuTruncated.root.children?.first?.children ?? []
+check("選單樹：截斷提示固定置於外掛輸出末端且停用",
+      truncatedChildren.map(\.title) == ["內容", "（輸出過長，只顯示前面部分）"]
+      && truncatedChildren.last?.isEnabled == false)
+
+let menuBlocked = M.project(isActive: true, plugins: [
+    .init(id: "alpha.1m.sh", title: "甲外掛", blockingError: "阻擋原因", actionError: "點擊原因",
+          output: .init(items: menuOutput.items, truncated: true)),
+])
+let blockedPlugin = menuBlocked.root.children?.first
+check("選單樹：阻擋錯誤優先於點擊錯誤與輸出，只顯示停用原因",
+      blockedPlugin?.title == "甲外掛 ⚠︎" && blockedPlugin?.children?.count == 1
+      && blockedPlugin?.children?.first?.title == "阻擋原因" && blockedPlugin?.children?.first?.isEnabled == false)
+
+let menuActionFailed = M.project(isActive: true, plugins: [
+    .init(id: "alpha.1m.sh", title: "甲外掛", actionError: "點擊原因", output: .init(items: menuOutput.items)),
+])
+let actionFailedPlugin = menuActionFailed.root.children?.first
+let actionFailedChildren = actionFailedPlugin?.children ?? []
+check("選單樹：點擊錯誤先顯示停用原因與分隔線，再保留上次成功輸出",
+      actionFailedPlugin?.title == "甲外掛 ⚠︎"
+      && actionFailedChildren.prefix(2).map(\.title) == ["點擊原因", ""]
+      && actionFailedChildren.first?.isEnabled == false && actionFailedChildren[1].style == .separator
+      && Array(actionFailedChildren.dropFirst(2)) == alphaChildren)
 
 // MARK: 檔名與間隔
 check("名稱.間隔.副檔名", L.parseFileName("punch.1m.sh") == L.FileName(name: "punch", interval: 60))
@@ -70,6 +189,34 @@ let many = "T\n---\n" + (1...40).map { "第\($0)項" }.joined(separator: "\n")
 let om = L.parseOutput(many)
 check("40 項 → 30 項且標記截斷", om.items.count == 30 && om.truncated && om.items.last?.text == "第30項")
 check("剛好 30 項不算截斷", !L.parseOutput("T\n---\n" + (1...30).map { "第\($0)項" }.joined(separator: "\n") + "\n\n").truncated)
+func outputNodeCount(_ items: [Item]) -> Int {
+    items.reduce(0) { $0 + 1 + outputNodeCount($1.children) }
+}
+let childSeparatorOrder = L.parseOutput("""
+T
+---
+---
+Parent
+-- ---
+--A
+-- ---
+-- ---
+--B
+-- ---
+---
+""")
+check("子分隔線：忽略開頭、連續與尾端，保留正常順序",
+      childSeparatorOrder.items.count == 1
+      && childSeparatorOrder.items[0].children.map { $0.isSeparator ? "---" : $0.text } == ["A", "---", "B"]
+      && !childSeparatorOrder.truncated)
+let manyChildSeparators = "T\n---\nParent\n" + (1...40)
+    .flatMap { ["--子\($0)", "-- ---"] }
+    .joined(separator: "\n")
+let childSeparatorLimit = L.parseOutput(manyChildSeparators)
+let childSeparatorNodeCount = outputNodeCount(childSeparatorLimit.items)
+check("大量子分隔線：遞迴節點受 30 項上限約束且標記截斷",
+      childSeparatorNodeCount <= L.maxItems && childSeparatorLimit.truncated
+      && childSeparatorLimit.items.first?.children.last?.isSeparator == false)
 let longText = String(repeating: "長", count: 500)
 check("單一項目文字過長截短", (L.parseOutput("T\n---\n" + longText).items.first?.text.count ?? 0) <= L.maxTextLength + 1)
 // 64 KB 截斷不能切壞多位元組字元：每行 3 bytes 的中文
@@ -237,7 +384,8 @@ put("target.sh", "#!/bin/bash\necho x\n", dir: loose)
 try! fm.createSymbolicLink(atPath: pdir + "/linked.1m.sh", withDestinationPath: loose + "/target.sh")
 
 var sent: [(String, String?, String, URL?)] = []
-let runner = PluginRunner(directory: URL(fileURLWithPath: pdir), stateRoot: URL(fileURLWithPath: sdir))
+let runner = PluginRunner(directory: URL(fileURLWithPath: pdir), stateRoot: URL(fileURLWithPath: sdir),
+                          allowInactiveExecution: true)
 // 一般外掛用寬鬆 timeout（高負載下 bash 啟動加防毒掃描可能就要好幾秒）；逾時另外用 slowRunner 驗
 runner.timeout = roomyTimeout
 runner.notifier = { t, st, b, h in sent.append((t, st, b, h)) }
@@ -263,7 +411,8 @@ check("非 0 結束標錯誤並附 stderr 最後一行", plugin("bad.1m.sh")?.er
 let slowDir = root + "/slowdir"
 try! fm.createDirectory(atPath: slowDir, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
 put("slow.10s.sh", "#!/bin/bash\necho 慢\nsleep 30\n", dir: slowDir)
-let slowRunner = PluginRunner(directory: URL(fileURLWithPath: slowDir), stateRoot: URL(fileURLWithPath: sdir))
+let slowRunner = PluginRunner(directory: URL(fileURLWithPath: slowDir), stateRoot: URL(fileURLWithPath: sdir),
+                              allowInactiveExecution: true)
 slowRunner.timeout = 2
 let t0 = Date()
 await slowRunner.refreshAll()
@@ -281,7 +430,8 @@ let notifiedFile = sdir + "/.notified/good.1m.sh.json"
 _ = await eventually { (try? fm.attributesOfItem(atPath: notifiedFile)[.posixPermissions] as? Int) == 0o600 }
 check("每個外掛一份通知紀錄，600", (try? fm.attributesOfItem(atPath: notifiedFile)[.posixPermissions] as? Int) == 0o600)
 // 換一個新的 runner（模擬 App 重新啟動）：從檔案讀回紀錄，仍不重複
-let runner2 = PluginRunner(directory: URL(fileURLWithPath: pdir), stateRoot: URL(fileURLWithPath: sdir))
+let runner2 = PluginRunner(directory: URL(fileURLWithPath: pdir), stateRoot: URL(fileURLWithPath: sdir),
+                           allowInactiveExecution: true)
 runner2.timeout = roomyTimeout
 var sent2 = 0
 runner2.notifier = { _, _, _, _ in sent2 += 1 }
@@ -348,7 +498,8 @@ let big2 = root + "/big"
 try! fm.createDirectory(atPath: big2, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
 put("yes.1m.sh", "#!/bin/bash\necho Y\necho ---\nexec /usr/bin/yes\n", dir: big2)
 put("burst.1m.sh", "#!/bin/bash\necho B\necho ---\n/usr/bin/yes 0123456789 | head -c 3000000\nexit 0\n", dir: big2)
-let runner5 = PluginRunner(directory: URL(fileURLWithPath: big2), stateRoot: URL(fileURLWithPath: sdir))
+let runner5 = PluginRunner(directory: URL(fileURLWithPath: big2), stateRoot: URL(fileURLWithPath: sdir),
+                           allowInactiveExecution: true)
 runner5.timeout = 2
 runner5.scan()
 let rss0 = maxRSS()
@@ -383,7 +534,7 @@ sub.cancel()
 let ov = root + "/ov"
 try! fm.createDirectory(atPath: ov, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
 let slowLog = root + "/slow.log"
-put("slow.1m.sh", "#!/bin/bash\necho \"start $$\" >> \"\(slowLog)\"\nsleep 1\necho \"end $$\" >> \"\(slowLog)\"\necho S\necho ---\necho \"點 | bash=$0 param1=x\"\n", dir: ov)
+put("slow.1m.sh", "#!/bin/bash\necho \"start $$\" >> \"\(slowLog)\"\nif [ -f \"$SPLITSWAN_PLUGIN_STATE/hold\" ] && [ \"$1\" != x ]; then while [ ! -f \"$SPLITSWAN_PLUGIN_STATE/release\" ]; do sleep 0.02; done; fi\nsleep 1\necho \"end $$\" >> \"\(slowLog)\"\necho S\necho ---\necho \"點 | bash=$0 param1=x\"\n", dir: ov)
 let runner6 = PluginRunner(directory: URL(fileURLWithPath: ov), stateRoot: URL(fileURLWithPath: sdir))
 runner6.timeout = roomyTimeout   // 高負載下 sleep 1 的腳本也可能超過好幾秒
 func maxDepth() -> (Int, Int) {
@@ -397,30 +548,43 @@ func slowCounts() -> (starts: Int, ends: Int) {
     let lines = ((try? String(contentsOfFile: slowLog, encoding: .utf8)) ?? "").split(separator: "\n")
     return (lines.filter { $0.hasPrefix("start") }.count, lines.filter { $0.hasPrefix("end") }.count)
 }
-runner6.scan()
-let t6 = Task { await runner6.run("slow.1m.sh") }
+runner6.setEnabled(true)
 _ = await eventually { runner6.runningIDs.contains("slow.1m.sh") }   // 確定第一次已在執行中，再關閉重開
 runner6.setEnabled(false)
 runner6.setEnabled(true)
-_ = await t6.value
 // 重開後的補跑要等它真的跑完（開始＝結束），否則下面清空紀錄後才寫入的 end 會讓深度計算錯位
 _ = await eventually { let c = slowCounts(); return c.starts >= 2 && c.starts == c.ends }
 runner6.setEnabled(false)
 let (d1, cnt1) = maxDepth()
 check("關閉後立刻重開不重疊執行（最大同時 \(d1)，共 \(cnt1) 次）", d1 == 1 && cnt1 >= 1)
 try? "".write(toFile: slowLog, atomically: false, encoding: .utf8)
-runner6.scan()
-await runner6.run("slow.1m.sh")
+// 點擊動作測試改用從未啟用過的 runner，保留 direct-test seam；
+// 已啟用過又關閉的 runner 依生命週期規則不得再直接 run。
+let actionRunner = PluginRunner(directory: URL(fileURLWithPath: ov), stateRoot: URL(fileURLWithPath: sdir),
+                                allowInactiveExecution: true)
+actionRunner.timeout = roomyTimeout
+actionRunner.scan()
+await actionRunner.run("slow.1m.sh")
 try? "".write(toFile: slowLog, atomically: false, encoding: .utf8)
-let t7 = Task { await runner6.run("slow.1m.sh") }
-_ = await eventually { runner6.runningIDs.contains("slow.1m.sh") }   // 確定排程那次已在執行中，再點擊
-if let click = runner6.plugins.first(where: { $0.id == "slow.1m.sh" })?.output?.items.first(where: { $0.text == "點" }) {
-    runner6.perform(pluginID: "slow.1m.sh", item: click)
+let actionState = sdir + "/slow.1m.sh"
+try? fm.removeItem(atPath: actionState + "/release")
+try! "hold".write(toFile: actionState + "/hold", atomically: false, encoding: .utf8)
+let t7 = Task { await actionRunner.run("slow.1m.sh") }
+_ = await eventually { actionRunner.runningIDs.contains("slow.1m.sh") }   // 確定排程那次已在執行中，再點擊
+if let click = actionRunner.plugins.first(where: { $0.id == "slow.1m.sh" })?.output?.items.first(where: { $0.text == "點" }) {
+    actionRunner.perform(pluginID: "slow.1m.sh", item: click)
+    actionRunner.perform(pluginID: "slow.1m.sh", item: click)
 } else { check("找到「點」項目", false) }
+let bothActionsQueued = await eventually { actionRunner.pendingIdleWaiterCount == 2 }
+try! "release".write(toFile: actionState + "/release", atomically: false, encoding: .utf8)
 _ = await t7.value
-_ = await eventually { let c = slowCounts(); return c.starts >= 2 && c.starts == c.ends }   // 點擊那次也跑完
+_ = await eventually { let c = slowCounts(); return c.starts >= 3 && c.starts == c.ends }   // 兩個點擊也依序跑完
 let (d2, cnt2) = maxDepth()
-check("點擊 bash= 與排程執行不重疊（最大同時 \(d2)，共 \(cnt2) 次）", d2 == 1 && cnt2 == 2)
+check("同一外掛在 run 中連排兩個 perform：全部完成且不重疊（最大同時 \(d2)，共 \(cnt2) 次）",
+      bothActionsQueued && d2 == 1 && cnt2 == 3 && actionRunner.pendingIdleWaiterCount == 0)
+await actionRunner.run("slow.1m.sh")
+let (d3, cnt3) = maxDepth()
+check("序列 waiter 清空後仍可再執行", d3 == 1 && cnt3 == 4 && actionRunner.pendingIdleWaiterCount == 0)
 
 // 數量上限：11 個外掛只取前 10 個
 let many2 = root + "/many"
@@ -472,6 +636,96 @@ check("沒暫停過的原因解除不會多跑", pr.resources.timers == 3)
 pr.setEnabled(false)
 let r2 = pr.resources
 check("再關閉：timer、監看、事件訂閱全部釋放", r2.timers == 0 && !r2.watching && r2.observers == 0 && pr.plugins.isEmpty)
+
+// direct-test seam 必須由建構式明確開啟，不再從「是否啟用過」猜測測試意圖。
+let directPolicyDir = root + "/direct-policy", directPolicyLog = root + "/direct-policy.log"
+try! fm.createDirectory(atPath: directPolicyDir, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+put("direct.1m.sh", "#!/bin/bash\necho direct >> \"\(directPolicyLog)\"\necho D\n", dir: directPolicyDir)
+let defaultInactive = PluginRunner(directory: URL(fileURLWithPath: directPolicyDir),
+                                   stateRoot: URL(fileURLWithPath: root + "/direct-policy-default-state"))
+await defaultInactive.refreshAll()
+check("預設 runner 在 inactive 時直接 refreshAll 不掃描、不執行",
+      defaultInactive.plugins.isEmpty && !fm.fileExists(atPath: directPolicyLog))
+defaultInactive.scan()
+await defaultInactive.run("direct.1m.sh")
+check("預設 runner 在 inactive 時直接 run 不執行", !fm.fileExists(atPath: directPolicyLog))
+let explicitDirect = PluginRunner(directory: URL(fileURLWithPath: directPolicyDir),
+                                  stateRoot: URL(fileURLWithPath: root + "/direct-policy-explicit-state"),
+                                  allowInactiveExecution: true)
+await explicitDirect.refreshAll()
+check("明確開啟測試旗標後仍可 direct refreshAll/run",
+      explicitDirect.plugins.first?.output?.title == "D" && logLines(directPolicyLog) == 1)
+
+// 重新整理請求的生命週期競速：請求排入後立刻關閉，下一輪 MainActor 不得掃描或執行。
+func logLines(_ path: String) -> Int {
+    ((try? String(contentsOfFile: path, encoding: .utf8)) ?? "").split(separator: "\n").count
+}
+let disableRaceDir = root + "/refresh-disable", disableRaceState = root + "/refresh-disable-state"
+let disableRaceLog = root + "/refresh-disable.log"
+try! fm.createDirectory(atPath: disableRaceDir, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+put("race.1m.sh", "#!/bin/bash\necho run >> \"\(disableRaceLog)\"\necho R\n", dir: disableRaceDir)
+let disableRace = PluginRunner(directory: URL(fileURLWithPath: disableRaceDir),
+                               stateRoot: URL(fileURLWithPath: disableRaceState))
+disableRace.timeout = roomyTimeout
+disableRace.setEnabled(true)
+_ = await eventually { disableRace.lastRuns["race.1m.sh"] != nil }
+let runsBeforeDisableRequest = logLines(disableRaceLog)
+disableRace.requestRefresh()
+disableRace.setEnabled(false)
+await Task.yield()
+await Task.yield()
+check("重新整理後立即關閉：不掃描、不執行、不重新建立資源",
+      disableRace.plugins.isEmpty && logLines(disableRaceLog) == runsBeforeDisableRequest
+      && disableRace.resources.timers == 0 && !disableRace.resources.watching)
+disableRace.scan()
+await disableRace.run("race.1m.sh")
+check("已啟用過的 runner 關閉後直接 run 也不會啟動",
+      logLines(disableRaceLog) == runsBeforeDisableRequest)
+var disabledOpenedURLs = 0
+disableRace.urlOpener = { _ in disabledOpenedURLs += 1 }
+let disabledAction = L.parseLine("x | href=https://example.com bash=\(disableRaceDir)/race.1m.sh refresh=true")
+disableRace.perform(pluginID: "race.1m.sh", item: disabledAction)
+await Task.yield()
+check("關閉時 perform 不開網址、不執行 bash、不 refresh",
+      disabledOpenedURLs == 0 && logLines(disableRaceLog) == runsBeforeDisableRequest)
+
+// 同一競速改為立即暫停；新檔案若被掃到，就代表已進入 refresh 主體。
+let pauseRaceDir = root + "/refresh-pause", pauseRaceState = root + "/refresh-pause-state"
+let pauseRaceLog = root + "/refresh-pause.log"
+try! fm.createDirectory(atPath: pauseRaceDir, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+put("base.1m.sh", "#!/bin/bash\necho base >> \"\(pauseRaceLog)\"\necho B\n", dir: pauseRaceDir)
+let pauseRace = PluginRunner(directory: URL(fileURLWithPath: pauseRaceDir),
+                             stateRoot: URL(fileURLWithPath: pauseRaceState))
+pauseRace.timeout = roomyTimeout
+pauseRace.setEnabled(true)
+_ = await eventually { pauseRace.lastRuns["base.1m.sh"] != nil }
+var missingPluginOpenedURLs = 0
+pauseRace.urlOpener = { _ in missingPluginOpenedURLs += 1 }
+pauseRace.perform(pluginID: "missing.1m.sh", item: L.parseLine("x | href=https://example.com"))
+check("perform 在外掛不存在時不先開啟 href", missingPluginOpenedURLs == 0)
+let pauseIDs = pauseRace.plugins.map(\.id)
+let runsBeforePauseRequest = logLines(pauseRaceLog)
+put("late.1m.sh", "#!/bin/bash\necho late >> \"\(pauseRaceLog)\"\necho L\n", dir: pauseRaceDir)
+let queuedPauseAction = L.parseLine("x | bash=\(pauseRaceDir)/base.1m.sh refresh=true")
+pauseRace.perform(pluginID: "base.1m.sh", item: queuedPauseAction)
+pauseRace.requestRefresh()
+pauseRace.pause(.locked)
+await Task.yield()
+await Task.yield()
+check("perform／重新整理排入後立即暫停：不掃描、不執行、不重新載入",
+      pauseRace.plugins.map(\.id) == pauseIDs && logLines(pauseRaceLog) == runsBeforePauseRequest
+      && pauseRace.resources.timers == 0)
+await pauseRace.run("base.1m.sh")
+check("暫停時直接 run 也不會啟動", logLines(pauseRaceLog) == runsBeforePauseRequest)
+var pausedOpenedURLs = 0
+pauseRace.urlOpener = { _ in pausedOpenedURLs += 1 }
+let pausedAction = L.parseLine("x | href=https://example.com bash=\(pauseRaceDir)/base.1m.sh refresh=true")
+pauseRace.perform(pluginID: "base.1m.sh", item: pausedAction)
+await Task.yield()
+check("暫停時 perform 不開網址、不執行 bash、不 refresh",
+      pausedOpenedURLs == 0 && logLines(pauseRaceLog) == runsBeforePauseRequest)
+pauseRace.setEnabled(false)
+
 // 同時執行上限 2
 let cc = root + "/cc", ccLog = root + "/cc.log"
 try! fm.createDirectory(atPath: cc, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
@@ -480,7 +734,8 @@ try! fm.createDirectory(atPath: cc, withIntermediateDirectories: false, attribut
 for i in 1...4 {
     put("c\(i).1m.sh", "#!/bin/bash\necho \"start\" >> \"\(ccLog)\"\nfor _ in {1..200}; do [ \"$(grep -c start \"\(ccLog)\")\" -ge 2 ] && break; sleep 0.1; done\nsleep 0.8\necho \"end\" >> \"\(ccLog)\"\necho C\n", dir: cc)
 }
-let ccr = PluginRunner(directory: URL(fileURLWithPath: cc), stateRoot: URL(fileURLWithPath: perfState))
+let ccr = PluginRunner(directory: URL(fileURLWithPath: cc), stateRoot: URL(fileURLWithPath: perfState),
+                       allowInactiveExecution: true)
 ccr.timeout = roomyTimeout
 let tc = Date()
 await ccr.refreshAll()
@@ -548,7 +803,8 @@ check("帶 com.apple.quarantine → 拒絕", sh("/usr/bin/xattr", ["-w", "com.ap
 let dupDir = mkPluginDir("dup"), dupState = root + "/sec-dup/state"
 put("a.1m.sh", "#!/bin/bash\necho \"$SPLITSWAN_PLUGIN_STATE\"\n", dir: dupDir)
 put("a.5m.py", "#!/bin/bash\necho \"$SPLITSWAN_PLUGIN_STATE\"\n", dir: dupDir)
-let dupR = PluginRunner(directory: URL(fileURLWithPath: dupDir), stateRoot: URL(fileURLWithPath: dupState))
+let dupR = PluginRunner(directory: URL(fileURLWithPath: dupDir), stateRoot: URL(fileURLWithPath: dupState),
+                        allowInactiveExecution: true)
 dupR.timeout = roomyTimeout
 await dupR.refreshAll()
 check("a.1m.sh 與 a.5m.py 各自的狀態資料夾", dupR.plugins.first { $0.id == "a.1m.sh" }?.output?.title == dupState + "/a.1m.sh"
@@ -556,7 +812,8 @@ check("a.1m.sh 與 a.5m.py 各自的狀態資料夾", dupR.plugins.first { $0.id
 // stderr 有上限、不寫檔
 let errDir = mkPluginDir("stderr"), errState = root + "/sec-stderr/state"
 put("e.1m.sh", "#!/bin/bash\nhead -c 3000000 /dev/zero | tr '\\0' 'e' >&2\necho >&2\necho 最後一行 >&2\nexit 2\n", dir: errDir)
-let errR = PluginRunner(directory: URL(fileURLWithPath: errDir), stateRoot: URL(fileURLWithPath: errState))
+let errR = PluginRunner(directory: URL(fileURLWithPath: errDir), stateRoot: URL(fileURLWithPath: errState),
+                        allowInactiveExecution: true)
 errR.timeout = roomyTimeout
 await errR.refreshAll()
 let errMsg = errR.plugins.first?.error ?? ""

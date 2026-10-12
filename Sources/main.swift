@@ -20,8 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var disconnectItem: NSMenuItem!
     private let updateItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let updateSeparator = NSMenuItem.separator()
-    private let pluginAnchor = NSMenuItem.separator()    // 外掛區段插在這條分隔線之前（「結束」之上）
-    private var pluginItems: [NSMenuItem] = []
+    private let pluginAnchor = NSMenuItem.separator()    // 「外掛」根項目插在這條分隔線之前（「結束」之上）
+    private var pluginItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMainMenu()
@@ -63,8 +63,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         PluginRunner.shared.notifier = { title, subtitle, body, href in
             DropNotifier.shared.sendPlugin(plugin: title, title: title, subtitle: subtitle, body: body, href: href)
         }
-        PluginRunner.shared.$plugins.removeDuplicates().receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.renderPlugins() }
+        PluginRunner.shared.$plugins.combineLatest(PluginRunner.shared.$isActive)
+            .removeDuplicates { previous, current in
+                previous.0 == current.0 && previous.1 == current.1
+            }
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _, _ in self?.renderPlugins() }
             .store(in: &bag)
         PluginRunner.shared.start()
 
@@ -231,17 +235,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showWindow()
     }
 
-    /// 外掛區段：VPN 項目之後、「結束」之前，每個外掛一段
+    /// 外掛根項目：VPN 項目之後、「結束」之前，主選單永遠只保留這一個入口。
     private func renderPlugins() {
-        for item in pluginItems { menu.removeItem(item) }
-        pluginItems = PluginMenu.sections(PluginRunner.shared.plugins, target: self, action: #selector(pluginClicked(_:)))
-        var at = menu.index(of: pluginAnchor)
-        for item in pluginItems { menu.insertItem(item, at: at); at += 1 }
+        let runner = PluginRunner.shared
+        let snapshots = runner.plugins.map { plugin in
+            PluginMenu.PluginSnapshot(
+                id: plugin.id,
+                title: plugin.title,
+                blockingError: plugin.blocking,
+                actionError: plugin.actionError,
+                output: plugin.output.map {
+                    PluginMenu.PluginSnapshot.Output(items: $0.items, truncated: $0.truncated)
+                }
+            )
+        }
+        let tree = PluginMenu.project(isActive: runner.isActive, plugins: snapshots)
+        let newItem = PluginMenu.rootItem(tree, target: self, action: #selector(pluginCommand(_:)))
+        if let pluginItem { menu.removeItem(pluginItem) }
+        menu.insertItem(newItem, at: menu.index(of: pluginAnchor))
+        pluginItem = newItem
     }
 
-    @objc private func pluginClicked(_ sender: NSMenuItem) {
-        guard let a = sender.representedObject as? PluginMenu.Action else { return }
-        PluginRunner.shared.perform(pluginID: a.pluginID, item: a.item)
+    @objc private func pluginCommand(_ sender: NSMenuItem) {
+        guard let command = sender.representedObject as? PluginMenu.Command else { return }
+        switch command {
+        case .pluginAction(let pluginID, let item):
+            PluginRunner.shared.perform(pluginID: pluginID, item: item)
+        case .settings:
+            showWindow()
+            windowModel.focusPluginSettings()
+        case .refreshAll:
+            PluginRunner.shared.requestRefresh()
+        }
     }
 
     private func renderUpdateItem() {
