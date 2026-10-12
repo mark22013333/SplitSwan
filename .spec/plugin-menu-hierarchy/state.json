@@ -4,10 +4,10 @@
   "name": "外掛選單分層與可擴充架構",
   "type": "feature",
   "inferred": false,
-  "phase": "review",
+  "phase": "close",
   "next": {
-    "command": "/plan-verify --recheck",
-    "reason": "驗收有 WARN；可重驗，或確認可接受後改跑 /plan-review"
+    "command": null,
+    "reason": "任務已結案（close 完成），可用 /plan-start 開新任務"
   },
   "steps": {
     "start": {
@@ -59,8 +59,8 @@
       "reason": null
     },
     "close": {
-      "status": "pending",
-      "at": null,
+      "status": "done",
+      "at": "2026-10-13T00:24:28+08:00",
       "commit": null,
       "reason": null
     }
@@ -129,12 +129,12 @@
   "git": {
     "branch": "feature/plugin-menu-hierarchy",
     "base": "main",
-    "last_commit": "3ab0479"
+    "last_commit": "e313cbb"
   },
   "notion": {
     "page_id": "3f7a401b-e0f5-8113-b525-e7cc08292cb6",
-    "mirrored_status": "進行中",
-    "last_synced_at": "2026-10-12T08:56:14+08:00"
+    "mirrored_status": "已完成",
+    "last_synced_at": "2026-10-13T00:24:28+08:00"
   },
   "deploy": {
     "steps_total": 0,
@@ -142,11 +142,6 @@
   },
   "parked": null,
   "history": [
-    {
-      "at": "2026-10-12T08:56:14+08:00",
-      "event": "init",
-      "detail": "type=feature"
-    },
     {
       "at": "2026-10-12T08:56:14+08:00",
       "event": "set",
@@ -391,8 +386,13 @@
       "at": "2026-10-13T00:22:21+08:00",
       "event": "set",
       "detail": "git.last_commit"
+    },
+    {
+      "at": "2026-10-13T00:24:28+08:00",
+      "event": "set",
+      "detail": "steps.close=done；phase=close；git.last_commit；notion.mirrored_status=已完成；notion.last_synced_at"
     }
   ],
   "created": "2026-10-12T08:56:14+08:00",
-  "updated": "2026-10-13T00:22:21+08:00"
+  "updated": "2026-10-13T00:24:28+08:00"
 }
