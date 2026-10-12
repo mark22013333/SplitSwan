@@ -29,7 +29,7 @@ files() {
     update)     echo Tests/UpdateTests.swift $S/UpdateLogic.swift $S/UpdateInstaller.swift $S/ProcessRunner.swift $S/AboutInfo.swift \
                      $S/AppInfo.swift $S/DiagnosticReport.swift $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift ;;
     about)      echo Tests/AboutTests.swift $S/AboutInfo.swift $S/AppInfo.swift ;;
-    plugins)    echo Tests/PluginTests.swift $S/PluginLogic.swift $S/PluginRunner.swift $S/ProcessRunner.swift $S/DiagnosticReport.swift \
+    plugins)    echo Tests/PluginTests.swift $S/PluginLogic.swift $S/PluginMenu.swift $S/PluginRunner.swift $S/ProcessRunner.swift $S/DiagnosticReport.swift \
                      $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
     *) return 1 ;;
   esac

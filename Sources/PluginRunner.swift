@@ -78,10 +78,12 @@ final class PluginRunner: ObservableObject {
     var timeout: TimeInterval = PluginLogic.timeout
     /// 通知發送端（App 內接到 DropNotifier；測試時換成記錄用的閉包）。title 固定為「外掛：<名稱>」，subtitle 是外掛輸出的標題
     var notifier: (_ title: String, _ subtitle: String?, _ body: String, _ href: URL?) -> Void = { _, _, _, _ in }
+    /// 網址開啟端（測試時可改為記錄用閉包）。
+    var urlOpener: (URL) -> Void = { _ = NSWorkspace.shared.open($0) }
     var now: () -> Date = Date.init
 
     /// 開關打開後才為 true；false 時不持有任何 timer、監看或事件訂閱
-    private(set) var isActive = false
+    @Published private(set) var isActive = false
     private(set) var paused: Set<PauseReason> = []
     private var timers: [String: Timer] = [:]
     private var watcher: DispatchSourceFileSystemObject?
@@ -90,7 +92,7 @@ final class PluginRunner: ObservableObject {
     private var notifyLogs: [String: PluginLogic.NotifyLog] = [:]
     /// 每次關閉或暫停就加一；排隊中或執行中的 run 發現世代變了就放棄（不開始、不更新、不發通知）
     private var epoch = 0
-    private var everActivated = false
+    private let allowInactiveExecution: Bool
     private var idleWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
     /// 要求執行時該外掛還在跑（例：關閉後立刻重開、暫停中途恢復，舊的那次結果會被丟棄），
     /// 等它結束後補跑一次，不重疊、不必等到下一個間隔
@@ -101,15 +103,17 @@ final class PluginRunner: ObservableObject {
     private var slotsInUse = 0
     private var slotWaiters: [CheckedContinuation<Void, Never>] = []
 
-    init(directory: URL, stateRoot: URL) {
+    init(directory: URL, stateRoot: URL, allowInactiveExecution: Bool = false) {
         self.directory = directory
         self.stateRoot = stateRoot
+        self.allowInactiveExecution = allowInactiveExecution
     }
 
     static var isEnabled: Bool { UserDefaults.standard.bool(forKey: enabledKey) }
 
     /// 量測／測試用：目前持有的資源
     var resources: (timers: Int, watching: Bool, observers: Int) { (timers.count, watcher != nil, observers.count) }
+    var pendingIdleWaiterCount: Int { idleWaiters.values.reduce(0) { $0 + $1.count } }
     func timerTolerance(_ id: String) -> TimeInterval? { timers[id]?.tolerance }
 
     // MARK: 啟動／停止
@@ -124,10 +128,9 @@ final class PluginRunner: ObservableObject {
         if on {
             if !isActive {
                 isActive = true
-                everActivated = true
                 addObservers()
             }
-            Task { await refreshAll() }
+            requestRefresh()
             return
         }
         guard isActive else { return }
@@ -144,12 +147,26 @@ final class PluginRunner: ObservableObject {
 
     /// 開啟設定頁、喚醒時呼叫
     func refreshIfEnabled() {
-        guard isActive else { return }
-        Task { await refreshAll() }
+        requestRefresh()
+    }
+
+    /// UI 與生命週期事件共用的重新整理入口。在同步請求當下擷取世代，
+    /// 實際開始時若已關閉、暫停或世代改變，連掃描都不會進行。
+    func requestRefresh() {
+        guard isActive, paused.isEmpty else { return }
+        let requestedEpoch = epoch
+        Task { await refreshAll(requestedEpoch: requestedEpoch) }
     }
 
     /// 重新掃描、同步監看與排程，並立刻執行全部外掛（測試也直接呼叫這個）
     func refreshAll() async {
+        let requestedEpoch = epoch
+        guard isActiveOrDirect, paused.isEmpty else { return }
+        await refreshAll(requestedEpoch: requestedEpoch)
+    }
+
+    private func refreshAll(requestedEpoch: Int) async {
+        guard isActiveOrDirect, paused.isEmpty, requestedEpoch == epoch else { return }
         scan()
         for p in plugins where p.actionError != nil { update(p.id) { $0.actionError = nil } }
         syncWatcher()
@@ -171,7 +188,7 @@ final class PluginRunner: ObservableObject {
     /// 所有暫停原因都解除後，各跑一次再恢復排程
     func resume(_ reason: PauseReason) {
         guard isActive, paused.remove(reason) != nil, paused.isEmpty else { return }
-        Task { await refreshAll() }
+        requestRefresh()
     }
 
     private func addObservers() {
@@ -406,13 +423,18 @@ final class PluginRunner: ObservableObject {
     nonisolated static let stderrLimit = 4096
 
     func run(_ id: String) async {
+        guard isActiveOrDirect, paused.isEmpty else { return }
         guard let p = plugins.first(where: { $0.id == id }) else { return }
         if inFlight.contains(id) { rerunAfter.insert(id); return }
         let myEpoch = epoch
         setInFlight(id, true)
         await acquireSlot()
         // 排隊期間被關閉或暫停：不開始
-        guard myEpoch == epoch else { releaseSlot(); setInFlight(id, false); return }
+        guard myEpoch == epoch, isActiveOrDirect, paused.isEmpty else {
+            releaseSlot()
+            setInFlight(id, false)
+            return
+        }
         let r = await Task.detached(priority: .utility) { [stateRoot, directory, timeout] in
             await Self.execute(path: p.path, id: p.id, pluginDir: directory.path, stateRoot: stateRoot.path,
                                args: [], timeout: timeout, parse: true)
@@ -420,7 +442,7 @@ final class PluginRunner: ObservableObject {
         releaseSlot()
         setInFlight(id, false)
         // 執行期間被關閉或暫停：結果丟棄，不更新選單、不發通知、不寫紀錄
-        guard myEpoch == epoch else { return }
+        guard myEpoch == epoch, isActiveOrDirect, paused.isEmpty else { return }
         if r.problem == nil { lastRuns[id] = now() }
         update(id) { pl in
             pl.problem = r.problem
@@ -495,8 +517,14 @@ final class PluginRunner: ObservableObject {
         if on { inFlight.insert(id) } else { inFlight.remove(id) }
         let r = inFlight
         if r != runningIDs { runningIDs = r }
-        if !on, let waiters = idleWaiters.removeValue(forKey: id) {
-            for w in waiters { w.resume() }
+        if !on, var waiters = idleWaiters[id], !waiters.isEmpty {
+            let next = waiters.removeFirst()
+            if waiters.isEmpty {
+                idleWaiters[id] = nil
+            } else {
+                idleWaiters[id] = waiters
+            }
+            next.resume()
         }
         // 補跑：只在目前可以執行（已開啟或測試直接呼叫、且沒有暫停）時；暫停期間由 resume 的 refreshAll 負責
         if !on, rerunAfter.remove(id) != nil, isActiveOrDirect, paused.isEmpty {
@@ -571,8 +599,8 @@ final class PluginRunner: ObservableObject {
         Task.detached(priority: .utility) { Self.saveNotifyLog(toSave, to: url) }
     }
 
-    /// 測試直接呼叫 run()（沒開啟）時也要能發通知；開啟過又關閉則不發
-    private var isActiveOrDirect: Bool { isActive || !everActivated }
+    /// 正式路徑必須已啟用；只有建構時明確開啟的測試 runner 可在 inactive 狀態直接執行。
+    private var isActiveOrDirect: Bool { isActive || allowInactiveExecution }
 
     // MARK: 點擊
 
@@ -580,8 +608,9 @@ final class PluginRunner: ObservableObject {
     /// 取得執行名額之後、執行之前再做一次完整檢查；refresh=true 完成後重跑外掛。
     /// 點擊動作與排程執行共用 inFlight 與同時執行上限，不會重疊；失敗時保留上次的項目、標題加 ⚠︎
     func perform(pluginID: String, item: PluginLogic.Item) {
-        if let url = item.href { NSWorkspace.shared.open(url) }
-        guard let p = plugins.first(where: { $0.id == pluginID }) else { return }
+        guard isActiveOrDirect, paused.isEmpty,
+              let p = plugins.first(where: { $0.id == pluginID }) else { return }
+        if let url = item.href { urlOpener(url) }
         guard let bash = item.bash else {
             if item.refresh { Task { await run(pluginID) } }
             return
@@ -599,7 +628,11 @@ final class PluginRunner: ObservableObject {
             await waitUntilIdle(pluginID)        // 外掛正在跑（排程或上一個點擊）就等它結束
             setInFlight(pluginID, true)
             await acquireSlot()
-            guard myEpoch == epoch else { releaseSlot(); setInFlight(pluginID, false); return }
+            guard myEpoch == epoch, isActiveOrDirect, paused.isEmpty else {
+                releaseSlot()
+                setInFlight(pluginID, false)
+                return
+            }
             // execute 會在取得名額之後重新做完整檢查，並確認仍是外掛本身
             let r = await Task.detached(priority: .utility) { [stateRoot, directory, timeout] in
                 await Self.execute(path: p.path, id: p.id, pluginDir: directory.path, stateRoot: stateRoot.path,
@@ -607,7 +640,7 @@ final class PluginRunner: ObservableObject {
             }.value
             releaseSlot()
             setInFlight(pluginID, false)
-            guard myEpoch == epoch else { return }
+            guard myEpoch == epoch, isActiveOrDirect, paused.isEmpty else { return }
             update(pluginID) { pl in
                 if let why = r.problem { pl.actionError = "點擊動作被拒：\(why)"; return }
                 pl.actionError = r.timedOut ? "點擊動作逾時" : (r.code != 0 ? "點擊動作結束碼 \(r.code)" : r.error)

@@ -114,6 +114,8 @@ enum PluginLogic {
         var items: [Item] = []
         var inBody = false
         var count = 0
+        var pendingSeparator = false
+        var pendingChildSeparatorFor: Int?
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if !inBody {
@@ -122,29 +124,49 @@ enum PluginLogic {
                 continue
             }
             if trimmed == "---" {
-                // 開頭或連續的分隔線不必顯示
-                if let last = items.last, !last.isSeparator { items.append(.separator) }
+                // 延後到後面真的有項目時才加入，避免尾端分隔線佔用上限。
+                pendingChildSeparatorFor = nil
+                if let last = items.last, !last.isSeparator { pendingSeparator = true }
                 continue
             }
             if line.hasPrefix("--") {
                 // 子選單：掛在上一個非分隔線項目底下
-                guard let i = items.indices.last, !items[i].isSeparator else { continue }
+                guard !pendingSeparator, let i = items.indices.last, !items[i].isSeparator else { continue }
                 let rest = String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces)
-                if rest == "---" { items[i].children.append(.separator); continue }
+                if rest == "---" {
+                    // 子層開頭、連續或尾端分隔線都不顯示。
+                    if let last = items[i].children.last, !last.isSeparator {
+                        pendingChildSeparatorFor = i
+                    }
+                    continue
+                }
                 let child = parseLine(rest)
                 guard !child.text.isEmpty else { continue }
-                if count >= maxItems { truncated = true; break }
+                let needsSeparator = pendingChildSeparatorFor == i
+                let needed = needsSeparator ? 2 : 1
+                if count + needed > maxItems { truncated = true; break }
+                if needsSeparator {
+                    items[i].children.append(.separator)
+                    count += 1
+                }
                 items[i].children.append(child)
                 count += 1
+                pendingChildSeparatorFor = nil
                 continue
             }
             let item = parseLine(trimmed)
             guard !item.text.isEmpty else { continue }   // 空字串項目略過
-            if count >= maxItems { truncated = true; break }
+            pendingChildSeparatorFor = nil
+            let needed = pendingSeparator ? 2 : 1
+            if count + needed > maxItems { truncated = true; break }
+            if pendingSeparator {
+                items.append(.separator)
+                count += 1
+            }
             items.append(item)
             count += 1
+            pendingSeparator = false
         }
-        if items.last?.isSeparator == true { items.removeLast() }
         return Output(title: title, items: items, truncated: truncated)
     }
 
