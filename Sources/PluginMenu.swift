@@ -157,10 +157,20 @@ enum PluginMenu {
     /// 點擊後只送出命令並停留在原子選單，直到使用者點選單外或按 Esc。
     @MainActor
     final class StickyActionButton: NSButton {
+        static let leadingInset: CGFloat = 28
+        static let trailingInset: CGFloat = 12
+        static let minimumWidth: CGFloat = 260
+
         let command: Command
+        let normalTitleColor: NSColor
+        private var hoverTrackingArea: NSTrackingArea?
+        private var isHovered = false {
+            didSet { needsDisplay = true }
+        }
 
         init(title: String, color: NSColor?, command: Command, target: AnyObject, action: Selector) {
             self.command = command
+            normalTitleColor = color ?? .labelColor
             super.init(frame: .zero)
             self.title = title
             self.target = target
@@ -171,20 +181,75 @@ enum PluginMenu {
             font = .menuFont(ofSize: 0)
             focusRingType = .none
             setButtonType(.momentaryChange)
-            contentTintColor = color
-            toolTip = "點擊後選單會保持開啟，完成時另行通知"
+            toolTip = nil
 
-            let width = max(260, min(520, ceil((title as NSString).size(withAttributes: [.font: font!]).width) + 34))
+            let titleWidth = ceil((title as NSString).size(withAttributes: [.font: font!]).width)
+            let width = max(Self.minimumWidth,
+                            min(520, titleWidth + Self.leadingInset + Self.trailingInset))
             frame.size = NSSize(width: width, height: 24)
         }
 
         required init?(coder: NSCoder) { nil }
+
+        override func updateTrackingAreas() {
+            if let hoverTrackingArea { removeTrackingArea(hoverTrackingArea) }
+            let trackingArea = NSTrackingArea(
+                rect: bounds,
+                options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                owner: self,
+                userInfo: nil
+            )
+            addTrackingArea(trackingArea)
+            hoverTrackingArea = trackingArea
+            super.updateTrackingAreas()
+        }
+
+        override func mouseEntered(with event: NSEvent) {
+            isHovered = isEnabled
+        }
+
+        override func mouseExited(with event: NSEvent) {
+            isHovered = false
+        }
+
+        override func draw(_ dirtyRect: NSRect) {
+            if isHovered && isEnabled {
+                NSColor.selectedContentBackgroundColor.setFill()
+                NSBezierPath(roundedRect: bounds.insetBy(dx: 4, dy: 1), xRadius: 5, yRadius: 5).fill()
+            }
+
+            let titleColor: NSColor
+            if !isEnabled {
+                titleColor = .disabledControlTextColor
+            } else if isHovered {
+                titleColor = .selectedMenuItemTextColor
+            } else {
+                titleColor = normalTitleColor
+            }
+            let titleFont = font ?? .menuFont(ofSize: 0)
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.lineBreakMode = .byTruncatingTail
+            let attributed = NSAttributedString(string: title, attributes: [
+                .foregroundColor: titleColor,
+                .font: titleFont,
+                .paragraphStyle: paragraph,
+            ])
+            let textHeight = ceil(titleFont.boundingRectForFont.height)
+            attributed.draw(in: NSRect(
+                x: Self.leadingInset,
+                y: floor((bounds.height - textHeight) / 2),
+                width: max(0, bounds.width - Self.leadingInset - Self.trailingInset),
+                height: textHeight
+            ))
+        }
 
         override func sendAction(_ action: Selector?, to target: Any?) -> Bool {
             let sent = super.sendAction(action, to: target)
             if sent {
                 title = "✓ 已送出，完成後會通知"
                 isEnabled = false
+                isHovered = false
+                needsDisplay = true
             }
             return sent
         }

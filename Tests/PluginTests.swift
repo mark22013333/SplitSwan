@@ -80,10 +80,14 @@ let stickyAdapter = MainActor.assumeIsolated {
     let pluginItems = plugin?.submenu?.items ?? []
     let action = pluginItems.count > 2 ? pluginItems[2] : nil
     let settings = root.submenu?.items.dropLast().last
-    return action?.view is M.StickyActionButton && action?.action == nil
+    guard let button = action?.view as? M.StickyActionButton else { return false }
+    return action?.action == nil && button.isEnabled && button.toolTip == nil
+        && button.frame.width >= M.StickyActionButton.minimumWidth
+        && M.StickyActionButton.leadingInset == 28
+        && button.normalTitleColor.isEqual(NSColor.systemRed)
         && settings?.view == nil && settings?.action != nil
 }
-check("AppKit：外掛腳本動作使用持續顯示按鈕，設定動作維持標準選單行為", stickyAdapter)
+check("AppKit：外掛動作保持選單、使用可點擊色彩與原生縮排且不顯示遮擋提示", stickyAdapter)
 #endif
 
 let menuRunning = M.project(isActive: true, plugins: [.init(id: "run.sh", title: "執行外掛")])
