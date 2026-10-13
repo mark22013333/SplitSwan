@@ -6,7 +6,7 @@ import Combine
 
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let vpn = VPNController()
     private let env = EnvChecker()
     private let windowModel = WindowModel()
@@ -22,6 +22,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let updateSeparator = NSMenuItem.separator()
     private let pluginAnchor = NSMenuItem.separator()    // 「外掛」根項目插在這條分隔線之前（「結束」之上）
     private var pluginItem: NSMenuItem?
+    private var menuIsTracking = false
+    private var pluginRenderPending = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMainMenu()
@@ -187,7 +189,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         for item in menu.items where item.action != nil { item.target = self }
         menu.autoenablesItems = false
+        menu.delegate = self
         statusItem.menu = menu
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        menuIsTracking = true
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        menuIsTracking = false
+        guard pluginRenderPending else { return }
+        pluginRenderPending = false
+        renderPlugins()
     }
 
     private func renderMenu() {
@@ -237,6 +251,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 外掛根項目：VPN 項目之後、「結束」之前，主選單永遠只保留這一個入口。
     private func renderPlugins() {
+        // 移除正在顯示的祖先 NSMenuItem 會強制關閉整個選單；先保留畫面，關閉後再套用新狀態。
+        if menuIsTracking {
+            pluginRenderPending = true
+            return
+        }
         let runner = PluginRunner.shared
         let snapshots = runner.plugins.map { plugin in
             PluginMenu.PluginSnapshot(
@@ -256,8 +275,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pluginItem = newItem
     }
 
-    @objc private func pluginCommand(_ sender: NSMenuItem) {
-        guard let command = sender.representedObject as? PluginMenu.Command else { return }
+    @objc private func pluginCommand(_ sender: Any) {
+        let command: PluginMenu.Command?
+        if let item = sender as? NSMenuItem {
+            command = item.representedObject as? PluginMenu.Command
+        } else if let button = sender as? PluginMenu.StickyActionButton {
+            command = button.command
+        } else {
+            command = nil
+        }
+        guard let command else { return }
         switch command {
         case .pluginAction(let pluginID, let item):
             PluginRunner.shared.perform(pluginID: pluginID, item: item)

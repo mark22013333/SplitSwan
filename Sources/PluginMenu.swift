@@ -153,6 +153,43 @@ enum PluginMenu {
     #if canImport(AppKit)
     // MARK: - AppKit Adapter
 
+    /// `NSMenuItem` 的標準 action 會結束整段選單追蹤。外掛腳本改用 view-backed 按鈕，
+    /// 點擊後只送出命令並停留在原子選單，直到使用者點選單外或按 Esc。
+    @MainActor
+    final class StickyActionButton: NSButton {
+        let command: Command
+
+        init(title: String, color: NSColor?, command: Command, target: AnyObject, action: Selector) {
+            self.command = command
+            super.init(frame: .zero)
+            self.title = title
+            self.target = target
+            self.action = action
+            isBordered = false
+            bezelStyle = .inline
+            alignment = .left
+            font = .menuFont(ofSize: 0)
+            focusRingType = .none
+            setButtonType(.momentaryChange)
+            contentTintColor = color
+            toolTip = "點擊後選單會保持開啟，完成時另行通知"
+
+            let width = max(260, min(520, ceil((title as NSString).size(withAttributes: [.font: font!]).width) + 34))
+            frame.size = NSSize(width: width, height: 24)
+        }
+
+        required init?(coder: NSCoder) { nil }
+
+        override func sendAction(_ action: Selector?, to target: Any?) -> Bool {
+            let sent = super.sendAction(action, to: target)
+            if sent {
+                title = "✓ 已送出，完成後會通知"
+                isEnabled = false
+            }
+            return sent
+        }
+    }
+
     /// Adapter 只把純選單樹轉成 AppKit，不讀取 Runner／UserDefaults，也不執行命令。
     @MainActor
     static func rootItem(_ tree: Tree, target: AnyObject, action: Selector) -> NSMenuItem {
@@ -172,9 +209,16 @@ enum PluginMenu {
             ])
         }
         if let command = item.command {
-            result.action = action
-            result.target = target
             result.representedObject = command
+            if item.children == nil, case .pluginAction = command {
+                let color: NSColor?
+                if case .text(let name) = item.style { color = name.flatMap(nsColor) } else { color = nil }
+                result.view = StickyActionButton(title: item.title, color: color, command: command,
+                                                 target: target, action: action)
+            } else {
+                result.action = action
+                result.target = target
+            }
         }
         if let children = item.children {
             let submenu = NSMenu()

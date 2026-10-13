@@ -1,5 +1,8 @@
 import Combine
 import Foundation
+#if canImport(AppKit)
+import AppKit
+#endif
 // 外掛區塊：PluginLogic 純邏輯＋PluginRunner 實跑假外掛的整合測試。
 // 整合測試只在 argv[1]（run-tests.sh 給的暫存目錄）底下建立檔案，不碰 ~/.config/splitswan。
 var pass = 0, fail = 0
@@ -69,6 +72,19 @@ check("選單樹：底部固定為分隔線、外掛設定、全部重新整理�
       && activeChildren[activeChildren.count - 3].style == .separator
       && activeChildren[activeChildren.count - 2].command == .settings
       && activeChildren.last?.command == .refreshAll && activeChildren.last?.isEnabled == true)
+
+#if canImport(AppKit)
+let stickyAdapter = MainActor.assumeIsolated {
+    let root = M.rootItem(menuActive, target: NSObject(), action: Selector(("pluginAction:")))
+    let plugin = root.submenu?.items.first
+    let pluginItems = plugin?.submenu?.items ?? []
+    let action = pluginItems.count > 2 ? pluginItems[2] : nil
+    let settings = root.submenu?.items.dropLast().last
+    return action?.view is M.StickyActionButton && action?.action == nil
+        && settings?.view == nil && settings?.action != nil
+}
+check("AppKit：外掛腳本動作使用持續顯示按鈕，設定動作維持標準選單行為", stickyAdapter)
+#endif
 
 let menuRunning = M.project(isActive: true, plugins: [.init(id: "run.sh", title: "執行外掛")])
 let runningChildren = menuRunning.root.children?.first?.children ?? []
