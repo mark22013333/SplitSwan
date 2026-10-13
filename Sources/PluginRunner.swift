@@ -21,6 +21,7 @@ final class PluginRunner: ObservableObject {
     static let shared = PluginRunner(directory: PluginRunner.defaultDirectory, stateRoot: PluginRunner.defaultStateRoot)
 
     static let enabledKey = "PluginsEnabled"          // 設定頁的啟用開關，預設關
+    static let disabledPluginsKey = "DisabledPlugins" // 個別停用的外掛檔名
     // 開發用：open SplitSwan.app --args -PluginsDir <絕對路徑> -PluginStateDir <絕對路徑> -PluginsEnabled YES
     static let dirOverrideKey = "PluginsDir"
     static let stateOverrideKey = "PluginStateDir"
@@ -52,6 +53,7 @@ final class PluginRunner: ObservableObject {
         var output: PluginLogic.Output?
         var error: String?           // 上次執行的錯誤（非 0 結束、逾時）：選單只顯示原因
         var actionError: String?     // 上次點擊動作的錯誤：保留上次的項目，只在標題加 ⚠︎
+        var isEnabled: Bool = true   // 個別開關；停用時保留於設定頁，但不排程、不執行
 
         var title: String {
             if let t = output?.title, !t.isEmpty { return t }
@@ -93,6 +95,8 @@ final class PluginRunner: ObservableObject {
     /// 每次關閉或暫停就加一；排隊中或執行中的 run 發現世代變了就放棄（不開始、不更新、不發通知）
     private var epoch = 0
     private let allowInactiveExecution: Bool
+    private let preferences: UserDefaults
+    private var pluginGenerations: [String: Int] = [:]
     private var idleWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
     /// 要求執行時該外掛還在跑（例：關閉後立刻重開、暫停中途恢復，舊的那次結果會被丟棄），
     /// 等它結束後補跑一次，不重疊、不必等到下一個間隔
@@ -103,10 +107,12 @@ final class PluginRunner: ObservableObject {
     private var slotsInUse = 0
     private var slotWaiters: [CheckedContinuation<Void, Never>] = []
 
-    init(directory: URL, stateRoot: URL, allowInactiveExecution: Bool = false) {
+    init(directory: URL, stateRoot: URL, allowInactiveExecution: Bool = false,
+         preferences: UserDefaults = .standard) {
         self.directory = directory
         self.stateRoot = stateRoot
         self.allowInactiveExecution = allowInactiveExecution
+        self.preferences = preferences
     }
 
     static var isEnabled: Bool { UserDefaults.standard.bool(forKey: enabledKey) }
@@ -224,7 +230,7 @@ final class PluginRunner: ObservableObject {
     /// 每個外掛一個 repeating Timer；暫停中或關閉時一個都不留
     private func syncTimers() {
         guard isActive, paused.isEmpty else { cancelTimers(); return }
-        let want = Dictionary(uniqueKeysWithValues: plugins.map { ($0.id, $0.interval) })
+        let want = Dictionary(uniqueKeysWithValues: plugins.filter(\.isEnabled).map { ($0.id, $0.interval) })
         for (id, t) in timers where want[id] != t.timeInterval {
             t.invalidate()
             timers[id] = nil
@@ -315,7 +321,8 @@ final class PluginRunner: ObservableObject {
                   st.isRegular, access(resolved, X_OK) == 0 else { continue }  // 子目錄、不可執行檔略過
             let check = Self.fullCheck(path: path, pluginDir: directory.path, uid: uid)
             found.append(Plugin(id: file, name: fn.name, interval: fn.interval, path: path,
-                                resolved: check.resolved ?? resolved, problem: check.problem))
+                                resolved: check.resolved ?? resolved, problem: check.problem,
+                                isEnabled: !disabledPluginIDs.contains(file)))
         }
         let newSkipped = found.dropFirst(PluginLogic.maxPlugins).map(\.id)
         if newSkipped != skipped { skipped = newSkipped }
@@ -328,6 +335,7 @@ final class PluginRunner: ObservableObject {
             n.output = o.output
             n.error = p.problem == nil ? o.error : nil
             n.actionError = o.actionError
+            n.isEnabled = p.isEnabled
             return n
         })
     }
@@ -424,13 +432,15 @@ final class PluginRunner: ObservableObject {
 
     func run(_ id: String) async {
         guard isActiveOrDirect, paused.isEmpty else { return }
-        guard let p = plugins.first(where: { $0.id == id }) else { return }
+        guard let p = plugins.first(where: { $0.id == id }), p.isEnabled else { return }
         if inFlight.contains(id) { rerunAfter.insert(id); return }
         let myEpoch = epoch
+        let myGeneration = pluginGenerations[id, default: 0]
         setInFlight(id, true)
         await acquireSlot()
         // 排隊期間被關閉或暫停：不開始
-        guard myEpoch == epoch, isActiveOrDirect, paused.isEmpty else {
+        guard myEpoch == epoch, myGeneration == pluginGenerations[id, default: 0],
+              isPluginEnabled(id), isActiveOrDirect, paused.isEmpty else {
             releaseSlot()
             setInFlight(id, false)
             return
@@ -442,7 +452,8 @@ final class PluginRunner: ObservableObject {
         releaseSlot()
         setInFlight(id, false)
         // 執行期間被關閉或暫停：結果丟棄，不更新選單、不發通知、不寫紀錄
-        guard myEpoch == epoch, isActiveOrDirect, paused.isEmpty else { return }
+        guard myEpoch == epoch, myGeneration == pluginGenerations[id, default: 0],
+              isPluginEnabled(id), isActiveOrDirect, paused.isEmpty else { return }
         if r.problem == nil { lastRuns[id] = now() }
         update(id) { pl in
             pl.problem = r.problem
@@ -527,7 +538,7 @@ final class PluginRunner: ObservableObject {
             next.resume()
         }
         // 補跑：只在目前可以執行（已開啟或測試直接呼叫、且沒有暫停）時；暫停期間由 resume 的 refreshAll 負責
-        if !on, rerunAfter.remove(id) != nil, isActiveOrDirect, paused.isEmpty {
+        if !on, rerunAfter.remove(id) != nil, isPluginEnabled(id), isActiveOrDirect, paused.isEmpty {
             Task { await run(id) }
         }
     }
@@ -584,7 +595,7 @@ final class PluginRunner: ObservableObject {
         if log == nil {
             log = await Task.detached(priority: .utility) { Self.loadNotifyLog(url) }.value ?? PluginLogic.NotifyLog()
         }
-        guard myEpoch == epoch, isActiveOrDirect else { return }
+        guard myEpoch == epoch, isPluginEnabled(p.id), isActiveOrDirect else { return }
         let plan = PluginLogic.planNotifications(items, today: PluginLogic.dayString(now()), log: log ?? PluginLogic.NotifyLog())
         let wasCapped = notifyCapped.contains(p.id)
         if plan.capped != wasCapped {
@@ -609,7 +620,7 @@ final class PluginRunner: ObservableObject {
     /// 點擊動作與排程執行共用 inFlight 與同時執行上限，不會重疊；失敗時保留上次的項目、標題加 ⚠︎
     func perform(pluginID: String, item: PluginLogic.Item) {
         guard isActiveOrDirect, paused.isEmpty,
-              let p = plugins.first(where: { $0.id == pluginID }) else { return }
+              let p = plugins.first(where: { $0.id == pluginID }), p.isEnabled else { return }
         if let url = item.href { urlOpener(url) }
         guard let bash = item.bash else {
             if item.refresh { Task { await run(pluginID) } }
@@ -624,11 +635,13 @@ final class PluginRunner: ObservableObject {
             return
         }
         let myEpoch = epoch
+        let myGeneration = pluginGenerations[pluginID, default: 0]
         Task {
             await waitUntilIdle(pluginID)        // 外掛正在跑（排程或上一個點擊）就等它結束
             setInFlight(pluginID, true)
             await acquireSlot()
-            guard myEpoch == epoch, isActiveOrDirect, paused.isEmpty else {
+            guard myEpoch == epoch, myGeneration == pluginGenerations[pluginID, default: 0],
+                  isPluginEnabled(pluginID), isActiveOrDirect, paused.isEmpty else {
                 releaseSlot()
                 setInFlight(pluginID, false)
                 return
@@ -640,7 +653,8 @@ final class PluginRunner: ObservableObject {
             }.value
             releaseSlot()
             setInFlight(pluginID, false)
-            guard myEpoch == epoch, isActiveOrDirect, paused.isEmpty else { return }
+            guard myEpoch == epoch, myGeneration == pluginGenerations[pluginID, default: 0],
+                  isPluginEnabled(pluginID), isActiveOrDirect, paused.isEmpty else { return }
             update(pluginID) { pl in
                 if let why = r.problem { pl.actionError = "點擊動作被拒：\(why)"; return }
                 pl.actionError = r.timedOut ? "點擊動作逾時" : (r.code != 0 ? "點擊動作結束碼 \(r.code)" : r.error)
@@ -650,6 +664,31 @@ final class PluginRunner: ObservableObject {
     }
 
     // MARK: 設定頁
+
+    private var disabledPluginIDs: Set<String> {
+        Set(preferences.stringArray(forKey: Self.disabledPluginsKey) ?? [])
+    }
+
+    private func isPluginEnabled(_ id: String) -> Bool {
+        plugins.first(where: { $0.id == id })?.isEnabled == true
+    }
+
+    /// 個別外掛開關：停用後立刻停止新排程；進行中的結果會丟棄，不再更新選單或發通知。
+    func setPluginEnabled(_ id: String, _ on: Bool) {
+        guard let plugin = plugins.first(where: { $0.id == id }), plugin.isEnabled != on else { return }
+        var disabled = disabledPluginIDs
+        if on { disabled.remove(id) } else { disabled.insert(id) }
+        preferences.set(disabled.sorted(), forKey: Self.disabledPluginsKey)
+        pluginGenerations[id, default: 0] += 1
+        rerunAfter.remove(id)
+        if !on {
+            timers[id]?.invalidate()
+            timers[id] = nil
+        }
+        update(id) { $0.isEnabled = on }
+        syncTimers()
+        if on, isActive, paused.isEmpty { Task { await run(id) } }
+    }
 
     /// 「開啟外掛資料夾」：不存在就建立（700）；開關打開時順便重新掃描並開始監看
     func openFolder() {

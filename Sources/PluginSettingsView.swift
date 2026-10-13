@@ -36,9 +36,9 @@ struct PluginSettingsView: View {
     }
 
     private func row(_ p: PluginRunner.Plugin) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: p.failure == nil ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                .foregroundStyle(p.failure == nil ? .green : .orange)
+        HStack(alignment: .center, spacing: 8) {
+            Image(systemName: p.isEnabled ? (p.failure == nil ? "checkmark.circle.fill" : "exclamationmark.triangle.fill") : "pause.circle.fill")
+                .foregroundStyle(p.isEnabled ? (p.failure == nil ? .green : .orange) : .secondary)
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(p.id)").font(.callout.weight(.medium))
                 Text(statusText(p)).font(.caption).foregroundStyle(.secondary)
@@ -46,11 +46,18 @@ struct PluginSettingsView: View {
                     .textSelection(.enabled)
             }
             Spacer()
+            Toggle("", isOn: Binding(
+                get: { p.isEnabled },
+                set: { runner.setPluginEnabled(p.id, $0) }
+            ))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .help(p.isEnabled ? "停用此外掛" : "啟用此外掛")
         }
     }
 
     private func statusText(_ p: PluginRunner.Plugin) -> String {
-        var parts = ["每 \(PluginLogic.intervalText(p.interval))"]
+        var parts = p.isEnabled ? ["每 \(PluginLogic.intervalText(p.interval))"] : ["已停用", "每 \(PluginLogic.intervalText(p.interval))"]
         if let d = runner.lastRuns[p.id] {
             let f = DateFormatter()
             f.dateFormat = "HH:mm:ss"

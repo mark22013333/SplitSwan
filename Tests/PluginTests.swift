@@ -657,6 +657,50 @@ pr.setEnabled(false)
 let r2 = pr.resources
 check("再關閉：timer、監看、事件訂閱全部釋放", r2.timers == 0 && !r2.watching && r2.observers == 0 && pr.plugins.isEmpty)
 
+// 個別外掛開關：設定需持久化；停用後不排程、不接受點擊，其他外掛不受影響。
+let individualDir = root + "/individual", individualState = root + "/individual-state"
+let individualALog = root + "/individual-a.log", individualBLog = root + "/individual-b.log"
+try! fm.createDirectory(atPath: individualDir, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+put("a.1m.sh", "#!/bin/bash\necho a >> \"\(individualALog)\"\necho A\n", dir: individualDir)
+put("b.1m.sh", "#!/bin/bash\necho b >> \"\(individualBLog)\"\necho B\n", dir: individualDir)
+let individualSuite = "SplitSwan.PluginTests.\(getpid())"
+let individualPreferences = UserDefaults(suiteName: individualSuite)!
+individualPreferences.removePersistentDomain(forName: individualSuite)
+let individual = PluginRunner(directory: URL(fileURLWithPath: individualDir),
+                              stateRoot: URL(fileURLWithPath: individualState),
+                              preferences: individualPreferences)
+individual.timeout = roomyTimeout
+individual.setEnabled(true)
+_ = await eventually { logLines(individualALog) == 1 && logLines(individualBLog) == 1 }
+individual.setPluginEnabled("a.1m.sh", false)
+let aBefore = logLines(individualALog), bBefore = logLines(individualBLog)
+await individual.refreshAll()
+_ = await eventually { logLines(individualBLog) >= bBefore + 1 && !individual.runningIDs.contains("b.1m.sh") }
+check("個別停用：該外掛不執行、其他外掛照常執行，且只保留一個 timer",
+      logLines(individualALog) == aBefore && logLines(individualBLog) >= bBefore + 1
+      && individual.resources.timers == 1
+      && individual.plugins.first { $0.id == "a.1m.sh" }?.isEnabled == false)
+var individualOpenedURLs = 0
+individual.urlOpener = { _ in individualOpenedURLs += 1 }
+individual.perform(pluginID: "a.1m.sh", item: L.parseLine("x | href=https://example.com"))
+await Task.yield()
+check("個別停用：拒絕點擊動作", individualOpenedURLs == 0)
+individual.setEnabled(false)
+let persisted = PluginRunner(directory: URL(fileURLWithPath: individualDir),
+                             stateRoot: URL(fileURLWithPath: individualState + "-persisted"),
+                             allowInactiveExecution: true,
+                             preferences: individualPreferences)
+persisted.scan()
+check("個別停用：重新建立 Runner 後仍記得停用清單",
+      persisted.plugins.first { $0.id == "a.1m.sh" }?.isEnabled == false
+      && persisted.plugins.first { $0.id == "b.1m.sh" }?.isEnabled == true)
+persisted.setPluginEnabled("a.1m.sh", true)
+await persisted.run("a.1m.sh")
+check("個別重新啟用：立即可再次執行且清除持久化停用值",
+      logLines(individualALog) == aBefore + 1
+      && !(individualPreferences.stringArray(forKey: PluginRunner.disabledPluginsKey) ?? []).contains("a.1m.sh"))
+individualPreferences.removePersistentDomain(forName: individualSuite)
+
 // direct-test seam 必須由建構式明確開啟，不再從「是否啟用過」猜測測試意圖。
 let directPolicyDir = root + "/direct-policy", directPolicyLog = root + "/direct-policy.log"
 try! fm.createDirectory(atPath: directPolicyDir, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])

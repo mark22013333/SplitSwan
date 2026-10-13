@@ -257,7 +257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         let runner = PluginRunner.shared
-        let snapshots = runner.plugins.map { plugin in
+        let snapshots = runner.plugins.filter(\.isEnabled).map { plugin in
             PluginMenu.PluginSnapshot(
                 id: plugin.id,
                 title: plugin.title,
