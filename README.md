@@ -101,7 +101,7 @@ macOS 狀態列的 VPN 工具，用開源的 [strongSwan](https://www.strongswan
    SPLITSWAN_REMOTE_TS="10.0.0.0/24,198.51.100.5/32"           # 要走 VPN 的網段；單一主機寫 IP/32
    ```
 2. 透過公司內部管道**私下**傳給同事（含公司位址，不要放進任何公開的地方）
-3. 同事在「設定」頁按「匯入設定檔…」。App 會先驗證格式，通過後複製到 `~/.config/splitswan/company.env`（權限 600）。
+3. 同事在「設定」頁按「匯入設定檔…」。App 會先驗證格式，再列出閘道與網段讓他確認，按「套用」才複製到 `~/.config/splitswan/company.env`（權限 600）。
 
 App 取得閘道與網段的順序：
 
