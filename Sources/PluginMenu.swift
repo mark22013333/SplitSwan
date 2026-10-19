@@ -12,10 +12,12 @@ enum PluginMenu {
         struct Output: Equatable, Sendable {
             let items: [PluginLogic.Item]
             let truncated: Bool
+            let settingsAvailable: Bool
 
-            init(items: [PluginLogic.Item], truncated: Bool = false) {
+            init(items: [PluginLogic.Item], truncated: Bool = false, settingsAvailable: Bool = false) {
                 self.items = items
                 self.truncated = truncated
+                self.settingsAvailable = settingsAvailable
             }
         }
 
@@ -44,6 +46,7 @@ enum PluginMenu {
     enum Command: Equatable, Sendable {
         case pluginAction(pluginID: String, item: PluginLogic.Item)
         case settings
+        case pluginSettings(pluginID: String)
         case refreshAll
     }
 
@@ -115,7 +118,7 @@ enum PluginMenu {
             if plugin.actionError != nil, !output.items.isEmpty || output.truncated {
                 children.append(.separator)
             }
-            children.append(contentsOf: output.items.map { outputItem($0, pluginID: plugin.id) })
+            children.append(contentsOf: output.items.filter { $0.params["menu"] != "false" }.map { outputItem($0, pluginID: plugin.id) })
             if output.truncated {
                 children.append(disabled("（輸出過長，只顯示前面部分）"))
             } else if output.items.isEmpty, plugin.actionError == nil {
@@ -124,6 +127,11 @@ enum PluginMenu {
         } else {
             if plugin.actionError != nil { children.append(.separator) }
             children.append(disabled("執行中…"))
+        }
+
+        if plugin.output?.settingsAvailable == true {
+            if !children.isEmpty { children.append(.separator) }
+            children.append(Tree.Item(title: "開啟設定…", isEnabled: true, command: .pluginSettings(pluginID: plugin.id)))
         }
 
         return Tree.Item(title: title, isEnabled: true, children: children)
@@ -136,7 +144,7 @@ enum PluginMenu {
             : nil
         let children = item.children.isEmpty
             ? nil
-            : item.children.map { outputItem($0, pluginID: pluginID) }
+            : item.children.filter { $0.params["menu"] != "false" }.map { outputItem($0, pluginID: pluginID) }
         return Tree.Item(
             title: item.text,
             isEnabled: true,

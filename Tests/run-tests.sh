@@ -3,14 +3,16 @@
 #   bash Tests/run-tests.sh                   跑全部組別（各組並行編譯與執行）
 #   bash Tests/run-tests.sh security update   只跑指定的組
 # 不會連線 VPN、不需要 sudo，也不會寫入 ~/.config 或 /opt/homebrew。
-# 編譯用 -Onone：測試只驗邏輯，省下最佳化的時間（App 本身仍由 build.sh 用 -O 編譯）。
+# 編譯用 -Onone：測試行為與原生版面，省下最佳化的時間（App 本身仍由 build.sh 用 -O 編譯）。
 set -uo pipefail
 cd "$(dirname "$0")/.."
 S=Sources
 OUT=$(mktemp -d)
 trap 'command rm -r "$OUT"' EXIT
 
-ALL_GROUPS="reconnect export security settings diagnostic hostcheck update about plugins"
+bash tools/build-zipfoundation.sh "$OUT/zip" || exit 1
+
+ALL_GROUPS="reconnect export security settings diagnostic hostcheck update about plugins plugin-ui packages package-ui background"
 
 # 每組的測試檔與要一起編譯的原始檔（第一個是測試檔，會被複製成 main.swift）。
 # 新增 Sources 檔時，要加進用到它的每一組，否則該組會編譯失敗。
@@ -29,8 +31,13 @@ files() {
     update)     echo Tests/UpdateTests.swift $S/UpdateLogic.swift $S/UpdateInstaller.swift $S/ProcessRunner.swift $S/AboutInfo.swift \
                      $S/AppInfo.swift $S/DiagnosticReport.swift $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift ;;
     about)      echo Tests/AboutTests.swift $S/AboutInfo.swift $S/AppInfo.swift ;;
-    plugins)    echo Tests/PluginTests.swift $S/PluginLogic.swift $S/PluginMenu.swift $S/PluginRunner.swift $S/ProcessRunner.swift $S/DiagnosticReport.swift \
+    plugins)    echo Tests/PluginTests.swift $S/PluginLogic.swift $S/PluginMenu.swift $S/PluginSettingsProtocol.swift $S/PluginRunner.swift $S/PluginBackground.swift $S/PluginPackage.swift $S/PluginPackageStore.swift $S/PluginLegacyReplacement.swift $S/ProcessRunner.swift $S/DiagnosticReport.swift \
                      $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
+    plugin-ui)  echo Tests/PluginConfigurationUITests.swift $S/PluginConfigurationView.swift $S/PluginLogic.swift $S/PluginMenu.swift $S/PluginSettingsProtocol.swift $S/PluginRunner.swift $S/PluginBackground.swift $S/PluginPackage.swift $S/PluginPackageStore.swift $S/PluginLegacyReplacement.swift $S/ProcessRunner.swift $S/DiagnosticReport.swift \
+                     $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
+    package-ui) echo Tests/PluginPackageUITests.swift $S/PluginPackageView.swift $S/PluginSettingsView.swift $S/PluginConfigurationView.swift $S/PluginPackage.swift $S/PluginPackageStore.swift $S/PluginLegacyReplacement.swift $S/PluginRunner.swift $S/PluginBackground.swift $S/PluginLogic.swift $S/PluginSettingsProtocol.swift $S/ProcessRunner.swift $S/DiagnosticReport.swift $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
+    packages) echo Tests/PluginPackageTests.swift $S/PluginPackage.swift $S/PluginPackageStore.swift $S/PluginLegacyReplacement.swift $S/PluginRunner.swift $S/PluginBackground.swift $S/PluginLogic.swift $S/PluginSettingsProtocol.swift $S/ProcessRunner.swift $S/DiagnosticReport.swift $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
+    background) echo Tests/PluginBackgroundTests.swift $S/PluginPackage.swift $S/PluginPackageStore.swift $S/PluginLegacyReplacement.swift $S/PluginRunner.swift $S/PluginBackground.swift $S/PluginLogic.swift $S/PluginSettingsProtocol.swift $S/ProcessRunner.swift $S/DiagnosticReport.swift $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
     *) return 1 ;;
   esac
 }
@@ -42,22 +49,29 @@ compile_group() {
   set -- $(files "$name")
   local test=$1; shift
   cp "$test" "$dir/main.swift"
-  swiftc -Onone -o "$dir/t" "$dir/main.swift" "$@" >"$dir/compile.log" 2>&1 || echo compile >"$dir/status"
+  swiftc -module-cache-path build/test-module-cache -Onone -I "$OUT/zip" -L "$OUT/zip" -lZIPFoundation -o "$dir/t" "$dir/main.swift" "$@" >"$dir/compile.log" 2>&1 || echo compile >"$dir/status"
 }
 
 # 執行已編譯好的一組，結果寫進 $OUT/<組名>/status：pass／fail
 exec_group() {
   local dir="$OUT/$1"
   [ -f "$dir/status" ] && return   # 編譯失敗
+  if [ "$1" = packages ] || [ "$1" = package-ui ]; then
+    python3 Tests/package-fixtures.py "$dir/fixtures" >"$dir/fixtures.log" 2>&1 || { cp "$dir/fixtures.log" "$dir/log"; echo fail >"$dir/status"; return; }
+  fi
   "$dir/t" "$dir" >"$dir/log" 2>&1
   local rc=$?
+  if [ "$1" = package-ui ] && [ -n "${SPLITSWAN_TEST_EVIDENCE:-}" ]; then
+    mkdir -p "$SPLITSWAN_TEST_EVIDENCE"
+    cp -R "$dir/screenshots" "$SPLITSWAN_TEST_EVIDENCE/"
+  fi
   # 結尾那行是「通過 N，失敗 M」；M 必須剛好是 0，且程式正常結束
   if [ "$rc" = 0 ] && grep -Eq "失敗 0$" "$dir/log"; then echo pass >"$dir/status"; else echo fail >"$dir/status"; fi
 }
 
 # 含時序判斷（逾時、排程、暫停）的組，要等其他組編譯、執行都結束後再單獨跑，
 # 否則和並行編譯搶 CPU 時，固定的等待時間會偶發不夠
-SERIAL_GROUPS="plugins"
+SERIAL_GROUPS="plugins plugin-ui packages package-ui background"
 is_serial() { case " $SERIAL_GROUPS " in *" $1 "*) return 0 ;; esac; return 1; }
 
 if [ $# -gt 0 ]; then SELECTED="$*"; else SELECTED=$ALL_GROUPS; fi

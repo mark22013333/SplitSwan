@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""原生設定協定示範；只讀寫自己的 SPLITSWAN_PLUGIN_STATE。"""
+import hashlib
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+
+state = Path(os.environ["SPLITSWAN_PLUGIN_STATE"])
+path = state / "settings.json"
+state.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+
+def load():
+    return json.loads(path.read_text()) if path.exists() else {"enabled": False, "name": ""}
+
+
+def revision(values):
+    return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
+
+
+def snapshot(values):
+    return {
+        "version": 1, "title": "範例外掛設定", "revision": revision(values),
+        "tabs": [{"id": "general", "title": "一般", "guide": {
+            "summary": "依序完成設定；此範例不連線、不執行背景工作。",
+            "checkAction": "check", "refreshFields": ["name"], "managementActions": [],
+            "steps": [
+                {"id": "name", "title": "設定顯示名稱", "help": "輸入名稱後按「儲存並檢查」。", "details": "這是通用精靈範例，實際步驟由外掛提供。", "state": "completed" if values["name"].strip() else "pending", "fields": ["name"], "actions": [], "saveTitle": "儲存並檢查"},
+                {"id": "enable", "title": "確認並啟用", "help": "開啟示範並儲存；這不會執行任何背景功能。", "state": "completed" if values["enabled"] else "pending", "fields": ["enabled"], "actions": []},
+            ]
+        }}, {"id": "status", "title": "狀態"}],
+        "fields": [
+            {"id": "enabled", "tab": "general", "title": "啟用示範", "type": "toggle"},
+            {"id": "name", "tab": "general", "title": "顯示名稱", "type": "text"},
+            {"id": "state", "tab": "status", "title": "目前狀態", "type": "readonly"},
+        ],
+        "values": {**values, "state": "僅示範表單，不執行背景工作"}, "actions": [{"id": "check", "tab": "general", "title": "重新檢查"}],
+    }
+
+
+try:
+    values = load()
+    if len(sys.argv) > 1 and sys.argv[1] == "--splitswan-settings":
+        operation = sys.argv[2]
+        if operation == "save":
+            raw = sys.stdin.buffer.read(65537)
+            if len(raw) > 65536:
+                raise ValueError("設定內容過大")
+            request = json.loads(raw)
+            if request.get("revision") != revision(values):
+                raise ValueError("設定已變更，請取消變更後重新載入")
+            changes = request.get("values", {})
+            if not isinstance(changes, dict) or changes.keys() - {"enabled", "name"}:
+                raise ValueError("未知設定欄位")
+            updated = {**values, **changes}
+            if type(updated["enabled"]) is not bool or not isinstance(updated["name"], str) or len(updated["name"]) > 100:
+                raise ValueError("欄位格式不正確")
+            descriptor, name = tempfile.mkstemp(prefix=".settings-", dir=state)
+            temp = Path(name)
+            try:
+                with os.fdopen(descriptor, "w") as output:
+                    json.dump(updated, output, ensure_ascii=False)
+                temp.replace(path)
+            finally:
+                temp.unlink(missing_ok=True)
+            values = updated
+        elif operation == "action":
+            raw = sys.stdin.buffer.read(65537)
+            if len(raw) > 65536:
+                raise ValueError("內容過大")
+            request = json.loads(raw)
+            if request.get("revision") != revision(values) or request.get("id") != "check":
+                raise ValueError("動作無效")
+        elif operation != "snapshot":
+            raise ValueError("不支援的動作")
+        print(json.dumps(snapshot(values), ensure_ascii=False))
+    else:
+        print("示範外掛 | settings=true")
+        print("---")
+        print("狀態：" + ("已啟用" if values["enabled"] else "未啟用"))
+except (ValueError, OSError, KeyError, IndexError):
+    print(json.dumps({"error": "invalid", "message": "設定無法套用，請確認欄位或重新載入"}, ensure_ascii=False))

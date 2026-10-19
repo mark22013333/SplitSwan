@@ -6,8 +6,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 source ./app.env
 
-VERSION="1.8.5"
-BUILD_NUM="21"
+VERSION="1.8.7"
+BUILD_NUM="23"
 APP="build/${APP_NAME}.app"
 C="$APP/Contents"
 
@@ -16,14 +16,15 @@ rm -rf "$APP" build/AppIcon.iconset
 mkdir -p "$C/MacOS" "$C/Resources"
 
 echo "▸ 編譯 Swift"
-swiftc -O -o "$C/MacOS/${APP_NAME}" Sources/*.swift \
+bash tools/build-zipfoundation.sh build/zipfoundation
+swiftc -module-cache-path build/module-cache -O -o "$C/MacOS/${APP_NAME}" Sources/*.swift -I build/zipfoundation -L build/zipfoundation -lZIPFoundation \
   -framework AppKit -framework SwiftUI -framework ServiceManagement -framework Combine \
   -target arm64-apple-macos14.0
 
 echo "▸ 產生圖示"
 ICONSET="build/AppIcon.iconset"
 mkdir -p "$ICONSET"
-swift tools/make-icon.swift build/icon-1024.png >/dev/null
+swift -module-cache-path build/module-cache tools/make-icon.swift build/icon-1024.png >/dev/null
 for s in 16 32 128 256 512; do
   sips -z $s $s build/icon-1024.png --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
   sips -z $((s*2)) $((s*2)) build/icon-1024.png --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
@@ -49,11 +50,22 @@ cat > "$C/Info.plist" <<PLIST
     <key>CFBundleVersion</key><string>${BUILD_NUM}</string>
     <key>CFBundleDevelopmentRegion</key><string>zh_TW</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
+    <key>UTExportedTypeDeclarations</key>
+    <array><dict>
+        <key>UTTypeIdentifier</key><string>com.splitswan.plugin-package</string>
+        <key>UTTypeDescription</key><string>SplitSwan 外掛安裝包</string>
+        <key>UTTypeConformsTo</key><array><string>public.zip-archive</string></array>
+        <key>UTTypeTagSpecification</key><dict>
+            <key>public.filename-extension</key><array><string>splitswan-plugin</string></array>
+        </dict>
+    </dict></array>
     <key>LSUIElement</key><true/>
     <key>NSHumanReadableCopyright</key><string>strongSwan 狀態列前端</string>
 </dict>
 </plist>
 PLIST
+
+cp Vendor/ZIPFoundation/LICENSE "$C/Resources/ZIPFoundation-LICENSE.txt"
 
 echo "▸ 簽章（ad-hoc）"
 codesign --force --deep --sign - "$APP"

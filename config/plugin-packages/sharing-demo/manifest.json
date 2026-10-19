@@ -1,0 +1,36 @@
+{
+  "formatVersion": 1,
+  "id": "org.example.sharing-demo",
+  "name": "分享外掛範例",
+  "author": "Example Developer",
+  "description": "可匯入、更新及匯出的去識別化範例。",
+  "version": "1.0.0",
+  "minimumAppVersion": "1.8.5",
+  "entrypoint": "main.sh",
+  "interval": 300,
+  "runtime": "sh",
+  "dependencies": [],
+  "settings": false,
+  "files": [
+    {
+      "path": "README.md",
+      "sha256": "12e2a501d3fd1ef5c43e1cfe78bf2ef39004e7d77d64a650e6327c9a0460d9cf",
+      "executable": false
+    },
+    {
+      "path": "lib/output.sh",
+      "sha256": "60a5879936570812a63a5af806643457551303d0783088595edbec513a7195a4",
+      "executable": false
+    },
+    {
+      "path": "main.sh",
+      "sha256": "5f189b3c411d6b63d6e33ecbc88d3f732b9253aa0918e439b9e2f4332dc02f13",
+      "executable": true
+    },
+    {
+      "path": "resources/message.txt",
+      "sha256": "140beba8d24cb66eb689fe51de8739d20f9613b45ddf0639cd05bd27d4cc2046",
+      "executable": false
+    }
+  ]
+}

@@ -2,6 +2,7 @@
 // 診斷、主機檢查、一鍵更新走 runLimited；VPNController 呼叫輔助程式走 execute，
 // 全 App 只有這裡一份「逾時 → SIGTERM → 寬限後 SIGKILL」的實作
 import Foundation
+import Darwin
 
 enum ProcessRunner {
     /// 收集輸出的緩衝區（在 readabilityHandler 的背景執行緒寫入）
@@ -53,7 +54,8 @@ enum ProcessRunner {
     /// 不再混進 output；nil（預設）維持 stdout／stderr 合併
     static func execute(_ exe: String, _ args: [String], env: [String: String]? = nil,
                         timeout: TimeInterval, termGrace: TimeInterval = 1, maxBytes: Int? = nil,
-                        qos: DispatchQoS.QoSClass = .userInitiated, stderrLimit: Int? = nil) async -> Outcome {
+                        qos: DispatchQoS.QoSClass = .userInitiated, stderrLimit: Int? = nil,
+                        input: Data? = nil) async -> Outcome {
         await withCheckedContinuation { cont in
             DispatchQueue.global(qos: qos).async {
                 let p = Process()
@@ -63,6 +65,34 @@ enum ProcessRunner {
                 let pipe = Pipe()
                 p.standardOutput = pipe
                 p.standardInput = FileHandle.nullDevice
+                // 匿名暫存檔作為 stdin：子程序不讀取時也不會堵住寫入執行緒，並保證 EOF。
+                // 建立後立刻 unlink，不留下含設定內容的可見檔案，也不把內容放入 argv。
+                var inputHandle: FileHandle?
+                defer { try? inputHandle?.close() }
+                if let input {
+                    var template = Array((FileManager.default.temporaryDirectory.path + "/splitswan-stdin-XXXXXX").utf8CString)
+                    let fd = mkstemp(&template)
+                    guard fd >= 0 else {
+                        cont.resume(returning: Outcome(code: 127, output: "", timedOut: false, launchError: "無法準備標準輸入"))
+                        return
+                    }
+                    let removed = template.withUnsafeBufferPointer { unlink($0.baseAddress!) }
+                    guard removed == 0 else {
+                        close(fd)
+                        cont.resume(returning: Outcome(code: 127, output: "", timedOut: false, launchError: "無法建立匿名標準輸入"))
+                        return
+                    }
+                    let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+                    inputHandle = h
+                    do {
+                        try h.write(contentsOf: input)
+                        try h.seek(toOffset: 0)
+                        p.standardInput = h
+                    } catch {
+                        cont.resume(returning: Outcome(code: 127, output: "", timedOut: false, launchError: "無法寫入標準輸入"))
+                        return
+                    }
+                }
                 let buf = Buffer(limit: maxBytes)
                 let eof = DispatchSemaphore(value: 0)
                 pipe.fileHandleForReading.readabilityHandler = { h in

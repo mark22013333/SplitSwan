@@ -264,7 +264,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 blockingError: plugin.blocking,
                 actionError: plugin.actionError,
                 output: plugin.output.map {
-                    PluginMenu.PluginSnapshot.Output(items: $0.items, truncated: $0.truncated)
+                    PluginMenu.PluginSnapshot.Output(items: $0.items, truncated: $0.truncated, settingsAvailable: $0.settingsAvailable)
                 }
             )
         }
@@ -291,6 +291,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .settings:
             showWindow()
             windowModel.focusPluginSettings()
+        case .pluginSettings(let pluginID):
+            PluginConfigurationWindows.shared.open(pluginID: pluginID)
         case .refreshAll:
             PluginRunner.shared.requestRefresh()
         }

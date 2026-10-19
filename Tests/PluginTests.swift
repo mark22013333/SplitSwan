@@ -598,7 +598,11 @@ if let click = actionRunner.plugins.first(where: { $0.id == "slow.1m.sh" })?.out
 let bothActionsQueued = await eventually { actionRunner.pendingIdleWaiterCount == 2 }
 try! "release".write(toFile: actionState + "/release", atomically: false, encoding: .utf8)
 _ = await t7.value
-_ = await eventually { let c = slowCounts(); return c.starts >= 3 && c.starts == c.ends }   // 兩個點擊也依序跑完
+_ = await eventually {
+    let c = slowCounts()
+    // 腳本寫入結束紀錄時，runner 仍可能尚未釋放執行槽與序列 waiter。
+    return c.starts >= 3 && c.starts == c.ends && actionRunner.runningIDs.isEmpty && actionRunner.pendingIdleWaiterCount == 0
+}
 let (d2, cnt2) = maxDepth()
 check("同一外掛在 run 中連排兩個 perform：全部完成且不重疊（最大同時 \(d2)，共 \(cnt2) 次）",
       bothActionsQueued && d2 == 1 && cnt2 == 3 && actionRunner.pendingIdleWaiterCount == 0)
@@ -965,6 +969,110 @@ _ = await eventually(30) { rr2.plugins.count == 2 && rr2.plugins.allSatisfy { $0
 check("暫停中途恢復：舊的結束後補跑並發通知", rr2.plugins.count == 2 && rr2.plugins.allSatisfy { $0.output != nil } && rr2Sent == 2)
 rr2.setEnabled(false)
 check("補跑期間同一外掛不重疊（同一支最大同時 \(m1Depth())）", m1Depth() == 1)
+
+
+// MARK: 原生設定協定與標準輸入
+let settingsRaw = """
+{"version":1,"title":"測試外掛","revision":"r1","tabs":[{"id":"general","title":"一般"}],"fields":[{"id":"name","tab":"general","title":"名稱","type":"text"}],"values":{"name":"範例"},"actions":[{"id":"import","tab":"general","title":"匯入","input":"jsonFile","afterField":"name"}]}
+"""
+let settingsData = Data(settingsRaw.utf8)
+check("設定協定：正常表單可解析", (try? PluginSettingsProtocol.decode(settingsData))?.tabs.count == 1)
+check("設定說明保留換行並過濾控制與雙向字元", PluginSettingsProtocol.displayText("第一步\n第二步\u{202E}\u{0007}") == "第一步\n第二步")
+var guideObject = try JSONSerialization.jsonObject(with: settingsData) as! [String: Any]
+guideObject["actions"] = [["id": "check", "tab": "general", "title": "重新檢查"]]
+let guideStep: [String: Any] = ["id": "first", "title": "設定", "help": "下一步", "state": "pending", "fields": ["name"], "actions": []]
+let guideDefinition: [String: Any] = ["summary": "尚未完成", "steps": [guideStep], "checkAction": "check", "refreshFields": ["name"], "managementActions": []]
+func guideData(_ definition: [String: Any], actions: [[String: Any]]? = nil) throws -> Data {
+    var value = guideObject
+    value["tabs"] = [["id": "general", "title": "一般", "guide": definition]]
+    if let actions { value["actions"] = actions }
+    return try JSONSerialization.data(withJSONObject: value)
+}
+check("設定精靈：正常描述可解析並定位未完成步驟", try PluginSettingsProtocol.decode(guideData(guideDefinition)).tabs[0].guide?.currentStep == "first")
+for (name, replacement) in [
+    ("未知狀態", ["state": "approved"]),
+    ("不存在欄位", ["fields": ["missing"]]),
+    ("不存在動作", ["actions": ["missing"]]),
+    ("主要按鈕不屬於步驟", ["primaryAction": "check"]),
+] as [(String, [String: Any])] {
+    var invalid = guideDefinition
+    invalid["steps"] = [guideStep.merging(replacement) { _, new in new }]
+    check("設定精靈：拒絕\(name)", (try? PluginSettingsProtocol.decode(guideData(invalid))) == nil)
+}
+for count in [0, 11] {
+    var invalid = guideDefinition
+    invalid["steps"] = Array(repeating: guideStep, count: count)
+    check("設定精靈：拒絕步驟數量 \(count)", (try? PluginSettingsProtocol.decode(guideData(invalid))) == nil)
+}
+for unsafe in [["destructive": true], ["opensExternal": true], ["recheckAfter": true], ["input": "jsonFile"]] as [[String: Any]] {
+    let action = ["id": "check", "tab": "general", "title": "檢查"].merging(unsafe) { _, new in new }
+    check("設定精靈：自動檢查不能開啟外部頁面、確認、匯入或自我觸發", (try? PluginSettingsProtocol.decode(guideData(guideDefinition, actions: [action]))) == nil)
+}
+var duplicateGuide = guideDefinition
+duplicateGuide["steps"] = [guideStep, guideStep.merging(["id": "second"]) { _, new in new }]
+check("設定精靈：欄位不能重複歸屬", (try? PluginSettingsProtocol.decode(guideData(duplicateGuide))) == nil)
+for (name, raw) in [
+    ("動作參照不存在欄位", settingsRaw.replacingOccurrences(of: "\"afterField\":\"name\"", with: "\"afterField\":\"missing\"")),
+    ("未知版本", settingsRaw.replacingOccurrences(of: "\"version\":1", with: "\"version\":2")),
+    ("未知欄位型別", settingsRaw.replacingOccurrences(of: "\"type\":\"text\"", with: "\"type\":\"html\"")),
+    ("錯誤值型別", settingsRaw.replacingOccurrences(of: "\"name\":\"範例\"", with: "\"name\":true")),
+    ("不存在頁籤", settingsRaw.replacingOccurrences(of: "\"tab\":\"general\"", with: "\"tab\":\"missing\"")),
+    ("重複頁籤", settingsRaw.replacingOccurrences(of: "[{\"id\":\"general\",\"title\":\"一般\"}]", with: "[{\"id\":\"general\",\"title\":\"一般\"},{\"id\":\"general\",\"title\":\"重複\"}]")),
+    ("損壞 JSON", "{"),
+    ("超過上限", String(repeating: " ", count: PluginSettingsProtocol.maxBytes + 1)),
+] { check("設定協定：拒絕\(name)", (try? PluginSettingsProtocol.decode(Data(raw.utf8))) == nil) }
+let supported = L.parseOutput("測試 | settings=true\n---\n今日狀態\n隱藏通知 | notify=true menu=false\n")
+check("設定標頭：能力旗標不混入標題", supported.title == "測試" && supported.settingsAvailable)
+let secretForm = settingsRaw.replacingOccurrences(of: "\"type\":\"text\"", with: "\"type\":\"secret\"")
+    .replacingOccurrences(of: "\"name\":\"範例\"", with: "\"name\":\"\"")
+check("機密欄位：只接受空的 snapshot 值", (try? PluginSettingsProtocol.decode(Data(secretForm.utf8))) != nil)
+let leakingForm = secretForm.replacingOccurrences(of: "\"name\":\"\"", with: "\"name\":\"must-not-echo\"")
+check("機密欄位：拒絕回傳既有機密的 snapshot", (try? PluginSettingsProtocol.decode(Data(leakingForm.utf8))) == nil)
+check("舊外掛不會自動啟用設定協定", !L.parseOutput("舊外掛\n---\n內容").settingsAvailable)
+let settingsTree = M.project(isActive: true, plugins: [.init(id: "test.sh", title: "測試", output: .init(items: supported.items, settingsAvailable: true))])
+let settingsChildren = settingsTree.root.children?.first?.children ?? []
+check("設定選單：設定入口命令正確、隱藏通知仍保留解析", settingsChildren.last?.command == .pluginSettings(pluginID: "test.sh")
+      && !settingsChildren.contains { $0.title == "隱藏通知" } && supported.items.last?.notify == true)
+let stdinPayload = Data(String(repeating: "設定資料\n", count: 3000).utf8)
+let echoInput = await ProcessRunner.execute("/bin/cat", [], timeout: 5, maxBytes: stdinPayload.count + 1, input: stdinPayload)
+check("標準輸入：完整傳遞大於 pipe 容量的內容並送出 EOF", echoInput.code == 0 && Data(echoInput.output.utf8) == stdinPayload)
+let ignoredInput = await ProcessRunner.execute("/usr/bin/true", [], timeout: 2, input: stdinPayload)
+check("標準輸入：子程序不讀取仍正常結束", ignoredInput.code == 0 && !ignoredInput.timedOut)
+let inputTimeout = await ProcessRunner.execute("/bin/sleep", ["10"], timeout: 0.1, input: stdinPayload)
+check("標準輸入：子程序不讀取時逾時仍能停止", inputTimeout.timedOut)
+let settingsDir = mkPluginDir("settings-protocol")
+put("settings.1m.sh", """
+#!/bin/bash
+if [ "$1" = --splitswan-settings ]; then
+  if [ "$2" = save ]; then cat > "$SPLITSWAN_PLUGIN_STATE/received"; fi
+  cat <<'SETTINGS_JSON'
+\(settingsRaw)
+SETTINGS_JSON
+else
+  echo '設定外掛 | settings=true'
+  echo ---
+  echo "protocol=$SPLITSWAN_PLUGIN_SETTINGS_PROTOCOL"
+fi
+""", dir: settingsDir)
+let settingsRunner = PluginRunner(directory: URL(fileURLWithPath: settingsDir), stateRoot: URL(fileURLWithPath: root + "/settings-state"))
+settingsRunner.scan()
+do {
+    let first = try await settingsRunner.settingsCommand(pluginID: "settings.1m.sh", operation: "snapshot")
+    let marker = root + "/must-not-execute"
+    let request = PluginSettingsProtocol.Request(revision: first.revision, values: ["name": .text("$(touch \(marker)) `echo secret`")])
+    _ = try await settingsRunner.settingsCommand(pluginID: "settings.1m.sh", operation: "save", request: request)
+    let saved = try Data(contentsOf: URL(fileURLWithPath: root + "/settings-state/settings.1m.sh/received"))
+    check("停用時可明確管理設定，不啟用一般排程", !settingsRunner.isActive && first.version == 1)
+    // JSON object 的鍵順序不屬於協定；比對完整內容，不能以兩次編碼的位元組順序判定失敗。
+    let savedJSON = try JSONSerialization.jsonObject(with: saved) as? NSDictionary
+    let expectedJSON = try JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? NSDictionary
+    check("設定值經 stdin 傳遞，不執行 shell 內容", savedJSON?.isEqual(expectedJSON) == true && !fm.fileExists(atPath: marker))
+    try fm.setAttributes([.posixPermissions: 0o770], ofItemAtPath: settingsDir + "/settings.1m.sh")
+    do {
+        _ = try await settingsRunner.settingsCommand(pluginID: "settings.1m.sh", operation: "snapshot")
+        check("設定命令重新驗證檔案權限", false)
+    } catch { check("設定命令重新驗證檔案權限", true) }
+} catch { check("設定命令完整往返：\(error)", false) }
 
 print("整合測試目錄：\(root)")
 

@@ -93,6 +93,7 @@ enum PluginLogic {
         var title: String
         var items: [Item]
         var truncated = false     // 輸出超過 64 KB 或項目超過 30 個
+        var settingsAvailable = false
     }
 
     /// 解析外掛的 stdout。第一個 `---` 之前的第一行是標題，其餘 header 行忽略；
@@ -111,6 +112,7 @@ enum PluginLogic {
             .map { $0.hasSuffix("\r") ? String($0.dropLast()) : String($0) }
 
         var title = ""
+        var settingsAvailable = false
         var items: [Item] = []
         var inBody = false
         var count = 0
@@ -120,7 +122,11 @@ enum PluginLogic {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if !inBody {
                 if trimmed == "---" { inBody = true; continue }
-                if title.isEmpty, !trimmed.isEmpty { title = parseLine(trimmed).text }
+                if title.isEmpty, !trimmed.isEmpty {
+                    let header = parseLine(trimmed)
+                    title = header.text
+                    settingsAvailable = header.params["settings"] == "true"
+                }
                 continue
             }
             if trimmed == "---" {
@@ -167,7 +173,7 @@ enum PluginLogic {
             count += 1
             pendingSeparator = false
         }
-        return Output(title: title, items: items, truncated: truncated)
+        return Output(title: title, items: items, truncated: truncated, settingsAvailable: settingsAvailable)
     }
 
     /// 一行：`文字 | key=value key2="有 空白"`
