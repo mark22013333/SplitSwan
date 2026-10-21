@@ -661,6 +661,103 @@ pr.setEnabled(false)
 let r2 = pr.resources
 check("再關閉：timer、監看、事件訂閱全部釋放", r2.timers == 0 && !r2.watching && r2.observers == 0 && pr.plugins.isEmpty)
 
+let backgroundDir = root + "/locked-background", backgroundState = root + "/locked-background-state"
+let backgroundLog = root + "/locked-background.log", foregroundLog = root + "/locked-foreground.log"
+try! fm.createDirectory(atPath: backgroundDir, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+put("background.1m.sh", "#!/bin/bash\necho background >> \"\(backgroundLog)\"\necho Background\n", dir: backgroundDir)
+put("foreground.1m.sh", "#!/bin/bash\necho foreground >> \"\(foregroundLog)\"\necho Foreground\n", dir: backgroundDir)
+let backgroundSuite = "SplitSwan.BackgroundPluginTests.\(getpid())"
+let backgroundPreferences = UserDefaults(suiteName: backgroundSuite)!
+backgroundPreferences.removePersistentDomain(forName: backgroundSuite)
+backgroundPreferences.set(["background.1m.sh"], forKey: "BackgroundPlugins")
+let backgroundRunner = PluginRunner(directory: URL(fileURLWithPath: backgroundDir),
+                                    stateRoot: URL(fileURLWithPath: backgroundState),
+                                    preferences: backgroundPreferences)
+backgroundRunner.timeout = roomyTimeout
+backgroundRunner.setEnabled(true)
+_ = await eventually { logLines(backgroundLog) == 1 && logLines(foregroundLog) == 1 && backgroundRunner.runningIDs.isEmpty }
+check("背景外掛：啟動時背景與普通外掛都執行", logLines(backgroundLog) == 1 && logLines(foregroundLog) == 1)
+for (reason, name) in [(PluginRunner.PauseReason.locked, "鎖定"), (.screenSleep, "螢幕關閉"), (.screenSaver, "螢幕保護程式")] {
+    backgroundRunner.pause(reason)
+    let beforeBackground = logLines(backgroundLog), beforeForeground = logLines(foregroundLog)
+    await backgroundRunner.run("background.1m.sh")
+    await backgroundRunner.run("foreground.1m.sh")
+    check("背景外掛：\(name)仍執行，預期 \(beforeBackground + 1) 次，實際 \(logLines(backgroundLog)) 次",
+          logLines(backgroundLog) == beforeBackground + 1)
+    check("普通外掛：\(name)仍暫停", logLines(foregroundLog) == beforeForeground)
+    check("背景外掛：\(name)只保留背景 timer", backgroundRunner.resources.timers == 1)
+}
+backgroundRunner.pause(.sleep)
+let sleepingBackground = logLines(backgroundLog), sleepingForeground = logLines(foregroundLog)
+await backgroundRunner.run("background.1m.sh")
+await backgroundRunner.run("foreground.1m.sh")
+check("背景外掛：真正睡眠時全部停止", logLines(backgroundLog) == sleepingBackground
+      && logLines(foregroundLog) == sleepingForeground && backgroundRunner.resources.timers == 0)
+backgroundRunner.resume(.sleep)
+_ = await eventually { logLines(backgroundLog) > sleepingBackground && backgroundRunner.runningIDs.isEmpty }
+check("背景外掛：喚醒後未解鎖也立即執行，預期大於 \(sleepingBackground) 次，實際 \(logLines(backgroundLog)) 次",
+      logLines(backgroundLog) > sleepingBackground)
+check("普通外掛：喚醒但仍鎖定時維持暫停", logLines(foregroundLog) == sleepingForeground
+      && backgroundRunner.resources.timers == 1)
+backgroundRunner.resume(.screenSleep)
+backgroundRunner.resume(.screenSaver)
+backgroundRunner.resume(.locked)
+_ = await eventually { logLines(foregroundLog) > sleepingForeground && backgroundRunner.runningIDs.isEmpty }
+check("背景外掛：全部解除後普通外掛恢復", logLines(foregroundLog) > sleepingForeground
+      && backgroundRunner.resources.timers == 2)
+let backgroundNotifications = NSMutableArray()
+backgroundRunner.notifier = { _, _, body, _ in backgroundNotifications.add(body) }
+let heldStart = backgroundState + "/background.1m.sh/started"
+let heldRelease = backgroundState + "/background.1m.sh/release"
+let manualMarker = backgroundState + "/background.1m.sh/manual"
+put("background.1m.sh", "#!/bin/bash\nif [ \"${1:-}\" = action ]; then touch \"$SPLITSWAN_PLUGIN_STATE/manual\"; exit; fi\ntouch \"$SPLITSWAN_PLUGIN_STATE/started\"\nwhile [ ! -f \"$SPLITSWAN_PLUGIN_STATE/release\" ]; do sleep 0.02; done\necho 背景完成\necho ---\necho '背景通知 | notify=true notify_id=background-done'\n", dir: backgroundDir)
+let heldBackground = Task { await backgroundRunner.run("background.1m.sh") }
+_ = await eventually { fm.fileExists(atPath: heldStart) }
+backgroundRunner.pause(.locked)
+backgroundRunner.pause(.screenSleep)
+try! Data().write(to: URL(fileURLWithPath: heldRelease))
+await heldBackground.value
+check("背景外掛：執行中鎖定仍發布結果與通知", backgroundRunner.plugins.first(where: { $0.id == "background.1m.sh" })?.output?.title == "背景完成"
+      && backgroundNotifications.count == 1)
+backgroundRunner.setRunWhenLocked("background.1m.sh", false)
+await backgroundRunner.run("background.1m.sh")
+check("背景外掛：撤回背景授權即停止鎖定排程", backgroundRunner.resources.timers == 0
+      && backgroundRunner.plugins.first(where: { $0.id == "background.1m.sh" })?.runWhenLocked == false)
+let beforeBackgroundGrant = backgroundRunner.lastRuns["background.1m.sh"]
+backgroundRunner.setRunWhenLocked("background.1m.sh", true)
+_ = await eventually { backgroundRunner.lastRuns["background.1m.sh"] != beforeBackgroundGrant && backgroundRunner.runningIDs.isEmpty }
+let backgroundReloaded = PluginRunner(directory: URL(fileURLWithPath: backgroundDir),
+                                      stateRoot: URL(fileURLWithPath: backgroundState), preferences: backgroundPreferences)
+backgroundReloaded.scan()
+check("背景外掛：背景授權重新讀取後保留，普通外掛預設關閉", backgroundReloaded.plugins.first(where: { $0.id == "background.1m.sh" })?.runWhenLocked == true
+      && backgroundReloaded.plugins.first(where: { $0.id == "foreground.1m.sh" })?.runWhenLocked == false)
+backgroundRunner.setPluginEnabled("background.1m.sh", false)
+await backgroundRunner.run("background.1m.sh")
+check("背景外掛：個別停用仍停止全部排程", backgroundRunner.resources.timers == 0)
+let beforeBackgroundEnable = backgroundRunner.lastRuns["background.1m.sh"]
+backgroundRunner.setPluginEnabled("background.1m.sh", true)
+_ = await eventually { backgroundRunner.lastRuns["background.1m.sh"] != beforeBackgroundEnable && backgroundRunner.runningIDs.isEmpty }
+let beforeBackgroundResume = backgroundRunner.lastRuns["background.1m.sh"]
+backgroundRunner.resume(.screenSleep)
+backgroundRunner.resume(.locked)
+_ = await eventually { backgroundRunner.lastRuns["background.1m.sh"] != beforeBackgroundResume && backgroundRunner.runningIDs.isEmpty }
+try! fm.removeItem(atPath: heldStart)
+try! fm.removeItem(atPath: heldRelease)
+let manualBlocker = Task { await backgroundRunner.run("background.1m.sh") }
+_ = await eventually { fm.fileExists(atPath: heldStart) }
+backgroundRunner.perform(pluginID: "background.1m.sh", item: L.parseLine("手動 | bash=\(backgroundDir)/background.1m.sh param1=action"))
+_ = await eventually { backgroundRunner.pendingIdleWaiterCount > 0 }
+backgroundRunner.pause(.locked)
+backgroundRunner.resume(.locked)
+try! Data().write(to: URL(fileURLWithPath: heldRelease))
+await manualBlocker.value
+_ = await eventually { backgroundRunner.pendingIdleWaiterCount == 0 && backgroundRunner.runningIDs.isEmpty }
+check("背景外掛：鎖定前排隊的手動動作在解鎖後仍失效", !fm.fileExists(atPath: manualMarker))
+backgroundRunner.setEnabled(false)
+check("背景外掛：全域關閉仍釋放全部資源", backgroundRunner.resources.timers == 0
+      && !backgroundRunner.resources.watching && backgroundRunner.resources.observers == 0)
+backgroundPreferences.removePersistentDomain(forName: backgroundSuite)
+
 // 個別外掛開關：設定需持久化；停用後不排程、不接受點擊，其他外掛不受影響。
 let individualDir = root + "/individual", individualState = root + "/individual-state"
 let individualALog = root + "/individual-a.log", individualBLog = root + "/individual-b.log"
