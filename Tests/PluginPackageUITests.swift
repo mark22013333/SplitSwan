@@ -48,6 +48,9 @@ func runPackageUI() async throws -> Int {
     check("新版呈現更新前後資訊", model.preview?.previous?.version == "1.0.0" && model.preview?.prepared.manifest.version == "1.1.0")
     model.cancel()
     check("多檔拖曳有明確錯誤", !model.receive([provider,provider]) && model.failed && model.message?.contains("一個") == true)
+    runner.setRunWhenLocked("package:org.example.fixture", true)
+    check("管理頁可保留背景授權，不會因此啟用外掛", runner.plugins[0].runWhenLocked && !runner.plugins[0].isEnabled
+          && !fm.fileExists(atPath: root.appendingPathComponent("state").path))
     // 真正 NSHostingController 排版；截圖只包含去識別化範例，不讀真實設定。
     let screenshots = root.appendingPathComponent("screenshots")
     try fm.createDirectory(at: screenshots, withIntermediateDirectories: true)

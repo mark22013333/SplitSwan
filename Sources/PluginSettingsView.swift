@@ -61,6 +61,11 @@ struct PluginSettingsView: View {
             }
             Spacer()
             Menu("管理") {
+                Toggle("鎖定時持續執行", isOn: Binding(
+                    get: { p.runWhenLocked },
+                    set: { runner.setRunWhenLocked(p.id, $0) }
+                ))
+                Divider()
                 if let package = p.package {
                     Button("更新…") { packages.choose(updateID: p.id) }
                     Button("匯出…") { packages.export(package) }
@@ -86,6 +91,7 @@ struct PluginSettingsView: View {
     private func statusText(_ p: PluginRunner.Plugin) -> String {
         var parts = p.isEnabled ? ["每 \(PluginLogic.intervalText(p.interval))"] : ["已停用", "每 \(PluginLogic.intervalText(p.interval))"]
         if p.package == nil { parts.insert("單檔外掛", at: 0) }
+        if p.runWhenLocked { parts.append("鎖定時持續執行") }
         if let d = runner.lastRuns[p.id] {
             let f = DateFormatter()
             f.dateFormat = "HH:mm:ss"
