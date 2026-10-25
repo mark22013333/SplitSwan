@@ -33,6 +33,52 @@ enum PluginSettingsProtocol {
         let title: String
         let help: String?
         var guide: Guide? = nil
+        var summary: Summary? = nil
+        var groups: [Group]? = nil
+        /// 隱藏頁籤不出現在分段控制，只能由同表單的 `opensTab` 動作進入。
+        var hidden: Bool? = nil
+    }
+    enum Tone: String, Codable, Sendable { case ok, info, warn, error, neutral }
+    struct Badge: Codable, Equatable { let text: String; let tone: Tone }
+    struct Metric: Codable, Equatable {
+        let label: String
+        let value: String
+        var detail: String? = nil
+        var badge: Badge? = nil
+    }
+    struct Summary: Codable, Equatable {
+        let eyebrow: String
+        let headline: String
+        var reason: String? = nil
+        let tone: Tone
+        var toggleField: String? = nil
+        let metrics: [Metric]
+    }
+    struct Row: Codable, Equatable {
+        let label: String
+        let value: String
+        var tone: Tone? = nil
+        var action: String? = nil
+    }
+    struct Group: Codable, Equatable, Identifiable {
+        let id: String
+        let title: String
+        var help: String? = nil
+        var rows: [Row]? = nil
+        let fields: [String]
+        let actions: [String]
+        /// 列尾按鈕也算歸屬此群組的動作。
+        var memberActions: [String] { actions + (rows ?? []).compactMap(\.action) }
+    }
+    /// 頁籤依序呈現的內容；未歸屬群組或狀態卡片的欄位與動作照原本方式排在群組之後。
+    struct TabLayout {
+        let summary: Summary?
+        let groups: [Group]
+        let looseFields: [Field]
+        let looseActions: [Action]
+        func actions(after field: String) -> [Action] { looseActions.filter { $0.afterField == field } }
+        /// 未指定位置，或指定的欄位已被分組，都排在頁籤底部。
+        var trailingActions: [Action] { looseActions.filter { a in !looseFields.contains { $0.id == a.afterField } } }
     }
     struct Guide: Codable, Equatable {
         let summary: String
@@ -72,6 +118,10 @@ enum PluginSettingsProtocol {
         let afterField: String?
         var opensExternal: Bool? = nil
         var recheckAfter: Bool? = nil
+        /// 顯示「會登入」標籤，提醒此動作會登入外部網站。
+        var signsIn: Bool? = nil
+        /// 只在 App 內切換到指定的隱藏頁籤，不呼叫外掛。
+        var opensTab: String? = nil
     }
     struct Job: Codable, Equatable { let id: String; let state: String; let message: String }
     struct Snapshot: Codable, Equatable {
@@ -83,6 +133,16 @@ enum PluginSettingsProtocol {
         let values: [String: Value]
         let actions: [Action]
         let job: Job?
+
+        var visibleTabs: [Tab] { tabs.filter { $0.hidden != true } }
+        func layout(of tab: Tab) -> TabLayout {
+            let groups = tab.groups ?? []
+            let groupedFields = Set(groups.flatMap(\.fields) + [tab.summary?.toggleField].compactMap { $0 })
+            let groupedActions = Set(groups.flatMap(\.memberActions))
+            return TabLayout(summary: tab.summary, groups: groups,
+                             looseFields: fields.filter { $0.tab == tab.id && !groupedFields.contains($0.id) },
+                             looseActions: actions.filter { $0.tab == tab.id && !groupedActions.contains($0.id) })
+        }
     }
     struct Request: Encodable {
         let revision: String
@@ -152,17 +212,62 @@ enum PluginSettingsProtocol {
                   unique(guide.refreshFields), Set(guide.refreshFields).isSubset(of: fields),
                   let check = actions.first(where: { $0.id == guide.checkAction }),
                   check.input == nil, check.destructive != true, check.opensExternal != true, check.recheckAfter != true,
+                  check.opensTab == nil,
                   guide.steps.allSatisfy({ step in
                       validID(step.id) && !step.title.isEmpty &&
                       ["pending", "checking", "completed", "attention"].contains(step.state) &&
                       (step.primaryAction == nil || step.actions.contains(step.primaryAction!))
                   }) else { throw Problem(message: "外掛設定精靈的步驟或參照不正確") }
         }
+        try validateLayout(s, validID: validID)
         if let job = s.job {
             guard validID(job.id), ["running", "succeeded", "failed"].contains(job.state) else {
                 throw Problem(message: "外掛設定工作格式不正確")
             }
         }
         return s
+    }
+
+    /// 狀態卡片、分組與隱藏頁籤都是選填；所有參照只能指向同頁籤既有項目，且每個欄位與動作最多出現一次。
+    private static func validateLayout(_ s: Snapshot, validID: (String) -> Bool) throws {
+        let fail = Problem(message: "外掛設定的狀態卡片、分組或隱藏頁籤不正確")
+        func text(_ value: String, _ limit: Int) -> Bool { !value.isEmpty && value.count <= limit }
+        func optional(_ value: String?, _ limit: Int) -> Bool { value.map { text($0, limit) } ?? true }
+        let hiddenTabs = Set(s.tabs.filter { $0.hidden == true }.map(\.id))
+        guard !s.visibleTabs.isEmpty else { throw fail }
+        for action in s.actions {
+            guard let target = action.opensTab else { continue }
+            guard hiddenTabs.contains(target), action.input == nil, action.destructive != true,
+                  action.opensExternal != true, action.recheckAfter != true, action.signsIn != true else { throw fail }
+        }
+        for tab in s.tabs {
+            let fields = Dictionary(uniqueKeysWithValues: s.fields.filter { $0.tab == tab.id }.map { ($0.id, $0) })
+            let actionIDs = Set(s.actions.filter { $0.tab == tab.id }.map(\.id))
+            let groups = tab.groups ?? []
+            if tab.guide != nil, tab.summary != nil || !groups.isEmpty { throw fail }
+            var placedFields: [String] = [], placedActions: [String] = []
+            if let summary = tab.summary {
+                guard text(summary.eyebrow, 60), text(summary.headline, 80), optional(summary.reason, 200),
+                      summary.metrics.count <= 4,
+                      summary.metrics.allSatisfy({ m in
+                          text(m.label, 40) && text(m.value, 80) && optional(m.detail, 200) && optional(m.badge?.text, 24)
+                      }) else { throw fail }
+                if let toggle = summary.toggleField {
+                    guard fields[toggle]?.type == "toggle" else { throw fail }
+                    placedFields.append(toggle)
+                }
+            }
+            guard groups.count <= 10, Set(groups.map(\.id)).count == groups.count else { throw fail }
+            for group in groups {
+                let rows = group.rows ?? []
+                guard validID(group.id), text(group.title, 60), optional(group.help, 2000), rows.count <= 12,
+                      rows.allSatisfy({ text($0.label, 40) && $0.value.count <= 300 }),
+                      group.fields.allSatisfy({ fields[$0] != nil }),
+                      group.memberActions.allSatisfy(actionIDs.contains) else { throw fail }
+                placedFields += group.fields
+                placedActions += group.memberActions
+            }
+            guard Set(placedFields).count == placedFields.count, Set(placedActions).count == placedActions.count else { throw fail }
+        }
     }
 }
