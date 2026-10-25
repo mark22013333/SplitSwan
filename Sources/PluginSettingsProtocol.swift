@@ -120,7 +120,7 @@ enum PluginSettingsProtocol {
         var recheckAfter: Bool? = nil
         /// 顯示「會登入」標籤，提醒此動作會登入外部網站。
         var signsIn: Bool? = nil
-        /// 只在 App 內切換到指定的隱藏頁籤，不呼叫外掛。
+        /// 只在 App 內切換到指定的隱藏頁籤；切換本身不呼叫外掛，但目標頁籤有精靈時會照規則自動檢查。
         var opensTab: String? = nil
     }
     struct Job: Codable, Equatable { let id: String; let state: String; let message: String }

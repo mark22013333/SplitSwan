@@ -149,13 +149,14 @@ func runConfigurationTests() async throws -> Int {
                 ["id": "settings", "title": "設定",
                  "groups": [["id": "account", "title": "帳號", "help": "隔離的說明。",
                              "rows": [["label": "請假日曆", "value": "已連接", "tone": "ok", "action": "manage"]],
-                             "fields": ["user", "start"], "actions": ["run"]]]],
+                             "fields": ["user"], "actions": ["run"]],
+                            ["id": "hours", "title": "時間", "fields": ["start"], "actions": []]]],
                 ["id": "wizard", "title": "精靈", "hidden": true],
             ] as [[String: Any]],
             "fields": [
                 ["id": "enabled", "tab": "status", "title": "背景執行", "type": "toggle"],
                 ["id": "user", "tab": "settings", "title": "帳號", "type": "text"],
-                ["id": "start", "tab": "settings", "title": "開始時間", "type": "time"],
+                ["id": "start", "tab": "settings", "title": "最早的開始上班時間", "type": "time"],
                 ["id": "name", "tab": "wizard", "title": "名稱", "type": "text"],
             ],
             "values": ["enabled": false, "user": "example", "start": "08:30", "name": ""] as [String: Any],
@@ -202,6 +203,18 @@ func runConfigurationTests() async throws -> Int {
     check("失敗訊息切換頁籤後仍保留，未由此視窗觸發的工作不附標題",
           layoutModel.notice?.job.state == "failed" && layoutModel.notice?.origin == nil)
     layoutModel.stop()
+
+    var openedJob: (id: String, state: String)? = ("earlier", "succeeded")
+    let reopenedLayout = PluginConfigurationModel(pluginID: "reopened-fixture", command: { _, _ in try layoutForm(job: openedJob) })
+    await reopenedLayout.load()
+    await reopenedLayout.enterTab("status")
+    check("開窗第一次進入頁籤保留先前成功的工作訊息", reopenedLayout.notice?.job.id == "earlier")
+    await reopenedLayout.enterTab("status")
+    check("重新進入同一頁籤不收起訊息", reopenedLayout.notice?.job.id == "earlier")
+    await reopenedLayout.enterTab("settings")
+    check("使用者切換頁籤才收起成功訊息", reopenedLayout.notice == nil)
+    openedJob = nil
+    reopenedLayout.stop()
 
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
@@ -261,6 +274,40 @@ func runConfigurationTests() async throws -> Int {
     }
     check("分組的時間欄位使用時間選擇器", pickers.count == 1 && pickers[0].bounds.width < 200)
     check("分組的短文字欄位不再全寬", textInputs.count == 1 && textInputs[0].bounds.width <= 330 && textInputs[0].bounds.height >= 22)
+    func windowX(_ view: NSView) -> CGFloat { view.convert(view.bounds, to: nil).minX }
+    let columnGap = pickers.first.flatMap { p in textInputs.first.map { abs(windowX($0) - windowX(p)) } } ?? .infinity
+    check("同一頁籤各分組的第二欄起點一致（差 \(columnGap)）", columnGap < 1)
+    // 視窗內距 24、卡片內距 18、欄距 14；第二欄要排在最長標題之後，標題不被擠成兩行。
+    let longest = ("最早的開始上班時間" as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: NSFont.systemFontSize)]).width
+    let columnStart = pickers.first.map(windowX) ?? 0
+    check("共用欄寬容納同頁籤最長的標題（第二欄 \(columnStart)，需 ≥ \(24 + 18 + longest + 14)）", columnStart >= 24 + 18 + longest + 14 - 1)
+
+    func manyTabsForm() throws -> P.Snapshot {
+        let tabs = (1...8).map { ["id": "t\($0)", "title": "很長的頁籤標題第\($0)個"] }
+        let fields = tabs.map { ["id": "f" + $0["id"]!, "tab": $0["id"]!, "title": "欄位", "type": "readonly"] }
+        let values = Dictionary(uniqueKeysWithValues: fields.map { ($0["id"]!, "唯讀") })
+        return try P.decode(JSONSerialization.data(withJSONObject: [
+            "version": 1, "title": "頁籤過多", "revision": "r1", "tabs": tabs, "fields": fields, "values": values, "actions": [] as [Any]]))
+    }
+    let manyModel = PluginConfigurationModel(pluginID: "many-tabs", command: { _, _ in try manyTabsForm() })
+    let manyWindow = NSWindow(contentViewController: NSHostingController(rootView: PluginConfigurationView(model: manyModel)))
+    manyWindow.styleMask = [.titled, .closable, .resizable]
+    manyWindow.setFrameOrigin(NSPoint(x: -20000, y: -20000))
+    manyWindow.setContentSize(NSSize(width: 680, height: 560))
+    manyWindow.orderBack(nil)
+    defer { manyWindow.orderOut(nil); manyModel.stop() }
+    var menus: [NSPopUpButton] = [], manySegments: [NSSegmentedControl] = []
+    for _ in 0..<150 {
+        manyWindow.contentView?.layoutSubtreeIfNeeded()
+        let views = manyWindow.contentView.map(descendants) ?? []
+        menus = views.compactMap { $0 as? NSPopUpButton }
+        manySegments = views.compactMap { $0 as? NSSegmentedControl }
+        if manyModel.selectedTabID == "t1", !menus.isEmpty || !manySegments.isEmpty { break }
+        try? await Task.sleep(for: .milliseconds(20))
+    }
+    let contentWidth = manyWindow.contentView?.bounds.width ?? 0
+    check("頁籤超出寬度時改用選單，不超出視窗", manySegments.isEmpty && menus.count == 1 && menus[0].numberOfItems == 8
+          && windowX(menus[0]) >= 0 && windowX(menus[0]) + menus[0].bounds.width <= contentWidth)
     print("通過 \(passed)，失敗 \(failed)")
     return failed
 }

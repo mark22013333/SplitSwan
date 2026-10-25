@@ -27,6 +27,8 @@ final class PluginConfigurationModel: ObservableObject {
     private var pendingChecks: [String: Bool] = [:]
     private var externalTab: String?
     private var postJobCheck: (id: String, tab: String)?
+    /// 上一次進入的頁籤；開窗後第一次進入不算使用者切換。
+    private var enteredTabID: String?
 
     init(pluginID: String, command: (@MainActor (String, P.Request?) async throws -> P.Snapshot)? = nil,
          now: @escaping () -> Date = Date.init, pollInterval: Duration = .seconds(2)) {
@@ -63,7 +65,8 @@ final class PluginConfigurationModel: ObservableObject {
     func enterTab(_ id: String) async {
         selectedTabID = id
         if snapshot?.tabs.first(where: { $0.id == id })?.hidden != true { returnTabID = nil }
-        if let job = snapshot?.job, job.state == "succeeded" { dismissedJobID = job.id }
+        if let previous = enteredTabID, previous != id, let job = snapshot?.job, job.state == "succeeded" { dismissedJobID = job.id }
+        enteredTabID = id
         await checkCurrentTab()
     }
     func returnFromHiddenTab() {
@@ -229,6 +232,11 @@ final class PluginConfigurationWindows: NSObject, NSWindowDelegate {
     }
 }
 
+private struct LabelWidthKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
 private extension PluginSettingsProtocol.Tone {
     var color: Color {
         switch self {
@@ -248,6 +256,8 @@ struct PluginConfigurationView: View {
     @State private var stepExpanded: [String: Bool] = [:]
     @State private var editingGuides: Set<String> = []
     @State private var openHelp: Set<String> = []
+    /// 同一頁籤所有分組共用的標題欄寬度，取各標題自然寬度的最大值。
+    @State private var labelColumn: CGFloat?
 
     private func label(_ text: String) -> String { PluginLogic.sanitize(text) }
     private var locked: Bool { model.busy || model.snapshot?.job?.state == "running" }
@@ -327,12 +337,19 @@ struct PluginConfigurationView: View {
                 Spacer()
             }
         } else {
-            Picker("頁籤", selection: $model.selectedTabID) {
-                ForEach(s.visibleTabs) { Text(label($0.title)).tag($0.id) }
+            // 頁籤多或標題長、分段控制放不下時改用選單，避免超出視窗。
+            ViewThatFits(in: .horizontal) {
+                tabPicker(s).pickerStyle(.segmented).fixedSize()
+                tabPicker(s).pickerStyle(.menu).fixedSize()
             }
-            .pickerStyle(.segmented).labelsHidden().fixedSize()
             .frame(maxWidth: .infinity)
         }
+    }
+    private func tabPicker(_ s: P.Snapshot) -> some View {
+        Picker("頁籤", selection: $model.selectedTabID) {
+            ForEach(s.visibleTabs) { Text(label($0.title)).tag($0.id) }
+        }
+        .labelsHidden()
     }
     private func noticeView(_ notice: PluginConfigurationModel.Notice) -> some View {
         let tone: P.Tone = notice.job.state == "failed" ? .warn : notice.job.state == "running" ? .info : .ok
@@ -374,6 +391,8 @@ struct PluginConfigurationView: View {
                 ForEach(layout.trailingActions) { action in actionView(action) }
             }
         }
+        // 掛在整個頁籤上才會合併所有分組；掛在 ForEach 上會變成每組各自回報。
+        .onPreferenceChange(LabelWidthKey.self) { labelColumn = $0 > 0 ? min($0, 200) : nil }
     }
 
     private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
@@ -474,7 +493,7 @@ struct PluginConfigurationView: View {
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 12) {
                 ForEach(fields) { field in
                     GridRow {
-                        Text(label(field.title)).gridColumnAlignment(.trailing)
+                        groupLabel(field.title)
                         VStack(alignment: .leading, spacing: 6) {
                             control(field, compact: true)
                             if let help = field.help {
@@ -490,7 +509,7 @@ struct PluginConfigurationView: View {
                 }
                 ForEach(Array((group.rows ?? []).enumerated()), id: \.offset) { _, row in
                     GridRow {
-                        Text(label(row.label)).gridColumnAlignment(.trailing)
+                        groupLabel(row.label)
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
                             if let tone = row.tone { dot(tone) }
                             Text(P.displayText(row.value)).foregroundStyle(.secondary).textSelection(.enabled)
@@ -504,7 +523,7 @@ struct PluginConfigurationView: View {
                 }
                 if !trailing.isEmpty {
                     GridRow {
-                        Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+                        Color.clear.frame(width: labelColumn ?? 0).gridCellUnsizedAxes(.vertical)
                         HStack(spacing: 8) { ForEach(trailing) { action in actionView(action, inline: true) } }
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -513,6 +532,16 @@ struct PluginConfigurationView: View {
         }
     }
 
+    /// 標題靠左、固定為共用欄寬；以不受欄寬限制的隱藏副本量測自然寬度。
+    private func groupLabel(_ text: String) -> some View {
+        Text(label(text))
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(width: labelColumn, alignment: .leading)
+            .background(Text(label(text)).fixedSize().hidden().background(GeometryReader { proxy in
+                Color.clear.preference(key: LabelWidthKey.self, value: proxy.size.width)
+            }))
+            .gridColumnAlignment(.leading)
+    }
     private func textBinding(_ id: String) -> Binding<String> {
         Binding(get: { model.draft[id]?.text ?? "" }, set: { model.draft[id] = .text($0) })
     }
@@ -602,7 +631,7 @@ struct PluginConfigurationView: View {
                 if action.destructive == true { confirming = action }
                 else { perform(action) }
             }
-            // 切換到隱藏頁籤不呼叫外掛，草稿與執行中的工作都不影響。
+            // 切換到隱藏頁籤本身不呼叫外掛，草稿與執行中的工作都不影響按鈕。
             .disabled(action.opensTab == nil && (model.busy || model.dirty || model.snapshot?.job?.state == "running"))
             if primary { button.buttonStyle(.borderedProminent) }
             else { button }
