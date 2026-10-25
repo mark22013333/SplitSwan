@@ -11,7 +11,7 @@
 #   7. 相容性：舊版 App 只認「ok vpnN／fail vpnN」整行，新的 route 行不影響
 # 範例網段用虛構的 10.0.0.x；全部只在暫存目錄內操作，結束時清掉；設 KEEP_TMP=1 可保留。
 set -uo pipefail
-SRC="$(cd "$(dirname "$0")/.." && pwd)/splitswan-helper"
+SRC="$(cd "$(dirname "$0")/.." && pwd)/tools/external-vpn/company-backend"
 [ -f "$SRC" ] || { echo "找不到 $SRC"; exit 1; }
 RUN=$(mktemp -d "${TMPDIR:-/tmp}/splitswan-route.XXXXXX") || exit 1
 RUN=$(cd "$RUN" && pwd -P)
@@ -115,7 +115,7 @@ EOF
 chmod 755 "$RUN/bin/charon" "$RUN/other/charon" "$RUN/bin/swanctl" "$RUN/bin/route" "$RUN/bin/ifconfig"
 
 sed -e "s#^SWANCTL=.*#SWANCTL=$RUN/bin/swanctl#" -e "s#^CHARON=.*#CHARON=$RUN/bin/charon#" \
-    -e "s#^ROUTE=.*#ROUTE=$RUN/bin/route#" -e "s#^IFCONFIG=.*#IFCONFIG=$RUN/bin/ifconfig#" -e "s#^CHARON_UID=.*#CHARON_UID=$(id -u)#" -e "s#^HELPER_TMPDIR=.*#HELPER_TMPDIR=$RUN/tmp#" "$SRC" >"$RUN/helper"
+    -e "s#^ROUTE=.*#ROUTE=$RUN/bin/route#" -e "s#^IFCONFIG=.*#IFCONFIG=$RUN/bin/ifconfig#" -e "s#^CHARON_UID=.*#CHARON_UID=$(id -u)#" -e '/root worker required/d' -e "s#^HELPER_TMPDIR=.*#HELPER_TMPDIR=$RUN/tmp#" "$SRC" >"$RUN/helper"
 grep -q "^ROUTE=$RUN/bin/route\$" "$RUN/helper" && grep -q "^CHARON=$RUN/bin/charon\$" "$RUN/helper" \
   && grep -q "^HELPER_TMPDIR=$RUN/tmp\$" "$RUN/helper" && grep -q "^IFCONFIG=$RUN/bin/ifconfig\$" "$RUN/helper" \
   && grep -q "^CHARON_UID=$(id -u)\$" "$RUN/helper"

@@ -15,6 +15,7 @@
 import AppKit
 import Darwin.membership
 import Foundation
+import os
 
 @MainActor
 final class PluginRunner: ObservableObject {
@@ -103,6 +104,13 @@ final class PluginRunner: ObservableObject {
     /// 手動操作與普通排程不能跨越鎖定；背景排程只有關閉或真正睡眠才失效。
     private var epoch = 0
     private var backgroundEpoch = 0
+    private struct RefreshGeneration: Sendable {
+        let foreground: Int
+        let background: Int
+
+        func epoch(for plugin: Plugin) -> Int { plugin.runWhenLocked ? background : foreground }
+    }
+    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "SplitSwan", category: "plugins")
     private let allowInactiveExecution: Bool
     private let preferences: UserDefaults
     private var pluginGenerations: [String: Int] = [:]
@@ -145,6 +153,7 @@ final class PluginRunner: ObservableObject {
             if !isActive {
                 isActive = true
                 addObservers()
+                logLifecycle("start")
             }
             requestRefresh()
             return
@@ -160,6 +169,7 @@ final class PluginRunner: ObservableObject {
         cancelTimers()
         setPlugins([])
         if !skipped.isEmpty { skipped = [] }
+        logLifecycle("stop")
     }
 
     /// 開啟設定頁、喚醒時呼叫
@@ -167,29 +177,30 @@ final class PluginRunner: ObservableObject {
         requestRefresh()
     }
 
-    /// UI 與生命週期事件共用的重新整理入口。在同步請求當下擷取世代，
-    /// 實際開始時若已關閉、不允許排程或世代改變，連掃描都不會進行。
+    /// 掃描可跨越軟暫停；普通外掛仍不能沿用鎖定前的執行請求。
     func requestRefresh() {
-        guard isActive, canRefresh else { return }
-        let requestedEpoch = epoch
-        Task { await refreshAll(requestedEpoch: requestedEpoch) }
+        guard isActive, canRefresh else { logLifecycle("refresh.blocked"); return }
+        let generation = RefreshGeneration(foreground: epoch, background: backgroundEpoch)
+        Task { await refreshAll(generation: generation) }
     }
 
     /// 重新掃描、同步監看與排程，並立刻執行全部外掛（測試也直接呼叫這個）
     func refreshAll() async {
-        let requestedEpoch = epoch
-        guard canRefresh else { return }
-        await refreshAll(requestedEpoch: requestedEpoch)
+        let generation = RefreshGeneration(foreground: epoch, background: backgroundEpoch)
+        guard canRefresh else { logLifecycle("refresh.blocked"); return }
+        await refreshAll(generation: generation)
     }
 
-    private func refreshAll(requestedEpoch: Int) async {
-        guard canRefresh, requestedEpoch == epoch else { return }
+    private func refreshAll(generation: RefreshGeneration) async {
+        guard canRefresh else { logLifecycle("refresh.blocked"); return }
+        guard generation.background == backgroundEpoch else { logLifecycle("refresh.stale"); return }
         scan()
         for p in plugins where p.actionError != nil { update(p.id) { $0.actionError = nil } }
         syncWatcher()
         syncTimers()
+        logLifecycle("refresh.applied")
         await withTaskGroup(of: Void.self) { group in
-            for p in plugins { group.addTask { await self.run(p.id) } }
+            for p in plugins { group.addTask { await self.run(p.id, refresh: generation) } }
         }
     }
 
@@ -201,12 +212,23 @@ final class PluginRunner: ObservableObject {
         epoch += 1
         if reason == .sleep { backgroundEpoch += 1 }
         syncTimers()
+        logLifecycle("pause")
     }
 
     /// 喚醒時即使仍鎖定，也恢復已授權的背景排程。
     func resume(_ reason: PauseReason) {
         guard isActive, paused.remove(reason) != nil else { return }
+        logLifecycle("resume")
         requestRefresh()
+    }
+
+    private func logLifecycle(_ event: String) {
+        let reasons = paused.map { String(describing: $0) }.sorted().joined(separator: ",")
+        Self.logger.notice("""
+            event=\(event, privacy: .public) paused=\(reasons, privacy: .public) \
+            active=\(self.isActive, privacy: .public) loaded=\(self.plugins.count, privacy: .public) \
+            timers=\(self.timers.count, privacy: .public)
+            """)
     }
 
     private func addObservers() {
@@ -447,7 +469,12 @@ final class PluginRunner: ObservableObject {
     nonisolated static let stderrLimit = 4096
 
     func run(_ id: String) async {
+        await run(id, refresh: nil)
+    }
+
+    private func run(_ id: String, refresh: RefreshGeneration?) async {
         guard canSchedule(id), let p = plugins.first(where: { $0.id == id }) else { return }
+        if let refresh, refresh.epoch(for: p) != scheduledEpoch(id) { return }
         if inFlight.contains(id) { rerunAfter.insert(id); return }
         let myEpoch = scheduledEpoch(id)
         let myGeneration = pluginGenerations[id, default: 0]
@@ -644,7 +671,7 @@ final class PluginRunner: ObservableObject {
     }
 
     private var canRefresh: Bool {
-        isActiveOrDirect && !paused.contains(.sleep) && (paused.isEmpty || plugins.contains { canSchedule($0.id) })
+        isActiveOrDirect && !paused.contains(.sleep) && (paused.isEmpty || !backgroundPluginIDs.isEmpty)
     }
 
     // MARK: 點擊

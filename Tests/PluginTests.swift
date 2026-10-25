@@ -758,6 +758,89 @@ check("背景外掛：全域關閉仍釋放全部資源", backgroundRunner.resou
       && !backgroundRunner.resources.watching && backgroundRunner.resources.observers == 0)
 backgroundPreferences.removePersistentDomain(forName: backgroundSuite)
 
+for wakesFromSleep in [false, true] {
+    let name = wakesFromSleep ? "wake-before-scan" : "screen-sleep-before-scan"
+    let dir = root + "/" + name + "/plugins", state = root + "/" + name + "/state"
+    let backgroundLog = root + "/" + name + "/background.log"
+    let foregroundLog = root + "/" + name + "/foreground.log"
+    try! fm.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    put("background.1m.sh", "#!/bin/bash\necho ran >> \"\(backgroundLog)\"\necho Background\n", dir: dir)
+    put("foreground.1m.sh", "#!/bin/bash\necho ran >> \"\(foregroundLog)\"\necho Foreground\n", dir: dir)
+    let suite = "SplitSwan.Startup.\(name).\(getpid())"
+    let preferences = UserDefaults(suiteName: suite)!
+    preferences.set(["background.1m.sh"], forKey: PluginRunner.backgroundPluginsKey)
+    let runner = PluginRunner(directory: URL(fileURLWithPath: dir), stateRoot: URL(fileURLWithPath: state),
+                              preferences: preferences)
+    runner.timeout = roomyTimeout
+    runner.setEnabled(true)
+    runner.pause(.locked)
+    NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+    if wakesFromSleep {
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.willSleepNotification, object: nil)
+        await Task.yield()
+        check("啟動競態：首次掃描前真正睡眠仍零掃描、零執行", runner.plugins.isEmpty
+              && runner.resources.timers == 0 && logLines(backgroundLog) == 0 && !fm.fileExists(atPath: state))
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.didWakeNotification, object: nil)
+    }
+    _ = await eventually(3) { logLines(backgroundLog) > 0 && runner.runningIDs.isEmpty }
+    check("啟動競態：\(name)仍載入背景外掛，預期 2 支，實際 \(runner.plugins.count) 支", runner.plugins.count == 2)
+    check("啟動競態：\(name)未解鎖仍執行背景外掛，預期至少 1 次，實際 \(logLines(backgroundLog)) 次",
+          logLines(backgroundLog) > 0 && runner.resources.timers == 1)
+    check("啟動競態：\(name)普通外掛保持暫停", logLines(foregroundLog) == 0)
+    runner.setEnabled(false)
+    preferences.removePersistentDomain(forName: suite)
+}
+
+let startupPausedDir = root + "/startup-without-grant/plugins"
+let startupPausedState = root + "/startup-without-grant/state"
+try! fm.createDirectory(atPath: startupPausedDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+put("foreground.1m.sh", "#!/bin/bash\necho Foreground\n", dir: startupPausedDir)
+let startupPaused = PluginRunner(directory: URL(fileURLWithPath: startupPausedDir),
+                                 stateRoot: URL(fileURLWithPath: startupPausedState))
+startupPaused.setEnabled(true)
+startupPaused.pause(.locked)
+await Task.yield()
+await startupPaused.refreshAll()
+check("啟動競態：沒有背景授權時鎖定仍不掃描、不建立狀態", startupPaused.plugins.isEmpty
+      && startupPaused.resources.timers == 0 && !fm.fileExists(atPath: startupPausedState))
+startupPaused.setEnabled(false)
+
+let startupOffSuite = "SplitSwan.StartupOff.\(getpid())"
+let startupOffPreferences = UserDefaults(suiteName: startupOffSuite)!
+startupOffPreferences.set(["foreground.1m.sh"], forKey: PluginRunner.backgroundPluginsKey)
+let startupOff = PluginRunner(directory: URL(fileURLWithPath: startupPausedDir),
+                              stateRoot: URL(fileURLWithPath: startupPausedState), preferences: startupOffPreferences)
+startupOff.setEnabled(true)
+startupOff.pause(.locked)
+startupOff.setEnabled(false)
+await Task.yield()
+await startupOff.refreshAll()
+check("啟動競態：背景初始請求在全域關閉後不能掃描或執行", startupOff.plugins.isEmpty
+      && startupOff.resources.timers == 0 && !startupOff.resources.watching && startupOff.resources.observers == 0
+      && !fm.fileExists(atPath: startupPausedState))
+startupOffPreferences.removePersistentDomain(forName: startupOffSuite)
+
+let startupEpochDir = root + "/startup-epoch/plugins", startupEpochState = root + "/startup-epoch/state"
+let startupEpochLog = root + "/startup-epoch/foreground.log"
+try! fm.createDirectory(atPath: startupEpochDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+put("background.1m.sh", "#!/bin/bash\necho Background\n", dir: startupEpochDir)
+put("foreground.1m.sh", "#!/bin/bash\necho ran >> \"\(startupEpochLog)\"\necho Foreground\n", dir: startupEpochDir)
+let startupEpochSuite = "SplitSwan.StartupEpoch.\(getpid())"
+let startupEpochPreferences = UserDefaults(suiteName: startupEpochSuite)!
+startupEpochPreferences.set(["background.1m.sh"], forKey: PluginRunner.backgroundPluginsKey)
+let startupEpochRunner = PluginRunner(directory: URL(fileURLWithPath: startupEpochDir),
+                                      stateRoot: URL(fileURLWithPath: startupEpochState), preferences: startupEpochPreferences)
+startupEpochRunner.timeout = roomyTimeout
+startupEpochRunner.setEnabled(true)
+startupEpochRunner.pause(.locked)
+startupEpochRunner.resume(.locked)
+_ = await eventually { logLines(startupEpochLog) > 0 && startupEpochRunner.runningIDs.isEmpty }
+let resurrectedStartupRequest = await eventually(3) { logLines(startupEpochLog) > 1 }
+check("啟動競態：鎖定再解鎖只執行新請求的普通外掛，預期 1 次，實際 \(logLines(startupEpochLog)) 次",
+      !resurrectedStartupRequest && logLines(startupEpochLog) == 1)
+startupEpochRunner.setEnabled(false)
+startupEpochPreferences.removePersistentDomain(forName: startupEpochSuite)
+
 // 個別外掛開關：設定需持久化；停用後不排程、不接受點擊，其他外掛不受影響。
 let individualDir = root + "/individual", individualState = root + "/individual-state"
 let individualALog = root + "/individual-a.log", individualBLog = root + "/individual-b.log"

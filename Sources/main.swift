@@ -24,8 +24,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var pluginItem: NSMenuItem?
     private var menuIsTracking = false
     private var pluginRenderPending = false
+    private lazy var externalMenu = ExternalVPNMenu(model: .shared, availability: { [weak self] in
+        guard let self else { return .init(helperReady: false, installing: false, companyBusy: true) }
+        return .init(helperReady: env.externalVPNReady, installing: env.running,
+                     companyBusy: vpn.busy || vpn.wantConnected || vpn.state.isConnected || vpn.state.isConnecting)
+    }, openSettings: { [weak self] in
+        self?.showWindow()
+        self?.windowModel.tab = .externalVPN
+    })
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        vpn.companyAdmission = {
+            ExternalVPNController.shared.companyPolicyAllowsConnection ? nil : "自動分流尚未允許公司連線；需使用新版系統元件、沿用 VPN DNS 並等分流啟用"
+        }
+        ExternalVPNController.shared.willStop = { [weak self] in self?.vpn.cancelConnectionIntent() }
         buildMainMenu()
         buildMenu()
         vpn.$state.combineLatest(vpn.$busy, vpn.$settings, vpn.$retryNote)
@@ -37,6 +49,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             .store(in: &bag)
         vpn.$history.receive(on: RunLoop.main)          // F4 閘道最近狀態
             .sink { [weak self] _ in self?.renderMenu() }
+            .store(in: &bag)
+        ExternalVPNController.shared.$status.combineLatest(ExternalVPNController.shared.$busy)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _, _ in self?.renderMenu() }
+            .store(in: &bag)
+        env.$externalVPNReady.combineLatest(env.$running)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _, _ in self?.renderMenu() }
             .store(in: &bag)
         NotificationCenter.default.publisher(for: .splitSwanShowWindow)
             .receive(on: RunLoop.main)
@@ -90,6 +110,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         LogStore.shared.stop()
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard ExternalVPNController.shared.isManaging else { return .terminateNow }
+        Task {
+            await ExternalVPNController.shared.stop()
+            if ExternalVPNController.shared.isManaging {
+                showWindow()
+                windowModel.tab = .externalVPN
+                sender.reply(toApplicationShouldTerminate: false)
+            } else { sender.reply(toApplicationShouldTerminate: true) }
+        }
+        return .terminateLater
+    }
+
     private func launchedAsLoginItem() -> Bool {
         guard let event = NSAppleEventManager.shared().currentAppleEvent else { return false }
         return event.eventID == kAEOpenApplication
@@ -115,6 +148,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if vpn.state == .helperMissing { windowModel.tab = .environment }
         // 開發用：open SplitSwan.app --args -InitialTab settings|environment|about [-ShowLog YES] 直接開指定分頁（截圖檢查排版用）
         switch UserDefaults.standard.string(forKey: "InitialTab") {
+        case "external-vpn": windowModel.tab = .externalVPN
         case "settings": windowModel.tab = .settings
         case "environment": windowModel.tab = .environment
         case "about": windowModel.tab = .about
@@ -180,6 +214,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         disconnectItem = NSMenuItem(title: "斷線", action: #selector(disconnect), keyEquivalent: "d")
         menu.addItem(disconnectItem)
+        menu.addItem(.separator())
+        externalMenu.append(to: menu)
 
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "開啟 \(AppInfo.name) 視窗…", action: #selector(showWindow), keyEquivalent: "o"))
@@ -187,7 +223,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(pluginAnchor)
         menu.addItem(NSMenuItem(title: "結束 \(AppInfo.name)", action: #selector(quit), keyEquivalent: "q"))
 
-        for item in menu.items where item.action != nil { item.target = self }
+        for item in menu.items where item.action != nil && item.target == nil { item.target = self }
         menu.autoenablesItems = false
         menu.delegate = self
         statusItem.menu = menu
@@ -205,6 +241,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func renderMenu() {
+        externalMenu.render()
         switch vpn.state {
         case .connected(let c, let ip):
             statusLine.title = "已連線：\(c.uppercased())  \(ip)"
@@ -220,7 +257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                                                      state: MenuBarIcon.state(for: vpn.state, busy: vpn.busy),
                                                      colored: MenuBarIcon.colorConnected)
 
-        let ready = !vpn.busy && vpn.state != .helperMissing
+        let ready = !vpn.busy && vpn.state != .helperMissing && ExternalVPNController.shared.canConnectCompany
         let active = vpn.state.isConnected || vpn.state.isConnecting
         connectItems[0].isEnabled = ready && !active
         for i in 0..<3 {
@@ -235,7 +272,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func connect(_ sender: NSMenuItem) {
-        if let t = sender.representedObject as? String { vpn.connect(t) }
+        guard ExternalVPNController.shared.canConnectCompany,
+              !vpn.busy, vpn.state != .helperMissing, !vpn.state.isConnected, !vpn.state.isConnecting,
+              let target = sender.representedObject as? String,
+              target == "auto" || (Int(target).map { (1...3).contains($0) && !vpn.settings.gateways[$0 - 1].isEmpty } == true) else { return }
+        vpn.connect(target)
     }
     @objc private func disconnect() { vpn.disconnect() }
     @objc private func openLog() {

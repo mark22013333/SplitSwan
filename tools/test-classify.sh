@@ -6,7 +6,7 @@
 #    （舊版 App 認的「fail vpnN」整行仍在、原因在獨立的 reason 行、原始輸出中的帳號與位址不外流）
 # 範例位址一律用 RFC 5737；帳號是假的。全部只在暫存目錄內操作，結束時清掉；設 KEEP_TMP=1 可保留。
 set -uo pipefail
-SRC="$(cd "$(dirname "$0")/.." && pwd)/splitswan-helper"
+SRC="$(cd "$(dirname "$0")/.." && pwd)/tools/external-vpn/company-backend"
 [ -f "$SRC" ] || { echo "找不到 $SRC"; exit 1; }
 RUN=$(mktemp -d "${TMPDIR:-/tmp}/splitswan-classify.XXXXXX") || exit 1
 if [ "${KEEP_TMP:-0}" = 1 ]; then echo "暫存目錄保留在 $RUN"; else trap 'command rm -r "$RUN"' EXIT; fi
@@ -74,7 +74,7 @@ EOF
 chmod 755 "$RUN/bin/charon" "$RUN/bin/swanctl"
 mkdir -p "$RUN/tmp"
 sed -e "s#^SWANCTL=.*#SWANCTL=$RUN/bin/swanctl#" -e "s#^CHARON=.*#CHARON=$RUN/bin/charon#" \
-    -e "s#^HELPER_TMPDIR=.*#HELPER_TMPDIR=$RUN/tmp#" "$SRC" >"$RUN/helper"
+    -e '/root worker required/d' -e "s#^HELPER_TMPDIR=.*#HELPER_TMPDIR=$RUN/tmp#" "$SRC" >"$RUN/helper"
 grep -q "^SWANCTL=$RUN/bin/swanctl\$" "$RUN/helper" && grep -q "^HELPER_TMPDIR=$RUN/tmp\$" "$RUN/helper"
 check "副本的 swanctl 與暫存目錄已換掉（正對照）" $?
 

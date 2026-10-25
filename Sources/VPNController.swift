@@ -181,6 +181,21 @@ enum RouteRepair: Equatable {
 }
 
 /// 呼叫輔助程式的時限（A2）。值依子命令與 splitswan-helper 內部的 swanctl --timeout 推得
+struct CompanyAdmissionFailure {
+    let code: String
+    let message: String
+    var retryable: Bool { code == "busy" }
+    static func parse(_ output: String) -> Self? {
+        for line in output.split(whereSeparator: \.isNewline) {
+            let fields = line.split(separator: " ", maxSplits: 2)
+            if fields.count == 3, fields[0] == "admission" {
+                return Self(code: String(fields[1]), message: String(fields[2]))
+            }
+        }
+        return nil
+    }
+}
+
 enum HelperRun {
     /// 逾時時 run 回傳的結束代碼（跟 coreutils timeout 相同）
     static let timeoutCode: Int32 = 124
@@ -376,6 +391,16 @@ final class VPNController: ObservableObject {
     private let pathMonitor = NWPathMonitor()
     private var networkUp = true
     private var pathDebounce: Task<Void, Never>?
+
+    var companyAdmission: () -> String? = { nil }
+
+    func cancelConnectionIntent() {
+        wantConnected = false
+        retrySoon = false
+        retryNote = nil
+        cancelRetry()
+        if opTask != nil { pendingDown = true }
+    }
 
     func start() {
         DropNotifier.shared.activate()
@@ -677,6 +702,11 @@ final class VPNController: ObservableObject {
 
     private func runConnectSequence(_ order: [Int], reason: String, isSingle: Bool = false) {
         guard opTask == nil else { return }
+        if let refusal = companyAdmission() {
+            cancelConnectionIntent()
+            lastError = refusal
+            return
+        }
         guard !order.isEmpty else { lastError = "尚未設定閘道"; return }
         guard networkUp else { retryNote = "沒有網路，恢復後自動重連"; return }
         busy = true
@@ -686,6 +716,7 @@ final class VPNController: ObservableObject {
             // F3：每次連線嘗試前控制 charon log 大小（規格 §5.3）；舊版輔助程式不認得，結果一律不管
             await Self.trimCharonLog()
             var ok = false
+            var admission: CompanyAdmissionFailure?
             var reasons: [Int: ConnectFailReason] = [:]   // A1：各台的失敗原因（舊版輔助程式沒有）
             var routeWarning: String?                       // 連上了但路由仍沒走 VPN（舊版輔助程式沒有）
             for n in order {
@@ -694,8 +725,15 @@ final class VPNController: ObservableObject {
                 let address = self.settings.gateways.indices.contains(n - 1) ? self.settings.gateways[n - 1] : ""
                 let started = Date()
                 self.repairWindow.begin()
-                let (code, out) = await Self.runHelper(["up", "\(n)"])
+                var arguments = ["up", "\(n)"]
+                if let revision = ConfigStore.companyPolicyRevision { arguments.append(revision) }
+                let (code, out) = await Self.runHelper(arguments)
                 self.repairWindow.end()
+                if let refusal = CompanyAdmissionFailure.parse(out) {
+                    admission = refusal
+                    self.note(refusal.message)
+                    break
+                }
                 self.recordAttempt(n, address: address, success: code == 0, output: out, started: started)
                 // 輔助程式自動處置過路由（重啟 strongSwan 再連）：寫進連線紀錄；成敗仍照結束代碼判斷
                 let repair = RouteRepair.parse(out, gateway: n)
@@ -713,6 +751,16 @@ final class VPNController: ObservableObject {
                 }
             }
             self.finishOp()
+            if let admission, !self.pendingDown, self.wantConnected {
+                if admission.retryable {
+                    self.scheduleRetry(after: 1)
+                } else {
+                    self.cancelConnectionIntent()
+                    self.lastError = admission.message
+                }
+                self.refresh()
+                return
+            }
             if self.pendingDown || !self.wantConnected {
                 self.pendingDown = false
                 self.runDown(reason: "連線中按了斷線")
