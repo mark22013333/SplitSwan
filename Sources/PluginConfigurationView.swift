@@ -18,6 +18,8 @@ final class PluginConfigurationModel: ObservableObject {
     @Published private(set) var dismissedJobID: String?
     /// 由視窗管理者設定；取消時關閉所在視窗。
     var requestClose: (() -> Void)?
+    /// 有未儲存變更時詢問是否捨棄；回傳 true 表示捨棄。測試可替換。
+    var confirmDiscard: () -> Bool = { PluginConfigurationWindows.confirmDiscard() }
     struct JobOrigin: Equatable { let jobID: String; let title: String; let at: Date }
     struct Notice: Equatable { let origin: JobOrigin?; let job: P.Job }
     private let command: @MainActor (String, P.Request?) async throws -> P.Snapshot
@@ -50,9 +52,12 @@ final class PluginConfigurationModel: ObservableObject {
         Task { await drainCheck() }
     }
     var canCancel: Bool { !busy }
-    /// 對話框慣例：取消即捨棄未儲存的變更並關閉視窗，所以不會再跳出捨棄確認。
+    /// 取消（含 Esc）即關閉視窗；有未儲存變更時先確認，與關閉鈕一致。草稿已捨棄，關閉時不會再問一次。
     func cancelAndClose() {
-        cancelEdits()
+        if dirty {
+            guard confirmDiscard() else { return }
+            cancelEdits()
+        }
         requestClose?()
     }
     func stop() {
@@ -226,6 +231,10 @@ final class PluginConfigurationWindows: NSObject, NSWindowDelegate {
     private func id(for window: NSWindow) -> String? { windows.first { $0.value === window }?.key }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard let id = id(for: sender), let model = models[id], model.dirty else { return true }
+        return model.confirmDiscard()
+    }
+    /// 關閉鈕與取消（含 Esc）共用的捨棄確認。
+    static func confirmDiscard() -> Bool {
         let alert = NSAlert()
         alert.messageText = "捨棄尚未儲存的設定？"
         alert.informativeText = "尚未儲存的變更不會套用至外掛。"

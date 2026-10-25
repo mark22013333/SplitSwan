@@ -63,14 +63,19 @@ func runConfigurationTests() async throws -> Int {
     check("儲存失敗保留草稿與既有值", model.dirty && model.error != nil && storedSecret.hasSuffix("replacement.ics"))
     model.cancelEdits()
     rejectSave = false
-    var closeRequests = 0
+    var closeRequests = 0, confirmations = 0, discard = false
     model.requestClose = { closeRequests += 1 }
+    model.confirmDiscard = { confirmations += 1; return discard }
     check("沒有變更時取消仍可用", model.canCancel)
     model.cancelAndClose()
-    check("沒有變更時取消直接關閉視窗", closeRequests == 1 && !model.dirty)
+    check("沒有變更時取消直接關閉視窗，不詢問", closeRequests == 1 && confirmations == 0 && !model.dirty)
     model.draft["url"] = .text("https://example.com/discarded.ics")
     model.cancelAndClose()
-    check("有變更時取消先捨棄再關閉，不會跳出捨棄確認", closeRequests == 2 && !model.dirty && storedSecret.hasSuffix("replacement.ics"))
+    check("有變更時取消先確認；選繼續編輯則保留草稿、不關閉", confirmations == 1 && closeRequests == 1 && model.dirty
+          && model.draft["url"] == .text("https://example.com/discarded.ics"))
+    discard = true
+    model.cancelAndClose()
+    check("確認捨棄後才捨棄草稿並關閉", confirmations == 2 && closeRequests == 2 && !model.dirty && storedSecret.hasSuffix("replacement.ics"))
 
     func guidedForm(job: String? = nil) throws -> P.Snapshot {
         var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(saved)) as! [String: Any]
