@@ -182,7 +182,7 @@ private struct TimelineStrip: View {
     }
 }
 
-private struct ConditionChip: View {
+struct ConditionChip: View {
     let condition: PluginMenuCard.Condition
 
     var body: some View {
@@ -193,8 +193,11 @@ private struct ConditionChip: View {
         }
         .font(.system(size: 11))
         .lineLimit(1)
+        .truncationMode(.tail)
         .padding(.horizontal, 7)
         .padding(.vertical, 3)
+        .frame(maxWidth: PluginMenuCardView.contentWidth, alignment: .leading)
+        .fixedSize(horizontal: true, vertical: false)
         .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.07)))
     }
 }

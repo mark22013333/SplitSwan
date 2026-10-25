@@ -5,19 +5,19 @@ import Foundation
 struct PluginMenuCard: Equatable, Sendable {
     static let maxBytes = 8 * 1024
     static let maxConditions = 4
-    static let maxHistory = 14
+    static let maxHistory = 10
     static let maxTimelineSpan = 6 * 60
 
     enum Tone: String, Decodable, Sendable { case ok, info, warn, error, neutral }
 
-    /// 某個上班日的處理結果：自動成功、人工、請假、未執行、跳過。
+    /// 某個上班日的處理結果：自動成功、人工處理、請假、未執行、跳過。
     enum Result: String, Decodable, Sendable, CaseIterable {
         case auto, manual, leave, missed, skipped
 
         var label: String {
             switch self {
             case .auto: return "自動成功"
-            case .manual: return "人工"
+            case .manual: return "人工處理"
             case .leave: return "請假"
             case .missed: return "未執行"
             case .skipped: return "跳過"
@@ -91,7 +91,7 @@ struct PluginMenuCard: Equatable, Sendable {
         Result.allCases.filter { r in r == .auto || history.contains { $0.result == r } }
     }
 
-    /// 例：「自動打卡平均 08:41（7 天）· 人工 1、請假 1、未執行 1」；沒有歷史回 nil。
+    /// 例：「自動打卡平均 08:41（7 天）· 人工處理 1、請假 1、未執行 1」；沒有歷史回 nil。
     var historySummary: String? {
         guard !history.isEmpty else { return nil }
         let autoTimes = history.filter { $0.result == .auto }.compactMap(\.time)

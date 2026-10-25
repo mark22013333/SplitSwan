@@ -121,7 +121,7 @@ v1 頁籤可再加入下列選填欄位。舊版 App 忽略它們並照原本方
 
 ## 選單資訊卡片（選填）
 
-標題行可再加 `card=<base64url 編碼的 JSON>`，App 會在此外掛子選單最上方顯示一張不可點的卡片，下方仍是一般輸出列與「開啟設定…」。舊版 App 會忽略這個參數，所以外掛不必提高 `minimumAppVersion`。
+標題行可再加 `card=<base64url 編碼的 JSON>`，App 會在此外掛子選單最上方顯示一張不可點的卡片，下方仍是一般輸出列與「開啟設定…」。卡片從 App 1.9.4 起支援，舊版 App 會忽略這個參數。外掛若在有卡片時省略文字列，必須把 `minimumAppVersion` 提高到 1.9.4 以上，否則舊版 App 上狀態資訊會整個消失；要相容舊版 App 就保留文字列。
 
 ```json
 {"version":1,"headline":"今天 08:41 自動打卡","tone":"ok","detail":"政府日曆：上班日","enabled":true,
@@ -130,10 +130,11 @@ v1 頁籤可再加入下列選填欄位。舊版 App 忽略它們並照原本方
  "history":[{"date":"2026-10-22","weekday":"四","time":"08:37","result":"auto"}]}
 ```
 
-- `tone`：`ok`、`info`、`warn`、`error`、`neutral`。`result`：`auto`（自動成功）、`manual`（人工）、`leave`（請假）、`missed`（未執行）、`skipped`（跳過）。
+- `tone`：`ok`、`info`、`warn`、`error`、`neutral`。`result`：`auto`（自動成功）、`manual`（人工處理）、`leave`（請假）、`missed`（未執行）、`skipped`（跳過）。
 - 時間一律是半形 `HH:mm`；`timeline` 的每個時刻都要落在 `start`…`end` 內，範圍最長 6 小時。`detail`、`timeline`、`time`、`footnote` 可省略。
-- 上限：解碼後 8 KB、`conditions` 4 個、`history` 14 筆（日期由舊到新、不可重複）。文字會去掉控制字元並截斷。
+- 上限：解碼後 8 KB、`conditions` 4 個、`history` 10 筆（日期由舊到新、不可重複）。文字會去掉控制字元並截斷。
 - 任一欄位不合規時整張卡片忽略，選單照常顯示文字列。外掛若因有卡片而精簡文字列，應先自行檢查卡片是否合規。
+- 圖例與統計用語（自動成功、人工處理、請假、未執行、跳過）目前偏向打卡用途，外掛還不能自訂。
 
 沒有 `href`、`bash`、`refresh` 也沒有子項目的輸出列只是資訊：不會反白、點了也不會動作，文字顏色照常（含 `color=`）。
 

@@ -52,8 +52,8 @@ check("卡片：合法內容解碼成功", decoded?.headline == "今天上班 ·
       && decoded?.timeline?.planned == Card.Clock("08:41") && decoded?.timeline?.actual == nil
       && decoded?.conditions.map(\.label) == ["App", "電源", "VPN"] && decoded?.history.count == 10
       && decoded?.history[5].time == nil && decoded?.history[5].result == .leave && decoded?.history[0].shortDate == "10/8")
-check("卡片：近期統計與圖例", decoded?.historySummary == "自動打卡平均 08:39（7 天） · 人工 1、請假 1、未執行 1"
-      && decoded?.legend == [.auto, .manual, .leave, .missed])
+check("卡片：近期統計與圖例", decoded?.historySummary == "自動打卡平均 08:39（7 天） · 人工處理 1、請假 1、未執行 1"
+      && decoded?.legend == [.auto, .manual, .leave, .missed] && Card.Result.manual.label == "人工處理")
 let minimal = Card.decode(encode(["version": 1, "headline": "簡短", "tone": "neutral", "enabled": false, "conditions": [], "history": []]))
 check("卡片：選填欄位可省略", minimal != nil && minimal?.timeline == nil && minimal?.detail == nil && minimal?.historySummary == nil)
 let padded = try! JSONSerialization.data(withJSONObject: cardJSON()).base64EncodedString()
@@ -78,7 +78,7 @@ let rejections: [(String, String)] = [
     ("日期格式錯", encode(cardJSON { $0["history"] = history([("2026/10/08", "四", nil, "leave")]) })),
     ("日期未遞增", encode(cardJSON { $0["history"] = history([("2026-10-09", "五", nil, "leave"), ("2026-10-08", "四", nil, "leave")]) })),
     ("條件超過 4 個", encode(cardJSON { $0["conditions"] = Array(repeating: ["label": "A", "value": "B", "tone": "ok"], count: 5) })),
-    ("歷史超過 14 筆", encode(cardJSON { $0["history"] = (1...15).map { ["date": String(format: "2026-09-%02d", $0), "weekday": "一", "result": "auto", "time": "08:40"] } })),
+    ("歷史超過 10 筆", encode(cardJSON { $0["history"] = (1...11).map { ["date": String(format: "2026-09-%02d", $0), "weekday": "一", "result": "auto", "time": "08:40"] } })),
     ("缺少必要欄位", encode(cardJSON { $0["enabled"] = nil })),
     ("型別錯誤", encode(cardJSON { $0["enabled"] = "true" })),
     ("空標題", encode(cardJSON { $0["headline"] = "\u{202E}" })),
@@ -158,6 +158,18 @@ MainActor.assumeIsolated {
             $0["detail"] = "已送出打卡，但背景工作沒有回報結果；請到打卡網站檢查，不要重複打卡"
             $0["timeline"] = ["start": "08:20", "end": "09:35", "check": "08:24", "windowStart": "08:30", "windowEnd": "09:00", "planned": "08:41", "now": "09:30"]
         }),
+        ("long-conditions", cardJSON {
+            $0["conditions"] = [["label": String(repeating: "寬", count: 30), "value": String(repeating: "寬", count: 40), "tone": "warn"],
+                                ["label": "VPN", "value": "已連線", "tone": "ok"]]
+        }),
+        ("history-10", cardJSON {
+            $0["history"] = history([
+                ("2026-10-09", "五", "08:44", "auto"), ("2026-10-12", "一", "08:42", "auto"), ("2026-10-13", "二", nil, "skipped"),
+                ("2026-10-14", "三", "08:52", "manual"), ("2026-10-15", "四", "08:47", "auto"), ("2026-10-16", "五", nil, "leave"),
+                ("2026-10-19", "一", "08:39", "auto"), ("2026-10-20", "二", nil, "missed"), ("2026-10-21", "三", nil, "manual"),
+                ("2026-10-22", "四", "08:35", "auto"),
+            ])
+        }),
         ("vpn", cardJSON {
             $0["headline"] = "等待 VPN 連線後自動打卡"; $0["tone"] = "warn"
             $0["detail"] = "已過預定時間 08:41；條件恢復後立即打卡"
@@ -185,7 +197,18 @@ MainActor.assumeIsolated {
             rendered += 1
         }
     }
-    check("截圖：6 個情境 × 深淺色都已輸出", rendered == 12)
+    check("截圖：\(scenarios.count) 個情境 × 深淺色都已輸出", rendered == scenarios.count * 2)
+
+    // 條件標籤：最長的合法文字（標籤 12 字、值 20 字，各再加省略號）也不超出卡片內容寬度，單行顯示。
+    let longest = Card.decode(encode(cardJSON {
+        $0["conditions"] = [["label": String(repeating: "寬", count: 30), "value": String(repeating: "寬", count: 40), "tone": "warn"],
+                            ["label": "VPN", "value": "已連線", "tone": "ok"]]
+    }))!
+    let chip = NSHostingView(rootView: ConditionChip(condition: longest.conditions[0]))
+    let chipSize = chip.fittingSize
+    check("條件標籤：最長合法字串寬度 \(Int(chipSize.width)) ≤ \(Int(PluginMenuCardView.contentWidth))、單行",
+          longest.conditions[0].label.count == 13 && longest.conditions[0].value.count == 21
+          && chipSize.width <= PluginMenuCardView.contentWidth && chipSize.height < 24)
 
     var rows = 0
     for (suffix, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
