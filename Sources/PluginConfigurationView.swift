@@ -16,6 +16,8 @@ final class PluginConfigurationModel: ObservableObject {
     @Published private(set) var returnTabID: String?
     @Published private(set) var jobOrigin: JobOrigin?
     @Published private(set) var dismissedJobID: String?
+    /// 由視窗管理者設定；取消時關閉所在視窗。
+    var requestClose: (() -> Void)?
     struct JobOrigin: Equatable { let jobID: String; let title: String; let at: Date }
     struct Notice: Equatable { let origin: JobOrigin?; let job: P.Job }
     private let command: @MainActor (String, P.Request?) async throws -> P.Snapshot
@@ -46,6 +48,12 @@ final class PluginConfigurationModel: ObservableObject {
         draft = snapshot?.values ?? [:]
         error = nil
         Task { await drainCheck() }
+    }
+    var canCancel: Bool { !busy }
+    /// 對話框慣例：取消即捨棄未儲存的變更並關閉視窗，所以不會再跳出捨棄確認。
+    func cancelAndClose() {
+        cancelEdits()
+        requestClose?()
     }
     func stop() {
         visible = false
@@ -192,6 +200,7 @@ final class PluginConfigurationWindows: NSObject, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.center()
+        model.requestClose = { [weak window] in window?.performClose(nil) }
         models[pluginID] = model
         windows[pluginID] = window
         NSApp.activate(ignoringOtherApps: true)
@@ -298,7 +307,9 @@ struct PluginConfigurationView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button("取消") { model.cancelEdits() }.disabled(model.busy || !model.dirty)
+                    Button("取消") { model.cancelAndClose() }
+                        .keyboardShortcut(.cancelAction)
+                        .disabled(!model.canCancel)
                     Button(saveTitle) { Task { await model.save() } }
                         .keyboardShortcut("s", modifiers: .command)
                         .buttonStyle(.borderedProminent)
