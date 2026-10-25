@@ -1,6 +1,7 @@
 // 設定檔讀寫：產生 swanctl.conf（連線設定）與 conf.d/secrets.conf（PSK、密碼）
 // 兩個檔案都在使用者可寫入的 /opt/homebrew/etc/swanctl 底下，App 直接寫，不需要 root。
 import Foundation
+import CryptoKit
 
 struct VPNSettings: Codable, Equatable {
     var username: String = ""
@@ -24,6 +25,11 @@ enum ConfigError: LocalizedError {
 
 enum ConfigStore {
     static let swanctlDir = "/opt/homebrew/etc/swanctl"
+    static var companyPolicyRevision: String? {
+        guard let data = FileManager.default.contents(atPath: confPath) else { return nil }
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
     static let confPath = swanctlDir + "/swanctl.conf"
     static let secretsPath = swanctlDir + "/conf.d/secrets.conf"
     static let marker = "# 由 \(AppInfo.name).app 產生"

@@ -6,8 +6,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 source ./app.env
 
-VERSION="1.8.8"
-BUILD_NUM="24"
+VERSION="1.9.2"
+BUILD_NUM="29"
 APP="build/${APP_NAME}.app"
 C="$APP/Contents"
 
@@ -16,6 +16,9 @@ rm -rf "$APP" build/AppIcon.iconset
 mkdir -p "$C/MacOS" "$C/Resources"
 
 echo "▸ 編譯 Swift"
+swiftc -module-cache-path build/module-cache -O -o build/splitswan-route-helper \
+  Sources/ExternalVPNLogic.swift Sources/VPNCoexistenceLogic.swift tools/external-vpn/ExternalVPNSystem.swift tools/external-vpn/CompanyVPNSystem.swift tools/external-vpn/RootOperationLifetime.swift tools/external-vpn/main.swift \
+  -framework SystemConfiguration -target arm64-apple-macos14.0
 bash tools/build-zipfoundation.sh build/zipfoundation
 swiftc -module-cache-path build/module-cache -O -o "$C/MacOS/${APP_NAME}" Sources/*.swift -I build/zipfoundation -L build/zipfoundation -lZIPFoundation \
   -framework AppKit -framework SwiftUI -framework ServiceManagement -framework Combine \
@@ -33,6 +36,8 @@ iconutil -c icns "$ICONSET" -o "$C/Resources/AppIcon.icns"
 
 echo "▸ 內附系統元件（由「環境檢查」頁安裝）"
 install -m 755 splitswan-helper "$C/Resources/splitswan-helper"
+install -m 755 build/splitswan-route-helper "$C/Resources/splitswan-route-helper"
+install -m 755 tools/external-vpn/company-backend "$C/Resources/splitswan-company-backend"
 install -m 755 install-root.sh "$C/Resources/install-root.sh"
 
 cat > "$C/Info.plist" <<PLIST

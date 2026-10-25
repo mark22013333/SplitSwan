@@ -9,10 +9,19 @@ cd "$(dirname "$0")"
 USER_NAME="${1:-${SUDO_USER:-}}"
 [ -n "$USER_NAME" ] && [ "$USER_NAME" != "root" ] || { echo "無法判斷要授權的使用者，請用 sudo 執行"; exit 1; }
 [[ "$USER_NAME" =~ ^[A-Za-z0-9._-]+$ ]] && id -u "$USER_NAME" >/dev/null 2>&1 || { echo "使用者不存在：$USER_NAME"; exit 1; }
+ROUTE_HELPER=./splitswan-route-helper
+[ -x "$ROUTE_HELPER" ] || ROUTE_HELPER=./build/splitswan-route-helper
+[ -x "$ROUTE_HELPER" ] || { echo "找不到分流系統元件，請先執行 bash build.sh 或由 App 安裝"; exit 1; }
+
+COMPANY_BACKEND=./splitswan-company-backend
+[ -f "$COMPANY_BACKEND" ] || COMPANY_BACKEND=./tools/external-vpn/company-backend
+[ -f "$COMPANY_BACKEND" ] || { echo "找不到公司 VPN 系統元件"; exit 1; }
 
 # 1. 輔助程式：root 擁有，一般使用者不可改
 install -d -o root -g wheel -m 755 /usr/local/libexec
 install -o root -g wheel -m 755 splitswan-helper /usr/local/libexec/splitswan-helper
+install -o root -g wheel -m 755 "$ROUTE_HELPER" /usr/local/libexec/splitswan-route-helper
+install -o root -g wheel -m 755 "$COMPANY_BACKEND" /usr/local/libexec/splitswan-company-backend
 
 # 2. charon log：root 擁有的目錄，App 以一般使用者直接讀取（規格 §5.3）
 #    權限一律明確設定，不依賴 umask；已存在也重新修正。root 腳本不跟隨 symlink：遇到 symlink 先移除再重建

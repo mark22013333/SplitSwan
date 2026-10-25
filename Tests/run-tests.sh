@@ -12,12 +12,17 @@ trap 'command rm -r "$OUT"' EXIT
 
 bash tools/build-zipfoundation.sh "$OUT/zip" || exit 1
 
-ALL_GROUPS="reconnect export security settings diagnostic hostcheck update about plugins plugin-ui packages package-ui background"
+ALL_GROUPS="reconnect export security settings diagnostic hostcheck update about external-vpn coexistence root-lifetime root-backend external-ui plugins plugin-ui packages package-ui background"
 
 # 每組的測試檔與要一起編譯的原始檔（第一個是測試檔，會被複製成 main.swift）。
 # 新增 Sources 檔時，要加進用到它的每一組，否則該組會編譯失敗。
 files() {
   case $1 in
+    root-lifetime) echo Tests/RootOperationLifetimeTests.swift tools/external-vpn/RootOperationLifetime.swift ;;
+    root-backend) echo Tests/CompanyBackendTests.py ;;
+    external-vpn) echo Tests/ExternalVPNTests.swift $S/ExternalVPNLogic.swift $S/VPNCoexistenceLogic.swift ;;
+    coexistence) echo Tests/VPNCoexistenceTests.swift $S/ExternalVPNLogic.swift $S/VPNCoexistenceLogic.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
+    external-ui) echo Tests/ExternalVPNUITests.swift $S/ExternalVPNLogic.swift $S/VPNCoexistenceLogic.swift $S/ExternalVPNController.swift $S/ExternalVPNView.swift $S/ProcessRunner.swift ;;
     reconnect)  echo Tests/ReconnectTests.swift $S/VPNController.swift $S/GatewayHistory.swift $S/DropNotifier.swift \
                      $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift $S/LogStore.swift \
                      $S/ProcessRunner.swift $S/DiagnosticReport.swift ;;
@@ -45,6 +50,7 @@ files() {
 # 編譯一組；失敗時 status 寫 compile
 compile_group() {
   local name=$1 dir="$OUT/$1"
+  [ "$name" = root-backend ] && return
   # shellcheck disable=SC2046
   set -- $(files "$name")
   local test=$1; shift
@@ -59,9 +65,15 @@ exec_group() {
   if [ "$1" = packages ] || [ "$1" = package-ui ]; then
     python3 Tests/package-fixtures.py "$dir/fixtures" >"$dir/fixtures.log" 2>&1 || { cp "$dir/fixtures.log" "$dir/log"; echo fail >"$dir/status"; return; }
   fi
-  "$dir/t" "$dir" >"$dir/log" 2>&1
-  local rc=$?
-  if [ "$1" = package-ui ] && [ -n "${SPLITSWAN_TEST_EVIDENCE:-}" ]; then
+  local rc
+  if [ "$1" = root-backend ]; then
+    python3 Tests/CompanyBackendTests.py >"$dir/log" 2>&1
+    rc=$?
+  else
+    "$dir/t" "$dir" >"$dir/log" 2>&1
+    rc=$?
+  fi
+  if { [ "$1" = package-ui ] || [ "$1" = external-ui ]; } && [ -n "${SPLITSWAN_TEST_EVIDENCE:-}" ]; then
     mkdir -p "$SPLITSWAN_TEST_EVIDENCE"
     cp -R "$dir/screenshots" "$SPLITSWAN_TEST_EVIDENCE/"
   fi
@@ -71,7 +83,7 @@ exec_group() {
 
 # 含時序判斷（逾時、排程、暫停）的組，要等其他組編譯、執行都結束後再單獨跑，
 # 否則和並行編譯搶 CPU 時，固定的等待時間會偶發不夠
-SERIAL_GROUPS="plugins plugin-ui packages package-ui background"
+SERIAL_GROUPS="root-backend plugins plugin-ui packages package-ui background external-ui"
 is_serial() { case " $SERIAL_GROUPS " in *" $1 "*) return 0 ;; esac; return 1; }
 
 if [ $# -gt 0 ]; then SELECTED="$*"; else SELECTED=$ALL_GROUPS; fi

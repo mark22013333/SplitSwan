@@ -26,6 +26,7 @@ final class EnvChecker: ObservableObject {
     @Published private(set) var running = false          // 安裝進行中
     @Published private(set) var runningText = ""
     @Published private(set) var lastMessage: String?
+    @Published private(set) var externalVPNReady = false
 
     static let strongSwanPrefix = "/opt/homebrew/opt/strongswan"
     static let brewPath = "/opt/homebrew/bin/brew"
@@ -55,10 +56,16 @@ final class EnvChecker: ObservableObject {
         // 2. 輔助程式：存在，且與 App 內附的版本一致
         let installed = fm.contents(atPath: helperPath)
         let bundled = bundledHelper.flatMap { fm.contents(atPath: $0) }
+        let bundledRouteHelper = Bundle.main.path(forResource: "splitswan-route-helper", ofType: nil).flatMap { fm.contents(atPath: $0) }
+        let installedRouteHelper = fm.contents(atPath: "/usr/local/libexec/splitswan-route-helper")
+        let bundledBackend = Bundle.main.path(forResource: "splitswan-company-backend", ofType: nil).flatMap { fm.contents(atPath: $0) }
+        let installedBackend = fm.contents(atPath: "/usr/local/libexec/splitswan-company-backend")
+        let backendMatches = bundledBackend != nil && bundledBackend == installedBackend
+        externalVPNReady = backendMatches && installed != nil && installed == bundled && bundledRouteHelper != nil && installedRouteHelper == bundledRouteHelper
         if installed == nil {
             list.append(CheckItem(id: "helper", title: "系統元件（輔助程式）", level: .fail, detail: "尚未安裝",
                                   action: .installHelper, actionTitle: "安裝"))
-        } else if let bundled, installed != bundled {
+        } else if let bundled, installed != bundled || (bundledRouteHelper != nil && installedRouteHelper != bundledRouteHelper) || !backendMatches {
             list.append(CheckItem(id: "helper", title: "系統元件（輔助程式）", level: .fail,
                                   detail: "已安裝的版本與 App 內附的不同，需要更新",
                                   action: .installHelper, actionTitle: "更新"))

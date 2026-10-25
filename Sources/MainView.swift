@@ -2,7 +2,7 @@
 import SwiftUI
 import ServiceManagement
 
-enum MainTab: Hashable { case connection, settings, environment, about }
+enum MainTab: Hashable { case connection, externalVPN, settings, environment, about }
 private enum SettingsSection: Hashable { case plugins }
 
 @MainActor
@@ -21,12 +21,18 @@ struct MainView: View {
     @ObservedObject var vpn: VPNController
     @ObservedObject var env: EnvChecker
     @ObservedObject var window: WindowModel
+    @ObservedObject private var externalVPN = ExternalVPNController.shared
 
     var body: some View {
         TabView(selection: $window.tab) {
             ConnectionTab(vpn: vpn, env: env, window: window)
                 .tabItem { Label("連線", systemImage: "network") }
                 .tag(MainTab.connection)
+            ExternalVPNTab(model: externalVPN, helperReady: env.externalVPNReady, installing: env.running,
+                           fortiBusy: vpn.wantConnected || vpn.state.isConnected || vpn.state.isConnecting,
+                           install: { env.installHelper() })
+                .tabItem { Label("自動分流", systemImage: "arrow.triangle.branch") }
+                .tag(MainTab.externalVPN)
             SettingsTab(vpn: vpn, env: env, window: window)
                 .tabItem { Label("設定", systemImage: "gearshape") }
                 .tag(MainTab.settings)
@@ -46,6 +52,7 @@ struct MainView: View {
 // MARK: - 連線
 
 struct ConnectionTab: View {
+    @ObservedObject private var externalVPN = ExternalVPNController.shared
     @ObservedObject var vpn: VPNController
     @ObservedObject var env: EnvChecker
     @ObservedObject var window: WindowModel
@@ -90,14 +97,14 @@ struct ConnectionTab: View {
                     }
                     .controlSize(.large)
                     .buttonStyle(.borderedProminent)
-                    .disabled(vpn.busy || vpn.state == .helperMissing)
+                    .disabled(vpn.busy || vpn.state == .helperMissing || !externalVPN.canConnectCompany)
                     HStack(alignment: .top, spacing: 8) {
                         ForEach(0..<3, id: \.self) { i in
                             VStack(spacing: 4) {
                                 Button("VPN\(i + 1)") { vpn.connect("\(i + 1)") }
                                     .frame(maxWidth: .infinity)
                                     .help(vpn.gatewayTitle(i))
-                                    .disabled(vpn.busy || vpn.state == .helperMissing || vpn.settings.gateways[i].isEmpty)
+                                    .disabled(vpn.busy || vpn.state == .helperMissing || !externalVPN.canConnectCompany || vpn.settings.gateways[i].isEmpty)
                                 // 最近狀態（F4），例：「上次 3.2 秒連上」；沒有紀錄就不顯示
                                 if let d = vpn.history.detail(i + 1) {
                                     Text(d).font(.caption).foregroundStyle(.secondary)
