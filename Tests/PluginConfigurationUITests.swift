@@ -140,6 +140,69 @@ func runConfigurationTests() async throws -> Int {
     check("匯入背景失敗保留錯誤，不接續檢查蓋掉原因", failingImport.snapshot?.job?.state == "failed" && failedImportChecks == 0)
     failingImport.stop()
 
+    func layoutForm(job: (id: String, state: String)? = nil) throws -> P.Snapshot {
+        var object: [String: Any] = [
+            "version": 1, "title": "分組介面測試", "revision": "r1",
+            "tabs": [
+                ["id": "status", "title": "狀態",
+                 "summary": ["eyebrow": "今天", "headline": "今天上班", "tone": "ok", "toggleField": "enabled", "metrics": []]],
+                ["id": "settings", "title": "設定",
+                 "groups": [["id": "account", "title": "帳號", "help": "隔離的說明。",
+                             "rows": [["label": "請假日曆", "value": "已連接", "tone": "ok", "action": "manage"]],
+                             "fields": ["user", "start"], "actions": ["run"]]]],
+                ["id": "wizard", "title": "精靈", "hidden": true],
+            ] as [[String: Any]],
+            "fields": [
+                ["id": "enabled", "tab": "status", "title": "背景執行", "type": "toggle"],
+                ["id": "user", "tab": "settings", "title": "帳號", "type": "text"],
+                ["id": "start", "tab": "settings", "title": "開始時間", "type": "time"],
+                ["id": "name", "tab": "wizard", "title": "名稱", "type": "text"],
+            ],
+            "values": ["enabled": false, "user": "example", "start": "08:30", "name": ""] as [String: Any],
+            "actions": [
+                ["id": "manage", "tab": "settings", "title": "管理…", "opensTab": "wizard"],
+                ["id": "run", "tab": "settings", "title": "執行測試", "signsIn": true],
+            ],
+        ]
+        if let job { object["job"] = ["id": job.id, "state": job.state, "message": "隔離工作：\(job.state)"] }
+        return try P.decode(JSONSerialization.data(withJSONObject: object))
+    }
+    var layoutCalls: [String] = []
+    var layoutJob: (id: String, state: String)?
+    let fixedClock = Date(timeIntervalSince1970: 1_800_000_000)
+    let layoutModel = PluginConfigurationModel(pluginID: "layout-fixture", command: { operation, request in
+        layoutCalls.append(operation + (request?.id.map { ":" + $0 } ?? ""))
+        if operation == "action", request?.id == "run" {
+            layoutJob = (layoutJob?.id == "job-1" ? "job-2" : "job-1", "succeeded")
+        }
+        return try layoutForm(job: layoutJob)
+    }, now: { fixedClock })
+    await layoutModel.load()
+    await layoutModel.enterTab("settings")
+    layoutModel.draft["user"] = .text("尚未儲存")
+    await layoutModel.action(layoutModel.snapshot!.actions.first { $0.id == "manage" }!)
+    check("切到隱藏頁籤只在 App 內切換，不呼叫外掛、有草稿也可進入",
+          layoutModel.selectedTabID == "wizard" && layoutModel.returnTabID == "settings" && layoutCalls == ["snapshot"] && layoutModel.dirty)
+    layoutModel.returnFromHiddenTab()
+    check("返回原本的可見頁籤", layoutModel.selectedTabID == "settings" && layoutModel.returnTabID == nil)
+    layoutModel.cancelEdits()
+    await layoutModel.action(layoutModel.snapshot!.actions.first { $0.id == "run" }!)
+    let firstNotice = layoutModel.notice
+    check("工作訊息帶觸發動作的標題與時間", firstNotice?.origin?.title == "執行測試" && firstNotice?.origin?.at == fixedClock
+          && firstNotice?.job.id == "job-1")
+    layoutModel.dismissNotice()
+    check("關閉訊息後不再顯示同一工作", layoutModel.notice == nil)
+    await layoutModel.action(layoutModel.snapshot!.actions.first { $0.id == "run" }!)
+    check("新工作重新顯示訊息", layoutModel.notice?.job.id == "job-2" && layoutModel.notice?.origin?.title == "執行測試")
+    await layoutModel.enterTab("status")
+    check("切換頁籤時清掉已完成工作的訊息", layoutModel.notice == nil)
+    layoutJob = ("job-3", "failed")
+    await layoutModel.load()
+    await layoutModel.enterTab("settings")
+    check("失敗訊息切換頁籤後仍保留，未由此視窗觸發的工作不附標題",
+          layoutModel.notice?.job.state == "failed" && layoutModel.notice?.origin == nil)
+    layoutModel.stop()
+
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
     let window = NSWindow(contentViewController: NSHostingController(rootView: PluginConfigurationView(model: model)))
@@ -170,6 +233,34 @@ func runConfigurationTests() async throws -> Int {
     await model.save()
     await settle { inputs().count == 2 && !model.busy }
     check("表單儲存並重新排版後，單行欄位仍可編輯", inputs().count == 2 && inputs().allSatisfy { $0.isEnabled && $0.bounds.height >= 22 && ($0.superview?.frame.height ?? 0) >= 22 })
+    layoutJob = nil
+    let groupedModel = PluginConfigurationModel(pluginID: "grouped-fixture", command: { _, _ in try layoutForm() })
+    let groupedWindow = NSWindow(contentViewController: NSHostingController(rootView: PluginConfigurationView(model: groupedModel)))
+    groupedWindow.styleMask = [.titled, .closable, .resizable]
+    groupedWindow.setFrameOrigin(NSPoint(x: -20000, y: -20000))
+    groupedWindow.setContentSize(NSSize(width: 780, height: 680))
+    groupedWindow.orderBack(nil)
+    defer { groupedWindow.orderOut(nil); groupedModel.stop() }
+    func groupedViews() -> [NSView] { groupedWindow.contentView.map(descendants) ?? [] }
+    var segments = 0
+    for _ in 0..<150 {
+        groupedWindow.contentView?.layoutSubtreeIfNeeded()
+        segments = groupedViews().compactMap { $0 as? NSSegmentedControl }.first?.segmentCount ?? 0
+        if segments > 0, groupedModel.selectedTabID == "status" { break }
+        try? await Task.sleep(for: .milliseconds(20))
+    }
+    check("分段控制只列出可見頁籤", segments == 2)
+    groupedModel.selectedTabID = "settings"
+    var pickers: [NSDatePicker] = [], textInputs: [NSTextField] = []
+    for _ in 0..<150 {
+        groupedWindow.contentView?.layoutSubtreeIfNeeded()
+        pickers = groupedViews().compactMap { $0 as? NSDatePicker }
+        textInputs = groupedViews().compactMap { $0 as? NSTextField }.filter(\.isEditable)
+        if !pickers.isEmpty, !textInputs.isEmpty { break }
+        try? await Task.sleep(for: .milliseconds(20))
+    }
+    check("分組的時間欄位使用時間選擇器", pickers.count == 1 && pickers[0].bounds.width < 200)
+    check("分組的短文字欄位不再全寬", textInputs.count == 1 && textInputs[0].bounds.width <= 330 && textInputs[0].bounds.height >= 22)
     print("通過 \(passed)，失敗 \(failed)")
     return failed
 }
