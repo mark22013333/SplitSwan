@@ -94,6 +94,7 @@ enum PluginLogic {
         var items: [Item]
         var truncated = false     // 輸出超過 64 KB 或項目超過 30 個
         var settingsAvailable = false
+        var card: PluginMenuCard? = nil   // 標題行 card= 的資訊卡片；不合規時為 nil，文字列照常顯示
     }
 
     /// 解析外掛的 stdout。第一個 `---` 之前的第一行是標題，其餘 header 行忽略；
@@ -113,6 +114,7 @@ enum PluginLogic {
 
         var title = ""
         var settingsAvailable = false
+        var card: PluginMenuCard?
         var items: [Item] = []
         var inBody = false
         var count = 0
@@ -126,6 +128,7 @@ enum PluginLogic {
                     let header = parseLine(trimmed)
                     title = header.text
                     settingsAvailable = header.params["settings"] == "true"
+                    card = header.params["card"].flatMap(PluginMenuCard.decode)
                 }
                 continue
             }
@@ -173,7 +176,7 @@ enum PluginLogic {
             count += 1
             pendingSeparator = false
         }
-        return Output(title: title, items: items, truncated: truncated, settingsAvailable: settingsAvailable)
+        return Output(title: title, items: items, truncated: truncated, settingsAvailable: settingsAvailable, card: card)
     }
 
     /// 一行：`文字 | key=value key2="有 空白"`

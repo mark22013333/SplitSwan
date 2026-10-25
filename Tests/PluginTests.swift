@@ -59,7 +59,7 @@ check("選單樹：多外掛依快照順序各自建立子選單",
 let alphaChildren = activeChildren.first?.children ?? []
 check("選單樹：保留文字、分隔線、顏色與原輸出順序",
       alphaChildren.map(\.title) == ["純文字", "", "紅色動作", "父項"]
-      && alphaChildren[0].style == .text(color: nil) && alphaChildren[0].command == nil
+      && alphaChildren[0].style == .info(color: nil) && alphaChildren[0].command == nil && !alphaChildren[0].isEnabled
       && alphaChildren[1].style == .separator
       && alphaChildren[2].style == .text(color: "red"))
 check("選單樹：動作與既有子項目保留原外掛 ID／原項目 payload",
