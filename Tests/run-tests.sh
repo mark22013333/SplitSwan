@@ -12,7 +12,7 @@ trap 'command rm -r "$OUT"' EXIT
 
 bash tools/build-zipfoundation.sh "$OUT/zip" || exit 1
 
-ALL_GROUPS="reconnect export security settings diagnostic hostcheck update about external-vpn coexistence root-lifetime root-backend external-ui plugins plugin-ui packages package-ui background"
+ALL_GROUPS="reconnect export security settings diagnostic hostcheck update about external-vpn coexistence root-lifetime root-backend external-ui plugins plugin-ui plugin-card packages package-ui background"
 
 # 每組的測試檔與要一起編譯的原始檔（第一個是測試檔，會被複製成 main.swift）。
 # 新增 Sources 檔時，要加進用到它的每一組，否則該組會編譯失敗。
@@ -36,13 +36,14 @@ files() {
     update)     echo Tests/UpdateTests.swift $S/UpdateLogic.swift $S/UpdateInstaller.swift $S/ProcessRunner.swift $S/AboutInfo.swift \
                      $S/AppInfo.swift $S/DiagnosticReport.swift $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift ;;
     about)      echo Tests/AboutTests.swift $S/AboutInfo.swift $S/AppInfo.swift ;;
-    plugins)    echo Tests/PluginTests.swift $S/PluginLogic.swift $S/PluginMenu.swift $S/PluginSettingsProtocol.swift $S/PluginRunner.swift $S/PluginBackground.swift $S/PluginPackage.swift $S/PluginPackageStore.swift $S/PluginLegacyReplacement.swift $S/ProcessRunner.swift $S/DiagnosticReport.swift \
+    plugins)    echo Tests/PluginTests.swift $S/PluginLogic.swift $S/PluginMenuCard.swift $S/PluginMenu.swift $S/PluginMenuCardView.swift $S/PluginSettingsProtocol.swift $S/PluginRunner.swift $S/PluginBackground.swift $S/PluginPackage.swift $S/PluginPackageStore.swift $S/PluginLegacyReplacement.swift $S/ProcessRunner.swift $S/DiagnosticReport.swift \
                      $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
-    plugin-ui)  echo Tests/PluginConfigurationUITests.swift $S/PluginConfigurationView.swift $S/PluginLogic.swift $S/PluginMenu.swift $S/PluginSettingsProtocol.swift $S/PluginRunner.swift $S/PluginBackground.swift $S/PluginPackage.swift $S/PluginPackageStore.swift $S/PluginLegacyReplacement.swift $S/ProcessRunner.swift $S/DiagnosticReport.swift \
+    plugin-card) echo Tests/PluginMenuCardTests.swift $S/PluginMenuCard.swift $S/PluginMenuCardView.swift $S/PluginMenu.swift $S/PluginLogic.swift ;;
+    plugin-ui)  echo Tests/PluginConfigurationUITests.swift $S/PluginConfigurationView.swift $S/PluginLogic.swift $S/PluginMenuCard.swift $S/PluginMenu.swift $S/PluginMenuCardView.swift $S/PluginSettingsProtocol.swift $S/PluginRunner.swift $S/PluginBackground.swift $S/PluginPackage.swift $S/PluginPackageStore.swift $S/PluginLegacyReplacement.swift $S/ProcessRunner.swift $S/DiagnosticReport.swift \
                      $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
-    package-ui) echo Tests/PluginPackageUITests.swift $S/PluginPackageView.swift $S/PluginSettingsView.swift $S/PluginConfigurationView.swift $S/PluginPackage.swift $S/PluginPackageStore.swift $S/PluginLegacyReplacement.swift $S/PluginRunner.swift $S/PluginBackground.swift $S/PluginLogic.swift $S/PluginSettingsProtocol.swift $S/ProcessRunner.swift $S/DiagnosticReport.swift $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
-    packages) echo Tests/PluginPackageTests.swift $S/PluginPackage.swift $S/PluginPackageStore.swift $S/PluginLegacyReplacement.swift $S/PluginRunner.swift $S/PluginBackground.swift $S/PluginLogic.swift $S/PluginSettingsProtocol.swift $S/ProcessRunner.swift $S/DiagnosticReport.swift $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
-    background) echo Tests/PluginBackgroundTests.swift $S/PluginPackage.swift $S/PluginPackageStore.swift $S/PluginLegacyReplacement.swift $S/PluginRunner.swift $S/PluginBackground.swift $S/PluginLogic.swift $S/PluginSettingsProtocol.swift $S/ProcessRunner.swift $S/DiagnosticReport.swift $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
+    package-ui) echo Tests/PluginPackageUITests.swift $S/PluginPackageView.swift $S/PluginSettingsView.swift $S/PluginConfigurationView.swift $S/PluginPackage.swift $S/PluginPackageStore.swift $S/PluginLegacyReplacement.swift $S/PluginRunner.swift $S/PluginBackground.swift $S/PluginLogic.swift $S/PluginMenuCard.swift $S/PluginSettingsProtocol.swift $S/ProcessRunner.swift $S/DiagnosticReport.swift $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
+    packages) echo Tests/PluginPackageTests.swift $S/PluginPackage.swift $S/PluginPackageStore.swift $S/PluginLegacyReplacement.swift $S/PluginRunner.swift $S/PluginBackground.swift $S/PluginLogic.swift $S/PluginMenuCard.swift $S/PluginSettingsProtocol.swift $S/ProcessRunner.swift $S/DiagnosticReport.swift $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
+    background) echo Tests/PluginBackgroundTests.swift $S/PluginPackage.swift $S/PluginPackageStore.swift $S/PluginLegacyReplacement.swift $S/PluginRunner.swift $S/PluginBackground.swift $S/PluginLogic.swift $S/PluginMenuCard.swift $S/PluginSettingsProtocol.swift $S/ProcessRunner.swift $S/DiagnosticReport.swift $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
     *) return 1 ;;
   esac
 }
@@ -73,7 +74,7 @@ exec_group() {
     "$dir/t" "$dir" >"$dir/log" 2>&1
     rc=$?
   fi
-  if { [ "$1" = package-ui ] || [ "$1" = external-ui ]; } && [ -n "${SPLITSWAN_TEST_EVIDENCE:-}" ]; then
+  if { [ "$1" = package-ui ] || [ "$1" = external-ui ] || [ "$1" = plugin-card ]; } && [ -n "${SPLITSWAN_TEST_EVIDENCE:-}" ]; then
     mkdir -p "$SPLITSWAN_TEST_EVIDENCE"
     cp -R "$dir/screenshots" "$SPLITSWAN_TEST_EVIDENCE/"
   fi
@@ -83,7 +84,7 @@ exec_group() {
 
 # 含時序判斷（逾時、排程、暫停）的組，要等其他組編譯、執行都結束後再單獨跑，
 # 否則和並行編譯搶 CPU 時，固定的等待時間會偶發不夠
-SERIAL_GROUPS="root-backend plugins plugin-ui packages package-ui background external-ui"
+SERIAL_GROUPS="root-backend plugins plugin-ui plugin-card packages package-ui background external-ui"
 is_serial() { case " $SERIAL_GROUPS " in *" $1 "*) return 0 ;; esac; return 1; }
 
 if [ $# -gt 0 ]; then SELECTED="$*"; else SELECTED=$ALL_GROUPS; fi

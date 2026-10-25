@@ -4,6 +4,7 @@ import Foundation
 
 #if canImport(AppKit)
 import AppKit
+import SwiftUI
 #endif
 
 enum PluginMenu {
@@ -13,11 +14,13 @@ enum PluginMenu {
             let items: [PluginLogic.Item]
             let truncated: Bool
             let settingsAvailable: Bool
+            let card: PluginMenuCard?
 
-            init(items: [PluginLogic.Item], truncated: Bool = false, settingsAvailable: Bool = false) {
+            init(items: [PluginLogic.Item], truncated: Bool = false, settingsAvailable: Bool = false, card: PluginMenuCard? = nil) {
                 self.items = items
                 self.truncated = truncated
                 self.settingsAvailable = settingsAvailable
+                self.card = card
             }
         }
 
@@ -55,6 +58,10 @@ enum PluginMenu {
         struct Item: Equatable, Sendable {
             enum Style: Equatable, Sendable {
                 case text(color: String?)
+                /// 外掛輸出中沒有任何動作的文字列：不可點、不反白，但維持可讀的文字顏色。
+                case info(color: String?)
+                /// 子選單頂端的資訊卡片（不可點）。
+                case card(pluginID: String, PluginMenuCard)
                 case separator
             }
 
@@ -121,7 +128,7 @@ enum PluginMenu {
             children.append(contentsOf: output.items.filter { $0.params["menu"] != "false" }.map { outputItem($0, pluginID: plugin.id) })
             if output.truncated {
                 children.append(disabled("（輸出過長，只顯示前面部分）"))
-            } else if output.items.isEmpty, plugin.actionError == nil {
+            } else if output.items.isEmpty, plugin.actionError == nil, output.card == nil {
                 children.append(disabled("沒有可顯示的輸出"))
             }
         } else {
@@ -132,6 +139,11 @@ enum PluginMenu {
         if plugin.output?.settingsAvailable == true {
             if !children.isEmpty { children.append(.separator) }
             children.append(Tree.Item(title: "開啟設定…", isEnabled: true, command: .pluginSettings(pluginID: plugin.id)))
+        }
+
+        if let card = plugin.output?.card {
+            let cardItem = Tree.Item(title: card.headline, isEnabled: false, style: .card(pluginID: plugin.id, card))
+            children = [cardItem] + (children.isEmpty ? [] : [.separator] + children)
         }
 
         return Tree.Item(title: title, isEnabled: true, children: children)
@@ -145,6 +157,9 @@ enum PluginMenu {
         let children = item.children.isEmpty
             ? nil
             : item.children.filter { $0.params["menu"] != "false" }.map { outputItem($0, pluginID: pluginID) }
+        if command == nil, children == nil {
+            return Tree.Item(title: item.text, isEnabled: false, style: .info(color: item.color))
+        }
         return Tree.Item(
             title: item.text,
             isEnabled: true,
@@ -191,10 +206,7 @@ enum PluginMenu {
             setButtonType(.momentaryChange)
             toolTip = nil
 
-            let titleWidth = ceil((title as NSString).size(withAttributes: [.font: font!]).width)
-            let width = max(Self.minimumWidth,
-                            min(520, titleWidth + Self.leadingInset + Self.trailingInset))
-            frame.size = NSSize(width: width, height: 24)
+            frame.size = NSSize(width: PluginMenu.rowWidth(title, font: font!), height: 24)
         }
 
         required init?(coder: NSCoder) { nil }
@@ -234,21 +246,7 @@ enum PluginMenu {
             } else {
                 titleColor = normalTitleColor
             }
-            let titleFont = font ?? .menuFont(ofSize: 0)
-            let paragraph = NSMutableParagraphStyle()
-            paragraph.lineBreakMode = .byTruncatingTail
-            let attributed = NSAttributedString(string: title, attributes: [
-                .foregroundColor: titleColor,
-                .font: titleFont,
-                .paragraphStyle: paragraph,
-            ])
-            let textHeight = ceil(titleFont.boundingRectForFont.height)
-            attributed.draw(in: NSRect(
-                x: Self.leadingInset,
-                y: floor((bounds.height - textHeight) / 2),
-                width: max(0, bounds.width - Self.leadingInset - Self.trailingInset),
-                height: textHeight
-            ))
+            PluginMenu.drawRowText(title, color: titleColor, font: font ?? .menuFont(ofSize: 0), in: bounds)
         }
 
         override func sendAction(_ action: Selector?, to target: Any?) -> Bool {
@@ -263,15 +261,116 @@ enum PluginMenu {
         }
     }
 
-    /// Adapter 只把純選單樹轉成 AppKit，不讀取 Runner／UserDefaults，也不執行命令。
     @MainActor
-    static func rootItem(_ tree: Tree, target: AnyObject, action: Selector) -> NSMenuItem {
-        appKitItem(tree.root, target: target, action: action)
+    static func rowWidth(_ title: String, font: NSFont) -> CGFloat {
+        let titleWidth = ceil((title as NSString).size(withAttributes: [.font: font]).width)
+        return max(StickyActionButton.minimumWidth,
+                   min(520, titleWidth + StickyActionButton.leadingInset + StickyActionButton.trailingInset))
     }
 
     @MainActor
-    private static func appKitItem(_ item: Tree.Item, target: AnyObject, action: Selector) -> NSMenuItem {
-        if item.style == .separator { return .separator() }
+    static func drawRowText(_ title: String, color: NSColor, font: NSFont, in bounds: NSRect) {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingTail
+        let attributed = NSAttributedString(string: title, attributes: [
+            .foregroundColor: color,
+            .font: font,
+            .paragraphStyle: paragraph,
+        ])
+        let textHeight = ceil(font.boundingRectForFont.height)
+        attributed.draw(in: NSRect(
+            x: StickyActionButton.leadingInset,
+            y: floor((bounds.height - textHeight) / 2),
+            width: max(0, bounds.width - StickyActionButton.leadingInset - StickyActionButton.trailingInset),
+            height: textHeight
+        ))
+    }
+
+    /// 沒有動作的外掛文字列。停用的原生項目會整列變灰，改用 view 畫出一般文字色，滑過也不反白。
+    @MainActor
+    final class InfoRowView: NSView {
+        let title: String
+        let textColor: NSColor
+
+        init(title: String, color: NSColor?) {
+            self.title = title
+            textColor = color ?? .labelColor
+            super.init(frame: .zero)
+            frame.size = NSSize(width: PluginMenu.rowWidth(title, font: .menuFont(ofSize: 0)), height: 22)
+            setAccessibilityElement(true)
+            setAccessibilityRole(.staticText)
+            setAccessibilityLabel(title)
+        }
+
+        required init?(coder: NSCoder) { nil }
+
+        override func draw(_ dirtyRect: NSRect) {
+            PluginMenu.drawRowText(title, color: textColor, font: .menuFont(ofSize: 0), in: bounds)
+        }
+    }
+
+    /// 每個外掛一個卡片 NSHostingView，重建選單時沿用、只換 rootView，避免 SwiftUI 選單 view 反覆建立而洩漏。
+    @MainActor
+    final class CardHosts {
+        static let shared = CardHosts()
+
+        private struct Entry {
+            let host: NSHostingView<PluginMenuCardView>
+            weak var owner: NSMenuItem?
+        }
+        private var entries: [String: Entry] = [:]
+        private var used: Set<String> = []
+
+        var count: Int { entries.count }
+
+        func beginRender() { used = [] }
+
+        /// 本次沒用到的外掛卡片釋放掉。
+        func endRender() { entries = entries.filter { used.contains($0.key) } }
+
+        func host(pluginID: String, card: PluginMenuCard, owner: NSMenuItem) -> NSHostingView<PluginMenuCardView> {
+            used.insert(pluginID)
+            let host: NSHostingView<PluginMenuCardView>
+            if let entry = entries[pluginID] {
+                if let previous = entry.owner, previous !== owner { previous.view = nil }
+                host = entry.host
+                host.rootView = PluginMenuCardView(card: card)
+            } else {
+                host = NSHostingView(rootView: PluginMenuCardView(card: card))
+            }
+            entries[pluginID] = Entry(host: host, owner: owner)
+            host.frame.size = NSSize(width: PluginMenuCardView.width, height: ceil(host.fittingSize.height))
+            return host
+        }
+    }
+
+    /// Adapter 只把純選單樹轉成 AppKit，不讀取 Runner／UserDefaults，也不執行命令。
+    @MainActor
+    static func rootItem(_ tree: Tree, target: AnyObject, action: Selector, cards: CardHosts? = nil) -> NSMenuItem {
+        let cards = cards ?? .shared
+        cards.beginRender()
+        defer { cards.endRender() }
+        return appKitItem(tree.root, target: target, action: action, cards: cards)
+    }
+
+    @MainActor
+    private static func appKitItem(_ item: Tree.Item, target: AnyObject, action: Selector, cards: CardHosts) -> NSMenuItem {
+        switch item.style {
+        case .separator:
+            return .separator()
+        case .card(let pluginID, let card):
+            let result = NSMenuItem(title: item.title, action: nil, keyEquivalent: "")
+            result.view = cards.host(pluginID: pluginID, card: card, owner: result)
+            result.isEnabled = false
+            return result
+        case .info(let colorName):
+            let result = NSMenuItem(title: item.title, action: nil, keyEquivalent: "")
+            result.view = InfoRowView(title: item.title, color: colorName.flatMap(nsColor))
+            result.isEnabled = false
+            return result
+        case .text:
+            break
+        }
 
         let result = NSMenuItem(title: item.title, action: nil, keyEquivalent: "")
         if case .text(let colorName) = item.style,
@@ -297,7 +396,7 @@ enum PluginMenu {
             let submenu = NSMenu()
             submenu.autoenablesItems = false
             for child in children {
-                submenu.addItem(appKitItem(child, target: target, action: action))
+                submenu.addItem(appKitItem(child, target: target, action: action, cards: cards))
             }
             result.submenu = submenu
         }

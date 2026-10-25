@@ -305,7 +305,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 blockingError: plugin.blocking,
                 actionError: plugin.actionError,
                 output: plugin.output.map {
-                    PluginMenu.PluginSnapshot.Output(items: $0.items, truncated: $0.truncated, settingsAvailable: $0.settingsAvailable)
+                    PluginMenu.PluginSnapshot.Output(items: $0.items, truncated: $0.truncated,
+                                                     settingsAvailable: $0.settingsAvailable, card: $0.card)
                 }
             )
         }

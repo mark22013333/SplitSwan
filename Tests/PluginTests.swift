@@ -59,7 +59,7 @@ check("選單樹：多外掛依快照順序各自建立子選單",
 let alphaChildren = activeChildren.first?.children ?? []
 check("選單樹：保留文字、分隔線、顏色與原輸出順序",
       alphaChildren.map(\.title) == ["純文字", "", "紅色動作", "父項"]
-      && alphaChildren[0].style == .text(color: nil) && alphaChildren[0].command == nil
+      && alphaChildren[0].style == .info(color: nil) && alphaChildren[0].command == nil && !alphaChildren[0].isEnabled
       && alphaChildren[1].style == .separator
       && alphaChildren[2].style == .text(color: "red"))
 check("選單樹：動作與既有子項目保留原外掛 ID／原項目 payload",
@@ -1191,6 +1191,120 @@ for unsafe in [["destructive": true], ["opensExternal": true], ["recheckAfter": 
 var duplicateGuide = guideDefinition
 duplicateGuide["steps"] = [guideStep, guideStep.merging(["id": "second"]) { _, new in new }]
 check("設定精靈：欄位不能重複歸屬", (try? PluginSettingsProtocol.decode(guideData(duplicateGuide))) == nil)
+
+// MARK: 狀態卡片、分組與隱藏頁籤（選填擴充）
+func layoutForm(_ change: (inout [String: Any]) -> Void = { _ in }) -> Data {
+    var value: [String: Any] = [
+        "version": 1, "title": "分組測試", "revision": "r1",
+        "tabs": [
+            ["id": "status", "title": "狀態",
+             "summary": ["eyebrow": "今天", "headline": "今天上班", "reason": "範例日曆：上班日", "tone": "ok", "toggleField": "enabled",
+                         "metrics": [["label": "上次結果", "value": "通過", "detail": "10/19 22:38", "badge": ["text": "已過期", "tone": "warn"]]]],
+             "groups": [["id": "conditions", "title": "執行條件", "help": "展開才顯示。",
+                         "rows": [["label": "環境", "value": "就緒", "tone": "ok", "action": "recheck"]], "fields": [], "actions": []]]],
+            ["id": "settings", "title": "設定",
+             "groups": [["id": "account", "title": "帳號", "fields": ["user", "start"], "actions": ["manage"]]]],
+            ["id": "wizard", "title": "精靈", "hidden": true],
+        ] as [[String: Any]],
+        "fields": [
+            ["id": "enabled", "tab": "status", "title": "背景執行", "type": "toggle"],
+            ["id": "user", "tab": "settings", "title": "帳號", "type": "text"],
+            ["id": "start", "tab": "settings", "title": "開始時間", "type": "time"],
+            ["id": "note", "tab": "settings", "title": "備註", "type": "readonly"],
+            ["id": "name", "tab": "wizard", "title": "名稱", "type": "text"],
+        ],
+        "values": ["enabled": false, "user": "example", "start": "08:30", "note": "未分組", "name": ""] as [String: Any],
+        "actions": [
+            ["id": "recheck", "tab": "status", "title": "重新偵測"],
+            ["id": "manage", "tab": "settings", "title": "管理…", "opensTab": "wizard"],
+            ["id": "login-test", "tab": "settings", "title": "登入測試", "signsIn": true],
+        ],
+    ]
+    change(&value)
+    return try! JSONSerialization.data(withJSONObject: value)
+}
+func layoutTabs(_ value: inout [String: Any], _ edit: (inout [[String: Any]]) -> Void) {
+    var tabs = value["tabs"] as! [[String: Any]]
+    edit(&tabs)
+    value["tabs"] = tabs
+}
+func statusSummary(_ value: inout [String: Any], _ key: String, _ replacement: Any) {
+    layoutTabs(&value) { tabs in
+        var summary = tabs[0]["summary"] as! [String: Any]
+        summary[key] = replacement
+        tabs[0]["summary"] = summary
+    }
+}
+func accountGroup(_ value: inout [String: Any], _ edit: (inout [String: Any]) -> Void) {
+    layoutTabs(&value) { tabs in
+        var groups = tabs[1]["groups"] as! [[String: Any]]
+        edit(&groups[0])
+        tabs[1]["groups"] = groups
+    }
+}
+if let layout = try? PluginSettingsProtocol.decode(layoutForm()) {
+    let status = layout.tabs[0], settings = layout.layout(of: layout.tabs[1])
+    check("分組協定：狀態卡片、徽章與列解析為型別", status.summary?.tone == .ok && status.summary?.metrics.first?.badge?.tone == .warn
+          && status.groups?.first?.rows?.first?.action == "recheck")
+    check("分組協定：隱藏頁籤不在分段控制", layout.visibleTabs.map(\.id) == ["status", "settings"])
+    check("分組協定：開關移入狀態卡片、未分組欄位與動作排在群組後",
+          layout.layout(of: status).looseFields.isEmpty && layout.layout(of: status).looseActions.isEmpty
+          && settings.looseFields.map(\.id) == ["note"] && settings.trailingActions.map(\.id) == ["login-test"])
+    check("分組協定：動作的登入標示與隱藏頁籤入口", layout.actions.first { $0.id == "login-test" }?.signsIn == true
+          && layout.actions.first { $0.id == "manage" }?.opensTab == "wizard")
+} else { check("分組協定：完整範例可解析", false) }
+let legacyObject = try JSONSerialization.jsonObject(with: settingsData) as! NSDictionary
+let legacy = try PluginSettingsProtocol.decode(settingsData)
+let legacyRoundTrip = try JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as! NSDictionary
+check("分組協定：舊外掛缺省新欄位時快照不變、全部欄位照原本排列",
+      legacyRoundTrip == legacyObject && legacy.visibleTabs.count == 1
+      && legacy.layout(of: legacy.tabs[0]).looseFields.map(\.id) == ["name"] && legacy.layout(of: legacy.tabs[0]).summary == nil)
+func wizardGuide(_ value: inout [String: Any]) {
+    layoutTabs(&value) { tabs in
+        tabs[2]["guide"] = ["summary": "s", "steps": [["id": "one", "title": "一", "help": "h", "state": "pending", "fields": ["name"], "actions": []]],
+                            "checkAction": "wizard-check", "refreshFields": [], "managementActions": []]
+    }
+    value["actions"] = (value["actions"] as! [[String: Any]]) + [["id": "wizard-check", "tab": "wizard", "title": "檢查"]]
+}
+check("分組協定：隱藏頁籤可使用精靈", (try? PluginSettingsProtocol.decode(layoutForm(wizardGuide)))?.tabs[2].guide != nil)
+let layoutRejections: [(String, (inout [String: Any]) -> Void)] = [
+    ("未知色調", { statusSummary(&$0, "tone", "purple") }),
+    ("未知徽章色調", { statusSummary(&$0, "metrics", [["label": "上次", "value": "通過", "badge": ["text": "舊", "tone": "danger"]]]) }),
+    ("超過 4 個指標", { statusSummary(&$0, "metrics", Array(repeating: ["label": "指標", "value": "1"], count: 5)) }),
+    ("過長的大標題", { statusSummary(&$0, "headline", String(repeating: "長", count: 81)) }),
+    ("卡片開關不是 toggle", { statusSummary(&$0, "toggleField", "user") }),
+    ("卡片開關不存在", { statusSummary(&$0, "toggleField", "missing") }),
+    ("群組參照不存在欄位", { accountGroup(&$0) { $0["fields"] = ["missing"] } }),
+    ("群組參照其他頁籤欄位", { accountGroup(&$0) { $0["fields"] = ["enabled"] } }),
+    ("群組參照不存在動作", { accountGroup(&$0) { $0["actions"] = ["missing"] } }),
+    ("列尾動作屬於其他頁籤", { accountGroup(&$0) { $0["rows"] = [["label": "狀態", "value": "好", "action": "recheck"]] } }),
+    ("同一動作同時在列尾與按鈕列", { accountGroup(&$0) { $0["rows"] = [["label": "狀態", "value": "好", "action": "manage"]] } }),
+    ("群組標題空白", { accountGroup(&$0) { $0["title"] = "" } }),
+    ("群組識別碼不合法", { accountGroup(&$0) { $0["id"] = "有 空白" } }),
+    ("超過 12 列", { accountGroup(&$0) { $0["rows"] = Array(repeating: ["label": "列", "value": "值"], count: 13) } }),
+    ("欄位屬於兩個群組", { layoutTabs(&$0) { tabs in
+        tabs[1]["groups"] = [["id": "a", "title": "甲", "fields": ["user"], "actions": []], ["id": "b", "title": "乙", "fields": ["user"], "actions": []]] } }),
+    ("群組識別碼重複", { layoutTabs(&$0) { tabs in
+        tabs[1]["groups"] = [["id": "a", "title": "甲", "fields": [], "actions": []], ["id": "a", "title": "乙", "fields": [], "actions": []]] } }),
+    ("超過 10 個群組", { layoutTabs(&$0) { tabs in
+        tabs[1]["groups"] = (0..<11).map { ["id": "g\($0)", "title": "群組", "fields": [], "actions": []] } } }),
+    ("卡片開關同時放進群組", { layoutTabs(&$0) { tabs in
+        tabs[0]["groups"] = [["id": "c", "title": "條件", "fields": ["enabled"], "actions": []]] } }),
+    ("精靈頁籤同時使用分組", { wizardGuide(&$0); layoutTabs(&$0) { tabs in
+        tabs[2]["groups"] = [["id": "g", "title": "群組", "fields": [], "actions": []]] } }),
+    ("所有頁籤都隱藏", { layoutTabs(&$0) { tabs in for i in tabs.indices { tabs[i]["hidden"] = true } } }),
+    ("開啟非隱藏頁籤", { $0["actions"] = [["id": "manage", "tab": "settings", "title": "管理…", "opensTab": "status"],
+                                          ["id": "recheck", "tab": "status", "title": "重新偵測"]] }),
+    ("開啟不存在頁籤", { $0["actions"] = [["id": "manage", "tab": "settings", "title": "管理…", "opensTab": "missing"],
+                                          ["id": "recheck", "tab": "status", "title": "重新偵測"]] }),
+    ("切頁動作要求檔案", { $0["actions"] = [["id": "manage", "tab": "settings", "title": "管理…", "opensTab": "wizard", "input": "jsonFile"],
+                                           ["id": "recheck", "tab": "status", "title": "重新偵測"]] }),
+    ("切頁動作需要確認", { $0["actions"] = [["id": "manage", "tab": "settings", "title": "管理…", "opensTab": "wizard", "destructive": true],
+                                           ["id": "recheck", "tab": "status", "title": "重新偵測"]] }),
+]
+for (name, change) in layoutRejections {
+    check("分組協定：拒絕\(name)", (try? PluginSettingsProtocol.decode(layoutForm(change))) == nil)
+}
 for (name, raw) in [
     ("動作參照不存在欄位", settingsRaw.replacingOccurrences(of: "\"afterField\":\"name\"", with: "\"afterField\":\"missing\"")),
     ("未知版本", settingsRaw.replacingOccurrences(of: "\"version\":1", with: "\"version\":2")),
