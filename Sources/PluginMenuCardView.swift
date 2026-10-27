@@ -207,7 +207,7 @@ private struct HistorySection: View {
     let card: PluginMenuCard
     private let width = PluginMenuCardView.contentWidth
     private let axis: CGFloat = 36
-    private let top: CGFloat = 8
+    private let top: CGFloat = 12
     private let bottom: CGFloat = 58
     private let noneY: CGFloat = 76
     private let dateY: CGFloat = 92
@@ -255,7 +255,13 @@ private struct HistorySection: View {
                 }
                 ForEach(Array(card.history.enumerated()), id: \.offset) { i, day in
                     if let time = day.time {
-                        Circle().fill(day.result.color).frame(width: 8, height: 8).position(x: x(i), y: y(time.minutes))
+                        if card.isToday(index: i) {
+                            Circle().fill(day.result.color).frame(width: 10, height: 10)
+                                .overlay(Circle().stroke(Color.primary.opacity(0.85), lineWidth: 1.5).frame(width: 16, height: 16))
+                                .position(x: x(i), y: y(time.minutes))
+                        } else {
+                            Circle().fill(day.result.color).frame(width: 8, height: 8).position(x: x(i), y: y(time.minutes))
+                        }
                     } else {
                         RoundedRectangle(cornerRadius: 2).stroke(day.result.color, lineWidth: 1.5)
                             .frame(width: 8, height: 8).position(x: x(i), y: noneY)
