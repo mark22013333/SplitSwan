@@ -168,6 +168,15 @@ enum PluginPackage {
         guard p == e else { throw fail("ZIP 項目數量不一致") }
         return result
     }
+    /// 安裝包被系統當成一般 zip 解開再壓回去時，會多一層資料夾或 AppleDouble（._）檔。
+    /// 合法套件也可宣告 ._ 檔，所以只在驗證已失敗時用來說明原因。
+    static func repackedMessage<S: Sequence>(_ paths: S) -> String? where S.Element == String {
+        let paths = Array(paths)
+        let nested = !paths.contains("manifest.json") && paths.contains { $0.split(separator: "/").count == 2 && $0.hasSuffix("/manifest.json") }
+        let appleDouble = paths.contains { $0.split(separator: "/").contains { $0.hasPrefix("._") || $0 == "__MACOSX" } }
+        guard nested || appleDouble else { return nil }
+        return "這個安裝包被解壓縮後又重新壓縮過，內容已不是原始格式。請向提供者索取原始的 .splitswan-plugin 檔，傳送與下載時不要解壓縮或重新壓縮。"
+    }
     struct Prepared: Sendable {
         let staging: URL
         let payload: URL
@@ -205,7 +214,7 @@ enum PluginPackage {
             guard entries.count == expected.count else { throw fail("ZIP 列舉不完整（預期 \(expected.count) 項，實際 \(entries.count) 項）") }
             // 預檢已驗證原始檔名是 UTF-8；不要再次依 ZIP 旗標改用系統 CP437 解碼。
             guard let manifestEntry = entries.first(where: { $0.path(using: .utf8) == "manifest.json" }), manifestEntry.type == .file else {
-                throw fail("缺少根目錄 manifest.json，或 Manifest 不是一般檔案")
+                throw fail(repackedMessage(expected.keys) ?? "缺少根目錄 manifest.json，或 Manifest 不是一般檔案")
             }
             guard manifestEntry.uncompressedSize <= manifestLimit else { throw fail("Manifest 超過 64 KiB") }
             func extract(_ entry: Entry) throws -> Data {
@@ -228,7 +237,7 @@ enum PluginPackage {
                     guard files.keys.contains(where: { $0.hasPrefix(path) }) else { throw fail("ZIP 含未宣告資料夾") }
                     continue
                 }
-                guard entry.type == .file, path == "manifest.json" || files[path] != nil else { throw fail("ZIP 含未宣告檔案") }
+                guard entry.type == .file, path == "manifest.json" || files[path] != nil else { throw fail(repackedMessage(expected.keys) ?? "ZIP 含未宣告檔案") }
                 let content = path == "manifest.json" ? manifestData : try extract(entry)
                 if let f = files[path], hash(content) != f.sha256 { throw fail("檔案雜湊不符：\(path)") }
                 let target = payload.appendingPathComponent(path)

@@ -134,10 +134,27 @@ oversized=root/'archive-limit.splitswan-plugin'
 with oversized.open('wb') as stream: stream.truncate(p.ARCHIVE_LIMIT+1)
 cases.append(dict(file=oversized.name,valid=False))
 bad=copy.deepcopy(base);bad['description']='X'*65537;archive('manifest-limit',bad)
+cases[-1]['message']='Manifest 超過 64 KiB'
 def remove_manifest(data):
     # 以相同長度改名，保持 ZIP 結構與 CRC 完整。
     return data.replace(b'manifest.json',b'manifest.jsox')
 archive('no-root-manifest',mutate=remove_manifest)
+cases[-1]['message']='缺少根目錄 manifest.json'
+# 收件端把安裝包當一般 zip 解開再壓回去：外層多一層資料夾，或夾帶 AppleDouble 檔。
+def repacked(name,prefix='',appledouble=False):
+    path=root/(name+'.splitswan-plugin')
+    entries=[('manifest.json',(json.dumps(base,indent=2)+'\n').encode())]+list(contents.items())
+    with zipfile.ZipFile(path,'w',zipfile.ZIP_DEFLATED) as z:
+        for key,data in entries:
+            z.writestr(prefix+key,data)
+            folder,slash,file=key.rpartition('/')
+            if appledouble: z.writestr(prefix+folder+slash+'._'+file,b'\x00\x05\x16\x07')
+    cases.append(dict(file=path.name,valid=False,message='解壓縮後又重新壓縮過'))
+repacked('repacked-folder',prefix='example-plugin/')
+repacked('repacked-appledouble',appledouble=True)
+# 合法套件自行宣告的 ._ 檔不得被當成重新壓縮。
+dotted=copy.deepcopy(base);dotted['files'].append(dict(path='resources/._notes.txt',sha256=p.digest(b'notes'),executable=False))
+archive('declared-appledouble-name',dotted,extra=[('resources/._notes.txt',b'notes',stat.S_IFREG|0o600)],valid=True)
 
 archive('zip64-header',mutate=lambda d:central(d,lambda d,o:struct.pack_into('<H',d,o+6,45)))
 # 將允許清單以外的開發檔案留在來源，pack 必須排除它，不得猜測依賴。

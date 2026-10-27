@@ -9,13 +9,16 @@ func runTests() async throws {
 let fm = FileManager.default
 let root = URL(fileURLWithPath: CommandLine.arguments[1]).resolvingSymlinksInPath()
 let fixtures = root.appendingPathComponent("fixtures")
-struct Case: Decodable { let file: String; let valid: Bool }
+struct Case: Decodable { let file: String; let valid: Bool; let message: String? }
 let cases = try JSONDecoder().decode([Case].self, from: Data(contentsOf: fixtures.appendingPathComponent("cases.json")))
 for c in cases {
     do {
         let p = try PluginPackage.prepare(fixtures.appendingPathComponent(c.file), appVersion: "1.8.6")
         p.discard(); check("Swift 共用案例：" + c.file, c.valid)
-    } catch { check("Swift 共用案例：" + c.file + "：" + error.localizedDescription, !c.valid) }
+    } catch {
+        let message = error.localizedDescription
+        check("Swift 共用案例：" + c.file + "：" + message, !c.valid && (c.message.map { message.contains($0) } ?? true))
+    }
 }
 // 已隔離下載的來源，確認信任後才安裝，匯出仍保留來源隔離資訊。
 let quarantinedURL = root.appendingPathComponent("quarantined.splitswan-plugin")
