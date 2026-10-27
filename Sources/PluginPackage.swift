@@ -11,8 +11,14 @@ enum PluginPackage {
     static let entryLimit = 1000
     static let runtimeDirectories = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
     static let runtimes = ["sh", "bash", "zsh", "python3", "node"]
-    struct Problem: LocalizedError { let failure: PluginFailure; let detail: String?; var errorDescription: String? { failure.text(detail) } }
-    static func fail(_ failure: PluginFailure, _ detail: String? = nil) -> Problem { Problem(failure: failure, detail: detail) }
+    /// facts 只進安裝記錄，不影響畫面文字
+    struct Problem: LocalizedError {
+        let failure: PluginFailure; let detail: String?; var facts: [PluginEventLog.Fact] = []
+        var errorDescription: String? { failure.text(detail) }
+    }
+    static func fail(_ failure: PluginFailure, _ detail: String? = nil, facts: [PluginEventLog.Fact] = []) -> Problem {
+        Problem(failure: failure, detail: detail, facts: facts)
+    }
     struct File: Codable, Equatable, Sendable {
         let path: String
         let sha256: String
@@ -184,7 +190,10 @@ enum PluginPackage {
         let manifest: Manifest
         let digest: String
         let quarantine: Data?
+        let size: Int
+        let sha256: String
         var missingDependencies: [String] { PluginPackage.missingDependencies(manifest) }
+        var facts: [PluginEventLog.Fact] { [.manifest(id: manifest.id, version: manifest.version), .fileSize(size), .sha256(sha256)] }
         func discard() { try? FileManager.default.removeItem(at: staging) }
     }
     static func missingDependencies(_ m: Manifest, directories: [String] = runtimeDirectories) -> [String] {
@@ -195,13 +204,17 @@ enum PluginPackage {
     static func prepare(_ source: URL, appVersion: String) throws -> Prepared {
         let fm = FileManager.default, staging = fm.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("splitswan-package-" + UUID().uuidString)
         try fm.createDirectory(at: staging, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        var facts: [PluginEventLog.Fact] = []
         do {
             let archiveURL = staging.appendingPathComponent("source.zip"), payload = staging.appendingPathComponent("payload")
             let attrs = try fm.attributesOfItem(atPath: source.path)
+            if let size = attrs[.size] as? Int { facts = [.fileSize(size)] }
             guard attrs[.type] as? FileAttributeType == .typeRegular, (attrs[.size] as? Int ?? Int.max) <= archiveLimit else { throw fail(.packageSourceInvalid) }
             let sourceQuarantine = readQuarantine(source.path)
             if PluginRunner.hasQuarantine(source.path), sourceQuarantine == nil { throw fail(.packageQuarantineRead) }
             let data = try PluginPackageStore.boundedRead(source, limit: archiveLimit)
+            let sha256 = hash(data)
+            facts = [.fileSize(data.count), .sha256(sha256)]
             try data.write(to: archiveURL, options: .withoutOverwriting)
             try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: archiveURL.path)
             if let q = sourceQuarantine {
@@ -211,10 +224,13 @@ enum PluginPackage {
             let expected = try zipPreflight(data)
             let archive = try Archive(url: archiveURL, accessMode: .read)
             let entries = Array(archive)
-            guard entries.count == expected.count else { throw fail(.archiveEnumerationIncomplete, "預期 \(expected.count) 項，實際 \(entries.count) 項") }
+            guard entries.count == expected.count else {
+                throw fail(.archiveEnumerationIncomplete, "預期 \(expected.count) 項，實際 \(entries.count) 項", facts: [.entryCount(expected: expected.count, actual: entries.count)])
+            }
+            let topPaths = PluginEventLog.Fact.topPaths(Array(expected.keys.sorted().prefix(10)))
             // 預檢已驗證原始檔名是 UTF-8；不要再次依 ZIP 旗標改用系統 CP437 解碼。
             guard let manifestEntry = entries.first(where: { $0.path(using: .utf8) == "manifest.json" }), manifestEntry.type == .file else {
-                throw fail(repackedFailure(expected.keys) ?? .manifestMissingRoot)
+                throw fail(repackedFailure(expected.keys) ?? .manifestMissingRoot, facts: [topPaths])
             }
             guard manifestEntry.uncompressedSize <= manifestLimit else { throw fail(.manifestTooLarge) }
             func extract(_ entry: Entry) throws -> Data {
@@ -237,7 +253,7 @@ enum PluginPackage {
                     guard files.keys.contains(where: { $0.hasPrefix(path) }) else { throw fail(.archiveUndeclaredFolder) }
                     continue
                 }
-                guard entry.type == .file, path == "manifest.json" || files[path] != nil else { throw fail(repackedFailure(expected.keys) ?? .archiveUndeclaredFile) }
+                guard entry.type == .file, path == "manifest.json" || files[path] != nil else { throw fail(repackedFailure(expected.keys) ?? .archiveUndeclaredFile, facts: [topPaths]) }
                 let content = path == "manifest.json" ? manifestData : try extract(entry)
                 if let f = files[path], hash(content) != f.sha256 { throw fail(.archiveHashMismatch, path) }
                 let target = payload.appendingPathComponent(path)
@@ -248,8 +264,14 @@ enum PluginPackage {
             guard files.keys.allSatisfy({ expected[$0] != nil }) else { throw fail(.archiveMissingFile) }
             try validateEntrypoint(manifest, root: payload)
             let quarantine = readQuarantine(archiveURL.path)
-            return Prepared(staging: staging, payload: payload, archive: archiveURL, manifest: manifest, digest: hash(manifestData), quarantine: quarantine)
-        } catch { try? fm.removeItem(at: staging); throw error }
+            return Prepared(staging: staging, payload: payload, archive: archiveURL, manifest: manifest, digest: hash(manifestData), quarantine: quarantine,
+                            size: data.count, sha256: sha256)
+        } catch {
+            try? fm.removeItem(at: staging)
+            guard var problem = error as? Problem else { throw error }
+            problem.facts = facts + problem.facts
+            throw problem
+        }
     }
     static func validateEntrypoint(_ m: Manifest, root: URL) throws {
         let file = try FileHandle(forReadingFrom: root.appendingPathComponent(m.entrypoint)); defer { try? file.close() }
@@ -263,5 +285,16 @@ enum PluginPackage {
         var data = Data(count: size)
         let read = data.withUnsafeMutableBytes { getxattr(path, "com.apple.quarantine", $0.baseAddress, size, 0, 0) }
         return read == size ? data : nil
+    }
+}
+
+extension PluginEventLog.Attempt {
+    /// 安裝流程的錯誤帶著錯誤碼、階段與佐證；其他錯誤沒有錯誤碼，只留描述（寫入前會遮蔽）
+    func failed(_ error: Error, at stage: PluginEventLog.Stage, _ facts: [PluginEventLog.Fact] = []) async {
+        if let p = error as? PluginPackage.Problem {
+            await record(p.failure.stage, .failed, failure: p.failure, detail: p.detail, facts: facts + p.facts)
+        } else {
+            await record(stage, .failed, detail: error.localizedDescription, facts: facts)
+        }
     }
 }

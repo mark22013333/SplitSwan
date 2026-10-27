@@ -94,6 +94,8 @@ actor PluginEventLog {
 
     static var defaultDirectory: URL {
         if let o = UserDefaults.standard.string(forKey: dirOverrideKey), o.hasPrefix("/") { return URL(fileURLWithPath: o) }
+        // 測試執行檔沒有 bundle：沒指定資料夾時寫到暫存區，絕不碰使用者真正的記錄
+        guard Bundle.main.bundleIdentifier != nil else { return FileManager.default.temporaryDirectory.appendingPathComponent("SplitSwan-unbundled-plugin-logs") }
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/SplitSwan")
     }
     static let shared = PluginEventLog(directory: PluginEventLog.defaultDirectory)
@@ -267,6 +269,27 @@ actor PluginEventLog {
     }
 
     static func isSHA256(_ s: String) -> Bool { s.utf8.count == 64 && s.utf8.allSatisfy { ($0 >= 0x30 && $0 <= 0x39) || ($0 >= 0x61 && $0 <= 0x66) } }
+
+    /// 一次操作：同一個 id 串起開始到結果，每個事件 await 寫完才回來，所以同一次操作的紀錄依序
+    struct Attempt: Sendable {
+        let id = UUID()
+        var operation: Operation
+        var plugin: String?
+        let log: PluginEventLog
+
+        init(_ operation: Operation, plugin: String? = nil, log: PluginEventLog) {
+            self.operation = operation; self.plugin = plugin; self.log = log
+        }
+        func started(_ stage: Stage) async {
+            await record(stage, .started, facts: [.appVersion(AppInfo.version), .macOS(ProcessInfo.processInfo.operatingSystemVersionString)])
+        }
+        func passed(_ stage: Stage, _ facts: [Fact] = [], detail: String? = nil) async { await record(stage, .passed, detail: detail, facts: facts) }
+        func cancelled(_ stage: Stage) async { await record(stage, .cancelled) }
+        func record(_ stage: Stage, _ outcome: Outcome, failure: PluginFailure? = nil, detail: String? = nil, facts: [Fact] = []) async {
+            await log.append(Record(time: Date(), attempt: id, plugin: plugin, operation: operation, stage: stage, outcome: outcome,
+                                    failure: failure, detail: detail, facts: facts))
+        }
+    }
 
     static func scrub(_ r: Record) -> Record {
         var out = r

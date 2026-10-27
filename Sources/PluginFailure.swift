@@ -99,6 +99,34 @@ enum PluginFailure: String, CaseIterable, Codable, Sendable {
     case runnerChangedOrRemoved = "runner.changedOrRemoved"
     case runnerSinglePathMismatch = "runner.singlePathMismatch"
     case runnerSingleNotFound = "runner.singleNotFound"
+    case runnerExitNonZero = "runner.exitNonZero"
+    case runnerTimedOut = "runner.timedOut"
+    case runnerOutputInvalid = "runner.outputInvalid"
+    case runnerLaunchFailed = "runner.launchFailed"
+    case runnerUnsafe = "runner.unsafe"
+
+    /// 安裝記錄的階段由錯誤碼推得，呼叫端不另外傳；先看個別例外，其餘依領域
+    var stage: PluginEventLog.Stage {
+        switch self {
+        case .manifestBadShebang: return .entrypoint
+        case .archiveHashMismatch, .archiveMissingFile: return .payload
+        case .packageUpdateIDMismatch, .packagePluginLimit, .storeVersionNotNewer: return .compare
+        case .storeMissingRuntime: return .enable
+        case .storeRemoveChanged, .runnerChangedOrRemoved, .runnerSinglePathMismatch, .runnerSingleNotFound: return .remove
+        case .storeExportInsideRoot, .storeExportSourceChanged, .storeExportQuarantine, .storeExportWriteFailed: return .export
+        case .runnerBusy: return .install
+        default: break
+        }
+        switch rawValue.prefix(while: { $0 != "." }) {
+        case "archive": return .archive
+        case "manifest": return .manifest
+        case "legacy": return .legacy
+        case "store": return .install
+        case "background": return .remove
+        case "runner": return .run
+        default: return .read
+        }
+    }
 
     var message: String {
         switch self {
@@ -199,6 +227,11 @@ enum PluginFailure: String, CaseIterable, Codable, Sendable {
         case .runnerChangedOrRemoved: "此外掛正在變更或已移除，請重新整理後再試"
         case .runnerSinglePathMismatch: "單檔外掛路徑不一致"
         case .runnerSingleNotFound: "找不到可移除的單檔外掛"
+        case .runnerExitNonZero: "外掛結束碼不是 0"
+        case .runnerTimedOut: "外掛執行逾時"
+        case .runnerOutputInvalid: "外掛有輸出但無法解析出標題或項目"
+        case .runnerLaunchFailed: "無法啟動外掛"
+        case .runnerUnsafe: "外掛未通過執行前的安全檢查"
         }
     }
     /// detail 放執行時才知道的路徑、數量等；`legacyCheckFailed` 的文字完全由檢查結果決定，所以只顯示 detail。

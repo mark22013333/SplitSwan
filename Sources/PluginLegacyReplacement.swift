@@ -27,7 +27,7 @@ enum PluginLegacyReplacement {
         let check = PluginRunner.fullCheck(path: url.path, pluginDir: directory.path, uid: getuid())
         guard check.problem == nil else { throw PluginPackage.fail(.legacyCheckFailed, check.problem) }
         let hash = PluginPackage.hash(try PluginPackageStore.boundedRead(url, limit: PluginPackage.fileLimit))
-        guard legacy.sha256s.contains(hash) else { throw PluginPackage.fail(.legacyContentMismatch) }
+        guard legacy.sha256s.contains(hash) else { throw PluginPackage.fail(.legacyContentMismatch, facts: [.legacyScript(name: legacy.fileName, sha256: hash)]) }
         return Match(fileName: legacy.fileName, sha256: hash, enabled: enabled)
     }
     /// 原子移開入口後才切換套件；失敗恢復收據、登錄與入口。獨立後端資料原地保留。

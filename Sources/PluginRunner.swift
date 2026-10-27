@@ -92,6 +92,8 @@ final class PluginRunner: ObservableObject {
     /// 網址開啟端（測試時可改為記錄用閉包）。
     var urlOpener: (URL) -> Void = { _ = NSWorkspace.shared.open($0) }
     var now: () -> Date = Date.init
+    /// 安裝與執行記錄；測試換成暫存資料夾的實例。寫入在 PluginEventLog actor 上，不佔主執行緒
+    var eventLog = PluginEventLog.shared
 
     /// 開關打開後才為 true；false 時不持有任何 timer、監看或事件訂閱
     @Published private(set) var isActive = false
@@ -125,8 +127,10 @@ final class PluginRunner: ObservableObject {
     private var slotWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(directory: URL, stateRoot: URL, allowInactiveExecution: Bool = false,
-         preferences: UserDefaults = .standard, packageRoot: URL? = nil, appVersion: String = AppInfo.version) {
-        self.packageStore = PluginPackageStore(root: packageRoot ?? directory.deletingLastPathComponent().appendingPathComponent("plugin-packages"), appVersion: appVersion)
+         preferences: UserDefaults = .standard, packageRoot: URL? = nil, appVersion: String = AppInfo.version,
+         runtimeDirectories: [String] = PluginPackage.runtimeDirectories) {
+        self.packageStore = PluginPackageStore(root: packageRoot ?? directory.deletingLastPathComponent().appendingPathComponent("plugin-packages"),
+                                               appVersion: appVersion, runtimeDirectories: runtimeDirectories)
         self.directory = directory
         self.stateRoot = stateRoot
         self.allowInactiveExecution = allowInactiveExecution
@@ -463,7 +467,11 @@ final class PluginRunner: ObservableObject {
         var output: PluginLogic.Output?
         var code: Int32 = 0
         var timedOut = false
+        var failure: PluginPackage.Problem?   // 只進安裝記錄；畫面仍顯示 error
     }
+
+    /// 記錄裡的外掛識別：套件用 manifest id，單檔用完整檔名
+    nonisolated static func logID(_ p: Plugin) -> String { p.package?.record.manifest.id ?? p.id }
 
     /// stderr 最多保留的 bytes（只用來顯示錯誤原因）
     nonisolated static let stderrLimit = 4096
@@ -504,6 +512,9 @@ final class PluginRunner: ObservableObject {
         if r.problem == nil, r.error == nil, let out = r.output {
             await sendNotifications(plugin: p, output: out, epoch: myEpoch, generation: myGeneration)
         }
+        let attempt = PluginEventLog.Attempt(.run, plugin: Self.logID(p), log: eventLog)
+        if let why = r.problem { await attempt.failed(PluginPackage.fail(.runnerUnsafe, why), at: .run) }
+        else if let failure = r.failure { await attempt.failed(failure, at: .run) } else { await attempt.passed(.run) }
     }
 
     /// 在背景執行：完整檢查（掃描後可能被改過）→ 建立狀態資料夾 → 限時執行 → 解析輸出。
@@ -514,7 +525,7 @@ final class PluginRunner: ObservableObject {
         if let why = check.problem { return ExecResult(problem: why) }
         guard let exe = check.resolved else { return ExecResult(problem: "找不到檔案") }
         guard let state = executionState(root: stateRoot, id: id, package: package) else {
-            return ExecResult(error: "無法建立外掛的狀態資料夾")
+            return ExecResult(error: "無法建立外掛的狀態資料夾", failure: PluginPackage.fail(.runnerLaunchFailed, "無法建立外掛的狀態資料夾"))
         }
         var env = ["PATH": pluginPATH, "HOME": home, "SPLITSWAN_PLUGIN_STATE": state, "SPLITSWAN": "1",
                    "SPLITSWAN_PLUGIN_SETTINGS_PROTOCOL": "1", "SPLITSWAN_APP_PID": String(getpid())]
@@ -522,15 +533,23 @@ final class PluginRunner: ObservableObject {
         let r = await ProcessRunner.execute(exe, args, env: env, timeout: timeout, maxBytes: readLimit,
                                             qos: .utility, stderrLimit: stderrLimit)
         var out = ExecResult(code: r.code, timedOut: r.timedOut)
+        let stderrTail: [PluginEventLog.Fact] = r.errorOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? [] : [.stderrTail(r.errorOutput)]
         if let err = r.launchError {
             out.error = "無法執行：\(PluginLogic.clip(PluginLogic.sanitize(err)))"
+            out.failure = PluginPackage.fail(.runnerLaunchFailed, err)
         } else if r.timedOut {
             out.error = "執行逾時（超過 \(Int(timeout)) 秒）"
+            out.failure = PluginPackage.fail(.runnerTimedOut, facts: [.timedOut] + stderrTail)
         } else if r.code != 0 {
             let detail = lastLine(r.errorOutput)
             out.error = "結束碼 \(r.code)" + (detail.map { "：\($0)" } ?? "")
+            out.failure = PluginPackage.fail(.runnerExitNonZero, facts: [.exitCode(r.code)] + stderrTail)
         } else if parse {
-            out.output = PluginLogic.parseOutput(r.output)
+            let parsed = PluginLogic.parseOutput(r.output)
+            out.output = parsed
+            if parsed.title.isEmpty, parsed.items.isEmpty, !r.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                out.failure = PluginPackage.fail(.runnerOutputInvalid, facts: stderrTail)
+            }
         }
         return out
     }
@@ -799,10 +818,16 @@ final class PluginRunner: ObservableObject {
     /// 個別外掛開關：停用後立刻停止新排程；進行中的結果會丟棄，不再更新選單或發通知。
     func setPluginEnabled(_ id: String, _ on: Bool) {
         guard !updatingPackages.contains(id), let plugin = plugins.first(where: { $0.id == id }), plugin.isEnabled != on else { return }
+        let attempt = PluginEventLog.Attempt(on ? .enable : .disable, plugin: Self.logID(plugin), log: eventLog)
         if let package = plugin.package {
             do { try packageStore.setEnabled(package.record.manifest.id, on) }
-            catch { update(id) { $0.problem = error.localizedDescription }; return }
+            catch {
+                update(id) { $0.problem = error.localizedDescription }
+                Task { await attempt.failed(error, at: .enable) }
+                return
+            }
         }
+        Task { await attempt.passed(.enable) }
         var disabled = disabledPluginIDs
         if on { disabled.remove(id) } else { disabled.insert(id) }
         preferences.set(disabled.sorted(), forKey: Self.disabledPluginsKey)
@@ -877,6 +902,19 @@ final class PluginRunner: ObservableObject {
     @discardableResult
     func removePlugin(_ plugin: Plugin, trash: @escaping PluginPackageStore.TrashOperation = PluginPackageStore.moveToTrash,
                       progress: @escaping @Sendable (String) async -> Void = { _ in }) async throws -> PluginBackground.Result {
+        let attempt = PluginEventLog.Attempt(.remove, plugin: Self.logID(plugin), log: eventLog)
+        do {
+            let result = try await stopAndTrash(plugin, trash: trash, progress: progress)
+            await attempt.passed(.remove)
+            return result
+        } catch {
+            await attempt.failed(error, at: .remove)
+            throw error
+        }
+    }
+
+    private func stopAndTrash(_ plugin: Plugin, trash: @escaping PluginPackageStore.TrashOperation,
+                              progress: @escaping @Sendable (String) async -> Void) async throws -> PluginBackground.Result {
         let id = plugin.id
         guard !updatingPackages.contains(id), plugins.contains(where: { $0.id == id && $0.path == plugin.path }) else {
             throw PluginPackage.fail(.runnerChangedOrRemoved)

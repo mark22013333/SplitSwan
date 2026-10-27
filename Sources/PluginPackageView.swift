@@ -10,8 +10,9 @@ final class PluginPackageModel: ObservableObject {
         let change: PluginPackageStore.Change
         let previous: PluginPackage.Manifest?
         let legacy: PluginLegacyReplacement.Match?
-        init(prepared: PluginPackage.Prepared, change: PluginPackageStore.Change, previous: PluginPackage.Manifest?, legacy: PluginLegacyReplacement.Match? = nil) {
-            self.prepared = prepared; self.change = change; self.previous = previous; self.legacy = legacy
+        let attempt: PluginEventLog.Attempt
+        init(prepared: PluginPackage.Prepared, change: PluginPackageStore.Change, previous: PluginPackage.Manifest?, legacy: PluginLegacyReplacement.Match? = nil, attempt: PluginEventLog.Attempt) {
+            self.prepared = prepared; self.change = change; self.previous = previous; self.legacy = legacy; self.attempt = attempt
         }
     }
     struct Removal: Identifiable {
@@ -46,25 +47,41 @@ final class PluginPackageModel: ObservableObject {
         guard !busy, preview == nil, removal == nil else { return }
         busy = true; message = "正在驗證安裝包…"; failed = false
         defer { busy = false }
+        var attempt = PluginEventLog.Attempt(updateID == nil ? .importPackage : .update, log: runner.eventLog)
+        await attempt.started(.read)
+        // 讀到安裝包之後的失敗沒有自帶檔案佐證，補上大小與雜湊
+        var facts: [PluginEventLog.Fact] = []
         do {
             guard ["zip", "splitswan-plugin"].contains(url.pathExtension.lowercased()) else { throw PluginPackage.fail(.packageBadExtension) }
             let store = runner.packageStore
             let prepared = try await Task.detached(priority: .utility) { try PluginPackage.prepare(url, appVersion: store.appVersion) }.value
+            facts = prepared.facts
+            attempt.plugin = prepared.manifest.id
             do {
                 if let updateID, "package:" + prepared.manifest.id != updateID { throw PluginPackage.fail(.packageUpdateIDMismatch) }
                 let change = try store.change(for: prepared)
+                if case .update = change { attempt.operation = .update }
                 let legacy = try runner.legacyReplacement(for: prepared)
-                if change == .identical, legacy == nil { prepared.discard(); message = "已安裝相同版本及內容，不需重新安裝。"; return }
+                if change == .identical, legacy == nil {
+                    prepared.discard(); message = "已安裝相同版本及內容，不需重新安裝。"
+                    await attempt.passed(.compare, facts, detail: "已安裝相同版本及內容，未重新安裝")
+                    return
+                }
                 if change == .install, runner.plugins.count >= PluginLogic.maxPlugins,
                    !runner.plugins.contains(where: { $0.id == legacy?.fileName }) { throw PluginPackage.fail(.packagePluginLimit) }
                 let previous = try? store.read(prepared.manifest.id).manifest
-                preview = Preview(prepared: prepared, change: change, previous: previous, legacy: legacy)
+                preview = Preview(prepared: prepared, change: change, previous: previous, legacy: legacy, attempt: attempt)
                 message = nil
+                await attempt.passed(.compare, facts)
             } catch { prepared.discard(); throw error }
-        } catch { failed = true; message = error.localizedDescription }
+        } catch {
+            failed = true; message = error.localizedDescription
+            await attempt.failed(error, at: .read, facts)
+        }
     }
     func cancel() {
         guard !busy else { return }
+        if let attempt = preview?.attempt { Task { await attempt.cancelled(.compare) } }
         preview?.prepared.discard(); preview = nil; message = "已取消，未安裝外掛。"; failed = false
     }
     func install() async {
@@ -74,12 +91,22 @@ final class PluginPackageModel: ObservableObject {
            !PluginConfigurationWindows.shared.prepareForModification(legacy.fileName, operation: "升級") { return }
         busy = true; failed = false
         defer { busy = false }
+        var attempt = preview.attempt
+        var facts = preview.prepared.facts
+        if let legacy = preview.legacy {
+            attempt.operation = .legacyUpgrade
+            facts.append(.legacyScript(name: legacy.fileName, sha256: legacy.sha256))
+        }
         do {
             try await runner.installPackage(preview.prepared, replacing: preview.legacy)
             legacyBackup = runner.latestLegacyBackup
             message = preview.legacy != nil ? "已升級並取代舊腳本，保留原啟用狀態。舊入口已備份，私人資料原地保留；外掛自身的排程切換請依設定頁完成。" : preview.change == .install ? "外掛已安裝，預設停用。確認後可開啟個別外掛開關。" : "外掛已更新，本機設定與啟用狀態已保留。"
             preview.prepared.discard(); self.preview = nil
-        } catch { failed = true; message = error.localizedDescription }
+            await attempt.passed(.install, facts)
+        } catch {
+            failed = true; message = error.localizedDescription
+            await attempt.failed(error, at: .install, facts)
+        }
     }
     func export(_ installed: PluginPackageStore.Installed) {
         guard !busy, preview == nil, removal == nil else { return }
@@ -92,10 +119,16 @@ final class PluginPackageModel: ObservableObject {
             Task { @MainActor in
                 self.busy = true; self.failed = false; self.message = "正在驗證匯出內容…"
                 defer { self.busy = false }
+                let attempt = PluginEventLog.Attempt(.export, plugin: installed.record.manifest.id, log: self.runner.eventLog)
+                let facts: [PluginEventLog.Fact] = [.manifest(id: installed.record.manifest.id, version: installed.record.manifest.version)]
                 do {
                     try await Task.detached(priority: .utility) { try installed.store.export(installed, to: url) }.value
                     self.message = "已匯出程式、資源與預設值；未包含本機設定、授權或紀錄。"
-                } catch { self.failed = true; self.message = error.localizedDescription }
+                    await attempt.passed(.export, facts)
+                } catch {
+                    self.failed = true; self.message = error.localizedDescription
+                    await attempt.failed(error, at: .export, facts)
+                }
             }
         }
     }
