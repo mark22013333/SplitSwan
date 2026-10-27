@@ -3,7 +3,6 @@ import SwiftUI
 import ServiceManagement
 
 enum MainTab: Hashable { case connection, externalVPN, settings, environment, about }
-private enum SettingsSection: Hashable { case plugins }
 
 @MainActor
 final class WindowModel: ObservableObject {
@@ -171,6 +170,7 @@ struct SettingsTab: View {
     @ObservedObject var window: WindowModel
 
     @State private var draft = VPNSettings()
+    @State private var saved = VPNSettings()          // 上次載入的設定，判斷哪些分類有未儲存修改
     @State private var password = ""
     @State private var psk = ""
     @State private var message: (String, Bool)?     // 訊息、是否為錯誤
@@ -183,145 +183,74 @@ struct SettingsTab: View {
     @State private var tsText = ""                  // 通道網段編輯框：一行一個
     @State private var showHelp = false
     @State private var handledPluginSettingsRequest = 0
+    @AppStorage(SettingsCategory.storageKey) private var categoryRaw = SettingsCategory.connection.rawValue
+    @MainActor private static var launchCategoryApplied = false
+
+    private var category: Binding<SettingsCategory> {
+        Binding(get: { SettingsCategory(rawValue: categoryRaw) ?? .connection }, set: { categoryRaw = $0.rawValue })
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                    SettingsCard("帳號") {
-                        FieldRow("使用者名稱") {
-                            TextField("", text: $draft.username, prompt: Text("VPN 帳號"))
-                        }
-                        FieldRow("密碼") {
-                            SecureField("", text: $password, prompt: Text(secretState.password ? "已設定，留空表示不變" : "尚未設定"))
-                        }
-                        FieldRow("預設共享金鑰（PSK）") {
-                            SecureField("", text: $psk, prompt: Text(secretState.psk ? "已設定，留空表示不變" : "尚未設定"))
-                        }
-                    }
-
-                    SettingsCard("閘道") {
-                        ForEach(0..<3, id: \.self) { i in
-                            FieldRow("VPN\(i + 1)") {
-                                TextField("", text: $draft.gateways[i], prompt: Text("IP 或網域，可留空"))
-                            }
-                        }
-                        // F4：自動輪替依過去的連線結果排序；位址改了並儲存時，該台紀錄會自動清除
-                        HStack(spacing: 10) {
-                            Button("清除閘道連線紀錄") {
-                                vpn.clearHistory()
-                                message = ("已清除閘道連線紀錄，自動輪替恢復設定順序", false)
-                            }
-                            .disabled(vpn.history.attempts.isEmpty)
-                            Text("自動輪替會先試最近連得上、連得快的閘道")
-                                .font(.callout).foregroundStyle(.secondary)
-                            Spacer()
-                        }
-                    }
-
-                    SettingsCard("通道網段") {
-                        Text("只有這些目的地會走 VPN，其他流量（Teams、Google Meet、一般上網）走原本的網路。**一行一個**；單一主機寫成 `IP/32`。**不要填 0.0.0.0/0**，全部流量走 VPN 會讓外網 DNS 失效。")
-                            .font(.callout).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        TextEditor(text: $tsText)
-                            .font(.system(size: 14, design: .monospaced))
-                            .scrollContentBackground(.hidden)
-                            .padding(8)
-                            .frame(minHeight: 150)
-                            .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .textBackgroundColor)))
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.35)))
-                        HStack(spacing: 10) {
-                            Button("匯入設定檔…") { importPreset() }
-                            Button("匯出加密設定檔…") { exportConfig() }
-                            Button("從公司設定還原") {
-                                guard let p = preset else { return }
-                                draft.gateways = p.gateways
-                                tsText = Self.lines(p.remoteTS)
-                                message = ("已填入公司設定，按「儲存」後生效", false)
-                            }
-                            .disabled(preset == nil)
-                            Spacer()
-                        }
-                        Text(preset.map { "公司設定：\($0.name)（\($0.source == CompanyPresetStore.path ? "~/.config/splitswan/company.env" : $0.source)）" } ?? "尚未匯入公司設定檔")
-                            .font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
-                        HostCheckPanel(vpn: vpn,
-                                       savedTS: { ConfigStore.load().remoteTS },
-                                       isDirty: { isDirty },
-                                       apply: { add in try addSubnets(add) },
-                                       // 系統元件需要安裝或更新：沿用 EnvChecker 逐 byte 比對的結果
-                                       helperOutdated: { env.items.contains { $0.id == "helper" && $0.action == .installHelper } },
-                                       openEnvironment: { window.tab = .environment })
-                        DisclosureGroup("手動排查步驟", isExpanded: $showHelp) {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("1. 查出主機的 IP：終端機執行 `dig +short 主機網域`")
-                                Text("2. 在上面的通道網段加一行 `IP/32`，按「儲存」")
-                                Text("3. 斷線後重新連線，新網段才會生效")
-                                Text("4. 確認有走 VPN：終端機執行 `route -n get IP`，interface 應該是 utun 開頭")
-                                Text("5. 還是不通，請把 IP 與使用的連接埠告訴管理者，確認公司端是否允許")
-                            }
-                            .font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
-                            .padding(.top, 6)
-                        }
-                    }
-
-                    SettingsCard("狀態列圖示") {
-                        IconStylePicker()
-                    }
-
-                    SettingsCard("外掛") {
-                        PluginSettingsView()
-                    }
-                    .id(SettingsSection.plugins)
-
-                    SettingsCard("其他") {
-                        Toggle("登入時自動啟動", isOn: $launchAtLogin)
-                            .toggleStyle(.switch)
-                            .onChange(of: launchAtLogin) { _, on in setLaunchAtLogin(on) }
-                        Toggle("VPN 中斷時通知", isOn: $notifyDrop)
-                            .toggleStyle(.switch)
-                            .onChange(of: notifyDrop) { _, _ in checkNotifyPermission() }
-                        if notifyDrop && notifyDenied {
-                            Text("macOS 未允許通知，請到「系統設定 → 通知」開啟")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    }
-                    .padding(4)
+        SettingsSplitView(selection: category, dirty: dirtyCategories, message: message.map { (text: $0.0, isError: $0.1) },
+                          revert: { loadDraft() }, save: { save() }) {
+            switch category.wrappedValue {
+            case .connection:
+                ConnectionSettingsPanel(draft: $draft, password: $password, psk: $psk, secretState: secretState,
+                                        canClearHistory: !vpn.history.attempts.isEmpty,
+                                        clearHistory: {
+                                            vpn.clearHistory()
+                                            message = ("已清除閘道連線紀錄，自動輪替恢復設定順序", false)
+                                        })
+            case .subnets:
+                SubnetsSettingsPanel(tsText: $tsText, showHelp: $showHelp) {
+                    HostCheckPanel(vpn: vpn,
+                                   savedTS: { ConfigStore.load().remoteTS },
+                                   isDirty: { isDirty },
+                                   apply: { add in try addSubnets(add) },
+                                   // 系統元件需要安裝或更新：沿用 EnvChecker 逐 byte 比對的結果
+                                   helperOutdated: { env.items.contains { $0.id == "helper" && $0.action == .installHelper } },
+                                   openEnvironment: { window.tab = .environment })
                 }
-                .onAppear {
-                    scrollToPluginSettings(request: window.pluginSettingsRequest, proxy: proxy)
-                }
-                .onChange(of: window.pluginSettingsRequest) { _, request in
-                    scrollToPluginSettings(request: request, proxy: proxy)
-                }
-            }
-
-            Divider().padding(.vertical, 10)
-            // 底部固定：訊息與儲存，不必捲到最下面才按得到
-            HStack(spacing: 10) {
-                if let (text, isError) = message {
-                    Label(text, systemImage: isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                        .foregroundStyle(isError ? .orange : .green).font(.callout)
-                        .lineLimit(2)
-                }
-                Spacer()
-                Button("還原") { loadDraft() }
-                Button("儲存") { save() }
-                    .keyboardShortcut("s", modifiers: .command)
-                    .buttonStyle(.borderedProminent)
+            case .profile:
+                ProfileSettingsPanel(
+                    presetText: preset.map { "公司設定：\($0.name)（\($0.source == CompanyPresetStore.path ? "~/.config/splitswan/company.env" : $0.source)）" } ?? "尚未匯入公司設定檔",
+                    canRestore: preset != nil,
+                    importPreset: { importPreset() },
+                    exportConfig: { exportConfig() },
+                    restorePreset: {
+                        guard let p = preset else { return }
+                        draft.gateways = p.gateways
+                        tsText = Self.lines(p.remoteTS)
+                        message = ("已填入公司設定，按「儲存」後生效", false)
+                    })
+            case .appearance:
+                SettingsCard("狀態列圖示") { IconStylePicker() }
+            case .plugins:
+                PluginSettingsView().controlSize(.small)   // 外掛的按鈕列不會換行，側欄旁的寬度用大尺寸會被截斷
+            case .general:
+                GeneralSettingsPanel(launchAtLogin: $launchAtLogin, notifyDrop: $notifyDrop, notifyDenied: notifyDenied,
+                                     launchAtLoginChanged: { setLaunchAtLogin($0) },
+                                     notifyDropChanged: { checkNotifyPermission() })
             }
         }
         .textFieldStyle(.roundedBorder)
-        .onAppear { loadDraft(); checkNotifyPermission(); PluginRunner.shared.refreshIfEnabled() }
+        .onAppear {
+            loadDraft(); checkNotifyPermission(); PluginRunner.shared.refreshIfEnabled()
+            // 開發用：-InitialTab settings -SettingsCategory plugins 直接開到指定分類（截圖檢查排版用）
+            if !Self.launchCategoryApplied {
+                Self.launchCategoryApplied = true
+                if let c = UserDefaults.standard.string(forKey: SettingsCategory.launchArgumentKey).flatMap(SettingsCategory.init) { categoryRaw = c.rawValue }
+            }
+            focusPluginSettings(request: window.pluginSettingsRequest)
+        }
+        .onChange(of: window.pluginSettingsRequest) { _, request in focusPluginSettings(request: request) }
+        .onChange(of: categoryRaw) { _, _ in message = nil }
     }
 
-    private func scrollToPluginSettings(request: Int, proxy: ScrollViewProxy) {
+    private func focusPluginSettings(request: Int) {
         guard request > handledPluginSettingsRequest else { return }
         handledPluginSettingsRequest = request
-        withAnimation(.easeInOut(duration: 0.2)) {
-            proxy.scrollTo(SettingsSection.plugins, anchor: .top)
-        }
+        categoryRaw = SettingsCategory.plugins.rawValue
     }
 
     private func checkNotifyPermission() {
@@ -336,6 +265,7 @@ struct SettingsTab: View {
 
     private func loadDraft() {
         draft = ConfigStore.load()
+        saved = draft
         while draft.gateways.count < 3 { draft.gateways.append("") }
         tsText = Self.lines(draft.remoteTS)
         password = ""; psk = ""; message = nil
@@ -520,6 +450,11 @@ struct SettingsTab: View {
         Self.isDirty(draft: draft, tsText: tsText, psk: psk, password: password, saved: ConfigStore.load())
     }
 
+    /// 側欄與儲存列用：跟上次載入的設定比，不必每次重畫都讀設定檔
+    private var dirtyCategories: Set<SettingsCategory> {
+        SettingsLogic.dirtyCategories(draft: draft, tsText: tsText, psk: psk, password: password, saved: saved)
+    }
+
     /// 表單是否有還沒儲存的修改（一鍵加入網段會整份存檔，有未儲存的修改時要先擋下）
     static func isDirty(draft: VPNSettings, tsText: String, psk: String, password: String, saved: VPNSettings) -> Bool {
         SettingsLogic.isDirty(draft: draft, tsText: tsText, psk: psk, password: password, saved: saved)
@@ -601,80 +536,6 @@ struct LogPanel: View {
             }
         }
         .frame(maxWidth: .infinity)
-    }
-}
-
-/// 狀態列圖示樣式選擇：每個樣式顯示四種狀態的預覽，點一下就套用
-struct IconStylePicker: View {
-    @AppStorage(MenuBarIcon.styleKey) private var styleRaw = MenuBarIconStyle.shield.rawValue
-    @AppStorage(MenuBarIcon.colorKey) private var colored = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
-                ForEach(MenuBarIconStyle.allCases) { style in
-                    let selected = style.rawValue == styleRaw
-                    Button { styleRaw = style.rawValue } label: {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text(style.title).font(.callout.weight(.medium))
-                                Spacer()
-                                if selected { Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.accentColor) }
-                            }
-                            HStack(spacing: 14) {
-                                ForEach(IconState.allCases, id: \.self) { st in
-                                    if let img = MenuBarIcon.image(style: style, state: st, colored: colored, pointSize: 17) {
-                                        Image(nsImage: img)
-                                            .renderingMode(img.isTemplate ? .template : .original)
-                                            .help(st.title)
-                                    }
-                                }
-                            }
-                            .foregroundStyle(.primary)
-                        }
-                        .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(RoundedRectangle(cornerRadius: 8).fill(selected ? Color.accentColor.opacity(0.15) : Color.clear))
-                        .overlay(RoundedRectangle(cornerRadius: 8)
-                            .stroke(selected ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: selected ? 2 : 1))
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            Text("每組由左到右：未連線、已連線、連線中、異常。")
-                .font(.callout).foregroundStyle(.secondary)
-            Toggle("已連線時顯示綠色", isOn: $colored).toggleStyle(.switch)
-        }
-    }
-}
-
-/// 設定頁的區塊：標題＋圓角底
-struct SettingsCard<Content: View>: View {
-    let title: String
-    @ViewBuilder var content: Content
-    init(_ title: String, @ViewBuilder content: () -> Content) { self.title = title; self.content = content() }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title).font(.headline)
-            VStack(alignment: .leading, spacing: 12) { content }
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.08)))
-        }
-    }
-}
-
-/// 標籤在上、輸入框佔滿整行
-struct FieldRow<Field: View>: View {
-    let label: String
-    @ViewBuilder var field: Field
-    init(_ label: String, @ViewBuilder field: () -> Field) { self.label = label; self.field = field() }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(label).font(.callout.weight(.medium)).foregroundStyle(.secondary)
-            field.font(.system(size: 14)).frame(maxWidth: .infinity)
-        }
     }
 }
 
