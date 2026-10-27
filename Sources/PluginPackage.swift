@@ -202,33 +202,39 @@ enum PluginPackage {
             let expected = try zipPreflight(data)
             let archive = try Archive(url: archiveURL, accessMode: .read)
             let entries = Array(archive)
-            guard entries.count == expected.count, let manifestEntry = entries.first(where: { $0.path == "manifest.json" }), manifestEntry.type == .file,
-                  manifestEntry.uncompressedSize <= manifestLimit else { throw fail("缺少根目錄 Manifest 或 ZIP 列舉不完整") }
+            guard entries.count == expected.count else { throw fail("ZIP 列舉不完整（預期 \(expected.count) 項，實際 \(entries.count) 項）") }
+            // 預檢已驗證原始檔名是 UTF-8；不要再次依 ZIP 旗標改用系統 CP437 解碼。
+            guard let manifestEntry = entries.first(where: { $0.path(using: .utf8) == "manifest.json" }), manifestEntry.type == .file else {
+                throw fail("缺少根目錄 manifest.json，或 Manifest 不是一般檔案")
+            }
+            guard manifestEntry.uncompressedSize <= manifestLimit else { throw fail("Manifest 超過 64 KiB") }
             func extract(_ entry: Entry) throws -> Data {
+                let path = entry.path(using: .utf8)
                 var content = Data()
                 let crc = try archive.extract(entry, bufferSize: 32768) { chunk in
-                    guard content.count + chunk.count <= (expected[entry.path] ?? 0) else { throw fail("ZIP 實際大小超出宣告") }
+                    guard content.count + chunk.count <= (expected[path] ?? 0) else { throw fail("ZIP 實際大小超出宣告") }
                     content.append(chunk)
                 }
-                guard content.count == expected[entry.path], crc == entry.checksum else { throw fail("ZIP 大小或 CRC 驗證失敗") }
+                guard content.count == expected[path], crc == entry.checksum else { throw fail("ZIP 大小或 CRC 驗證失敗") }
                 return content
             }
             let manifestData = try extract(manifestEntry), manifest = try decode(manifestData, appVersion: appVersion)
             let files = Dictionary(uniqueKeysWithValues: manifest.files.map { ($0.path, $0) })
             try fm.createDirectory(at: payload, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
             for entry in entries {
-                guard let expectedSize = expected[entry.path], entry.uncompressedSize == UInt64(expectedSize) else { throw fail("ZIP 路徑不一致") }
+                let path = entry.path(using: .utf8)
+                guard let expectedSize = expected[path], entry.uncompressedSize == UInt64(expectedSize) else { throw fail("ZIP 路徑不一致") }
                 if entry.type == .directory {
-                    guard files.keys.contains(where: { $0.hasPrefix(entry.path) }) else { throw fail("ZIP 含未宣告資料夾") }
+                    guard files.keys.contains(where: { $0.hasPrefix(path) }) else { throw fail("ZIP 含未宣告資料夾") }
                     continue
                 }
-                guard entry.type == .file, entry.path == "manifest.json" || files[entry.path] != nil else { throw fail("ZIP 含未宣告檔案") }
-                let content = entry.path == "manifest.json" ? manifestData : try extract(entry)
-                if let f = files[entry.path], hash(content) != f.sha256 { throw fail("檔案雜湊不符：\(entry.path)") }
-                let target = payload.appendingPathComponent(entry.path)
+                guard entry.type == .file, path == "manifest.json" || files[path] != nil else { throw fail("ZIP 含未宣告檔案") }
+                let content = path == "manifest.json" ? manifestData : try extract(entry)
+                if let f = files[path], hash(content) != f.sha256 { throw fail("檔案雜湊不符：\(path)") }
+                let target = payload.appendingPathComponent(path)
                 try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
                 try content.write(to: target, options: .withoutOverwriting)
-                try fm.setAttributes([.posixPermissions: files[entry.path]?.executable == true ? 0o700 : 0o600], ofItemAtPath: target.path)
+                try fm.setAttributes([.posixPermissions: files[path]?.executable == true ? 0o700 : 0o600], ofItemAtPath: target.path)
             }
             guard files.keys.allSatisfy({ expected[$0] != nil }) else { throw fail("ZIP 缺少宣告的檔案") }
             try validateEntrypoint(manifest, root: payload)
