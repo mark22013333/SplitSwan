@@ -72,20 +72,21 @@ final class PluginPackageModel: ObservableObject {
                 if case .update = change { attempt.operation = .update }
                 let legacy = try runner.legacyReplacement(for: prepared)
                 if change == .identical, legacy == nil {
-                    prepared.discard(); message = "已安裝相同版本及內容，不需重新安裝。"
                     await attempt.passed(.compare, facts, detail: "已安裝相同版本及內容，未重新安裝")
+                    prepared.discard(); message = "已安裝相同版本及內容，不需重新安裝。"
                     return
                 }
                 if change == .install, runner.plugins.count >= PluginLogic.maxPlugins,
                    !runner.plugins.contains(where: { $0.id == legacy?.fileName }) { throw PluginPackage.fail(.packagePluginLimit) }
                 let previous = try? store.read(prepared.manifest.id).manifest
+                // 先寫完記錄再顯示預覽：預覽出現時 busy 若還沒清掉，立刻按「安裝」會被靜默忽略
+                await attempt.passed(.compare, facts)
                 preview = Preview(prepared: prepared, change: change, previous: previous, legacy: legacy, attempt: attempt)
                 message = nil
-                await attempt.passed(.compare, facts)
             } catch { prepared.discard(); throw error }
         } catch {
-            fail(error, attempt)
             await attempt.failed(error, at: .read, facts)
+            fail(error, attempt)
         }
     }
     func cancel() {
@@ -110,11 +111,11 @@ final class PluginPackageModel: ObservableObject {
             try await runner.installPackage(preview.prepared, replacing: preview.legacy)
             legacyBackup = runner.latestLegacyBackup
             message = preview.legacy != nil ? "已升級並取代舊腳本，保留原啟用狀態。舊入口已備份，私人資料原地保留；外掛自身的排程切換請依設定頁完成。" : preview.change == .install ? "外掛已安裝，預設停用。確認後可開啟個別外掛開關。" : "外掛已更新，本機設定與啟用狀態已保留。"
-            preview.prepared.discard(); self.preview = nil
             await attempt.passed(.install, facts)
+            preview.prepared.discard(); self.preview = nil
         } catch {
-            fail(error, attempt)
             await attempt.failed(error, at: .install, facts)
+            fail(error, attempt)
         }
     }
     func export(_ installed: PluginPackageStore.Installed) {
@@ -132,11 +133,11 @@ final class PluginPackageModel: ObservableObject {
                 let facts: [PluginEventLog.Fact] = [.manifest(id: installed.record.manifest.id, version: installed.record.manifest.version)]
                 do {
                     try await Task.detached(priority: .utility) { try installed.store.export(installed, to: url) }.value
-                    self.message = "已匯出程式、資源與預設值；未包含本機設定、授權或紀錄。"
                     await attempt.passed(.export, facts)
+                    self.message = "已匯出程式、資源與預設值；未包含本機設定、授權或紀錄。"
                 } catch {
-                    self.fail(error, attempt)
                     await attempt.failed(error, at: .export, facts)
+                    self.fail(error, attempt)
                 }
             }
         }
