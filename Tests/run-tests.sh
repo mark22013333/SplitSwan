@@ -12,7 +12,7 @@ trap 'command rm -r "$OUT"' EXIT
 
 bash tools/build-zipfoundation.sh "$OUT/zip" || exit 1
 
-ALL_GROUPS="reconnect export security settings diagnostic hostcheck update about external-vpn coexistence root-lifetime root-backend external-ui plugins plugin-ui plugin-card packages package-ui background plugin-log plugin-log-flow plugin-diag"
+ALL_GROUPS="reconnect export security settings diagnostic hostcheck update about external-vpn coexistence root-lifetime root-backend external-ui plugins plugin-ui plugin-card packages package-ui background plugin-log plugin-log-flow plugin-diag settings-ui"
 
 # 每組的測試檔與要一起編譯的原始檔（第一個是測試檔，會被複製成 main.swift）。
 # 新增 Sources 檔時，要加進用到它的每一組，否則該組會編譯失敗。
@@ -47,6 +47,7 @@ files() {
     background) echo Tests/PluginBackgroundTests.swift $S/PluginPackage.swift $S/PluginFailure.swift $S/PluginEventLog.swift $S/PluginPackageStore.swift $S/PluginLegacyReplacement.swift $S/PluginRunner.swift $S/PluginBackground.swift $S/PluginLogic.swift $S/PluginMenuCard.swift $S/PluginSettingsProtocol.swift $S/ProcessRunner.swift $S/DiagnosticReport.swift $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
     plugin-log) echo Tests/PluginEventLogTests.swift $S/PluginEventLog.swift $S/PluginFailure.swift $S/PluginLogic.swift $S/PluginMenuCard.swift $S/DiagnosticReport.swift $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
     plugin-diag) echo Tests/PluginDiagnosticsTests.swift $S/PluginDiagnostics.swift $S/PluginEventLog.swift $S/PluginFailure.swift $S/PluginLogic.swift $S/PluginMenuCard.swift $S/DiagnosticReport.swift $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
+    settings-ui) echo Tests/SettingsUITests.swift $S/SettingsPanels.swift $S/SettingsLogic.swift $S/MenuBarIcon.swift $S/VPNController.swift $S/GatewayHistory.swift $S/DropNotifier.swift $S/LogStore.swift $S/PluginSettingsView.swift $S/PluginPackageView.swift $S/PluginDiagnostics.swift $S/PluginConfigurationView.swift $S/PluginPackage.swift $S/PluginFailure.swift $S/PluginEventLog.swift $S/PluginPackageStore.swift $S/PluginLegacyReplacement.swift $S/PluginRunner.swift $S/PluginBackground.swift $S/PluginLogic.swift $S/PluginMenuCard.swift $S/PluginSettingsProtocol.swift $S/ProcessRunner.swift $S/DiagnosticReport.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
     *) return 1 ;;
   esac
 }
@@ -77,7 +78,7 @@ exec_group() {
     "$dir/t" "$dir" >"$dir/log" 2>&1
     rc=$?
   fi
-  if { [ "$1" = package-ui ] || [ "$1" = external-ui ] || [ "$1" = plugin-card ]; } && [ -n "${SPLITSWAN_TEST_EVIDENCE:-}" ]; then
+  if { [ "$1" = package-ui ] || [ "$1" = external-ui ] || [ "$1" = plugin-card ] || [ "$1" = settings-ui ]; } && [ -n "${SPLITSWAN_TEST_EVIDENCE:-}" ]; then
     mkdir -p "$SPLITSWAN_TEST_EVIDENCE"
     cp -R "$dir/screenshots" "$SPLITSWAN_TEST_EVIDENCE/"
   fi
@@ -87,7 +88,7 @@ exec_group() {
 
 # 含時序判斷（逾時、排程、暫停）的組，要等其他組編譯、執行都結束後再單獨跑，
 # 否則和並行編譯搶 CPU 時，固定的等待時間會偶發不夠
-SERIAL_GROUPS="root-backend plugins plugin-ui plugin-card packages package-ui background external-ui plugin-log-flow"
+SERIAL_GROUPS="root-backend plugins plugin-ui plugin-card packages package-ui background external-ui plugin-log-flow settings-ui"
 is_serial() { case " $SERIAL_GROUPS " in *" $1 "*) return 0 ;; esac; return 1; }
 
 if [ $# -gt 0 ]; then SELECTED="$*"; else SELECTED=$ALL_GROUPS; fi
