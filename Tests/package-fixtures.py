@@ -47,6 +47,27 @@ def archive(name,m=None,extra=(),remove=(),mutate=None,valid=False,compression=z
     cases.append(dict(file=path.name,valid=valid))
     return path
 archive('valid',valid=True)
+# UTF-8 路徑即使未設 ZIP 語言旗標，也必須與預檢及 Manifest 使用相同解碼。
+unicode_manifest=copy.deepcopy(base)
+unicode_path='resources/說明.txt'
+unicode_manifest['files'].append(dict(path=unicode_path,sha256=p.digest(b'example'),executable=False))
+archive('utf8-path',unicode_manifest,extra=[(unicode_path,b'example',stat.S_IFREG|0o600)],valid=True)
+def clear_utf8_flags(data):
+    end=data.rfind(b'PK\x05\x06')
+    count=struct.unpack_from('<H',data,end+10)[0]
+    pos=struct.unpack_from('<I',data,end+16)[0]
+    for _ in range(count):
+        flags=struct.unpack_from('<H',data,pos+8)[0] & ~0x800
+        local=struct.unpack_from('<I',data,pos+42)[0]
+        struct.pack_into('<H',data,pos+8,flags)
+        struct.pack_into('<H',data,local+6,flags)
+        lengths=struct.unpack_from('<HHH',data,pos+28)
+        pos+=46+sum(lengths)
+    return data
+archive('utf8-path-unflagged',unicode_manifest,extra=[(unicode_path,b'example',stat.S_IFREG|0o600)],mutate=clear_utf8_flags,valid=True)
+# Python zipfile 按 ZIP 旗標選 CP437，因此不接受這個 App 相容性案例。
+cases[-1]['pythonValid']=False
+
 legacyScript=b'''#!/bin/sh
 if [ -f "$SPLITSWAN_PLUGIN_STATE/hold" ]; then
   touch "$SPLITSWAN_PLUGIN_STATE/started"
@@ -113,6 +134,28 @@ oversized=root/'archive-limit.splitswan-plugin'
 with oversized.open('wb') as stream: stream.truncate(p.ARCHIVE_LIMIT+1)
 cases.append(dict(file=oversized.name,valid=False))
 bad=copy.deepcopy(base);bad['description']='X'*65537;archive('manifest-limit',bad)
+cases[-1]['message']='Manifest 超過 64 KiB'
+def remove_manifest(data):
+    # 以相同長度改名，保持 ZIP 結構與 CRC 完整。
+    return data.replace(b'manifest.json',b'manifest.jsox')
+archive('no-root-manifest',mutate=remove_manifest)
+cases[-1]['message']='缺少根目錄 manifest.json'
+# 收件端把安裝包當一般 zip 解開再壓回去：外層多一層資料夾，或夾帶 AppleDouble 檔。
+def repacked(name,prefix='',appledouble=False):
+    path=root/(name+'.splitswan-plugin')
+    entries=[('manifest.json',(json.dumps(base,indent=2)+'\n').encode())]+list(contents.items())
+    with zipfile.ZipFile(path,'w',zipfile.ZIP_DEFLATED) as z:
+        for key,data in entries:
+            z.writestr(prefix+key,data)
+            folder,slash,file=key.rpartition('/')
+            if appledouble: z.writestr(prefix+folder+slash+'._'+file,b'\x00\x05\x16\x07')
+    cases.append(dict(file=path.name,valid=False,message='解壓縮後又重新壓縮過'))
+repacked('repacked-folder',prefix='example-plugin/')
+repacked('repacked-appledouble',appledouble=True)
+# 合法套件自行宣告的 ._ 檔不得被當成重新壓縮。
+dotted=copy.deepcopy(base);dotted['files'].append(dict(path='resources/._notes.txt',sha256=p.digest(b'notes'),executable=False))
+archive('declared-appledouble-name',dotted,extra=[('resources/._notes.txt',b'notes',stat.S_IFREG|0o600)],valid=True)
+
 archive('zip64-header',mutate=lambda d:central(d,lambda d,o:struct.pack_into('<H',d,o+6,45)))
 # 將允許清單以外的開發檔案留在來源，pack 必須排除它，不得猜測依賴。
 (source/'manifest.json').write_text(json.dumps(base))
