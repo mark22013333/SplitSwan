@@ -100,8 +100,8 @@ actor PluginEventLog {
     }
     static let shared = PluginEventLog(directory: PluginEventLog.defaultDirectory)
 
-    private let directory: URL
-    private let fileURL: URL
+    let directory: URL
+    let fileURL: URL
     private let rotatedURL: URL
     private let now: @Sendable () -> Date
     private let maxBytes: Int

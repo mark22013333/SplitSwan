@@ -55,6 +55,7 @@ final class PluginRunner: ObservableObject {
         var problem: String?         // 權限檢查不通過的原因（不會執行）
         var output: PluginLogic.Output?
         var error: String?           // 上次執行的錯誤（非 0 結束、逾時）：選單只顯示原因
+        var errorCode: PluginFailure? // 與 error 同一次執行的錯誤碼，設定頁附在原因後面
         var actionError: String?     // 上次點擊動作的錯誤：保留上次的項目，只在標題加 ⚠︎
         var isEnabled: Bool = true   // 個別開關；停用時保留於設定頁，但不排程、不執行
         var runWhenLocked: Bool = false
@@ -376,6 +377,7 @@ final class PluginRunner: ObservableObject {
             var n = p
             n.output = o.output
             n.error = p.problem == nil ? o.error : nil
+            n.errorCode = p.problem == nil ? o.errorCode : nil
             n.actionError = o.actionError
             n.isEnabled = p.isEnabled
             return n
@@ -507,6 +509,7 @@ final class PluginRunner: ObservableObject {
             pl.problem = r.problem
             guard r.problem == nil else { return }
             pl.error = r.error
+            pl.errorCode = r.error == nil ? nil : r.failure?.failure
             if r.error == nil { pl.output = r.output }
         }
         if r.problem == nil, r.error == nil, let out = r.output {

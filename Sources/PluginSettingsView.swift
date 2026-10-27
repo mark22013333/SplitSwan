@@ -1,10 +1,12 @@
-// 設定頁的「外掛」區塊：啟用開關、開啟外掛資料夾、立即重新整理、每個外掛一行狀態
+// 設定頁的「外掛」區塊：啟用開關、開啟外掛資料夾、立即重新整理、診斷紀錄、每個外掛一行狀態
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct PluginSettingsView: View {
     @ObservedObject private var runner: PluginRunner
     @StateObject private var packages: PluginPackageModel
     @AppStorage(PluginRunner.enabledKey) private var enabled = false
+    @State private var diagnosticsMessage: String?
 
     init(runner: PluginRunner? = nil) {
         let selected = runner ?? PluginRunner.shared
@@ -28,7 +30,14 @@ struct PluginSettingsView: View {
                 if !enabled {
                     Button("掃描外掛設定…") { runner.scan() }
                 }
+                Menu("診斷紀錄…") {
+                    Button("在 Finder 中顯示") { revealLog() }
+                    Button("匯出診斷報告…") { exportReport() }
+                }.fixedSize()
                 Spacer()
+            }
+            if let diagnosticsMessage {
+                Text(diagnosticsMessage).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
             }
             Text(runner.directory.path.replacingOccurrences(of: PluginRunner.home, with: "~"))
                 .font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
@@ -47,6 +56,37 @@ struct PluginSettingsView: View {
             ForEach(runner.packageErrors, id: \.self) { Text($0).font(.caption).foregroundStyle(.orange) }
             ForEach(runner.plugins) { p in row(p) }
         }.onAppear { runner.scan() }
+    }
+
+    private func revealLog() {
+        let log = runner.eventLog, fm = FileManager.default
+        if fm.fileExists(atPath: log.fileURL.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([log.fileURL]); diagnosticsMessage = nil
+        } else if fm.fileExists(atPath: log.directory.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([log.directory]); diagnosticsMessage = nil
+        } else {
+            diagnosticsMessage = "目前沒有記錄"
+        }
+    }
+
+    private func exportReport() {
+        let panel = NSSavePanel()
+        panel.title = "匯出外掛診斷報告"
+        panel.nameFieldStringValue = PluginDiagnostics.defaultReportName()
+        panel.allowedContentTypes = [.plainText]
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            Task { @MainActor in
+                diagnosticsMessage = "正在產生診斷報告…"
+                let text = await runner.diagnosticsReport(pluginsEnabled: enabled)
+                do {
+                    try await Task.detached(priority: .utility) { try PluginDiagnostics.writeReport(text, to: url) }.value
+                    diagnosticsMessage = "已匯出 " + url.lastPathComponent
+                } catch {
+                    diagnosticsMessage = "無法匯出診斷報告：" + error.localizedDescription
+                }
+            }
+        }
     }
 
     private func row(_ p: PluginRunner.Plugin) -> some View {
@@ -103,10 +143,26 @@ struct PluginSettingsView: View {
             parts.append("今天的通知已達上限（\(PluginLogic.maxNotifyKeysPerDay) 則），明天恢復")
         }
         if let why = p.failure {
-            parts.append(why)
+            parts.append(why + (p.problem == nil && p.error != nil ? p.errorCode.map { "（\($0.rawValue)）" } ?? "" : ""))
         } else if let o = p.output {
             parts.append("\(o.items.filter { !$0.isSeparator }.count) 個項目" + (o.truncated ? "（已截斷）" : ""))
         }
         return parts.joined(separator: " · ")
+    }
+}
+
+extension PluginRunner {
+    /// 匯出診斷報告的全文；讀套件登錄與計算單檔雜湊都在背景做
+    func diagnosticsReport(pluginsEnabled: Bool, generated: Date = Date()) async -> String {
+        let recent = await eventLog.recent(limit: PluginDiagnostics.reportLimit)
+        let (packages, scripts) = await Task.detached(priority: .utility) { [packageStore, directory] in
+            (packageStore.discover().installed.map {
+                PluginDiagnostics.Package(id: $0.record.manifest.id, version: $0.record.manifest.version, digest: $0.record.digest,
+                                          enabled: $0.record.enabled, trusted: $0.record.trusted)
+            }, PluginDiagnostics.scripts(in: directory))
+        }.value
+        return PluginDiagnostics.report(recent: recent, packages: packages, singleFiles: scripts, pluginsEnabled: pluginsEnabled,
+                                        appVersion: AppInfo.version, build: AppInfo.build,
+                                        macOS: ProcessInfo.processInfo.operatingSystemVersionString, generated: generated)
     }
 }
