@@ -12,7 +12,7 @@ trap 'command rm -r "$OUT"' EXIT
 
 bash tools/build-zipfoundation.sh "$OUT/zip" || exit 1
 
-ALL_GROUPS="reconnect export security settings diagnostic hostcheck update about external-vpn coexistence root-lifetime root-backend external-ui plugins plugin-ui plugin-card packages package-ui background"
+ALL_GROUPS="reconnect export security settings diagnostic hostcheck update about external-vpn coexistence root-lifetime root-backend external-ui plugins plugin-ui plugin-card packages package-ui background plugin-log"
 
 # 每組的測試檔與要一起編譯的原始檔（第一個是測試檔，會被複製成 main.swift）。
 # 新增 Sources 檔時，要加進用到它的每一組，否則該組會編譯失敗。
@@ -44,6 +44,7 @@ files() {
     package-ui) echo Tests/PluginPackageUITests.swift $S/PluginPackageView.swift $S/PluginSettingsView.swift $S/PluginConfigurationView.swift $S/PluginPackage.swift $S/PluginFailure.swift $S/PluginPackageStore.swift $S/PluginLegacyReplacement.swift $S/PluginRunner.swift $S/PluginBackground.swift $S/PluginLogic.swift $S/PluginMenuCard.swift $S/PluginSettingsProtocol.swift $S/ProcessRunner.swift $S/DiagnosticReport.swift $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
     packages) echo Tests/PluginPackageTests.swift $S/PluginPackage.swift $S/PluginFailure.swift $S/PluginPackageStore.swift $S/PluginLegacyReplacement.swift $S/PluginRunner.swift $S/PluginBackground.swift $S/PluginLogic.swift $S/PluginMenuCard.swift $S/PluginSettingsProtocol.swift $S/ProcessRunner.swift $S/DiagnosticReport.swift $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
     background) echo Tests/PluginBackgroundTests.swift $S/PluginPackage.swift $S/PluginFailure.swift $S/PluginPackageStore.swift $S/PluginLegacyReplacement.swift $S/PluginRunner.swift $S/PluginBackground.swift $S/PluginLogic.swift $S/PluginMenuCard.swift $S/PluginSettingsProtocol.swift $S/ProcessRunner.swift $S/DiagnosticReport.swift $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
+    plugin-log) echo Tests/PluginEventLogTests.swift $S/PluginEventLog.swift $S/PluginFailure.swift $S/PluginLogic.swift $S/PluginMenuCard.swift $S/DiagnosticReport.swift $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
     *) return 1 ;;
   esac
 }

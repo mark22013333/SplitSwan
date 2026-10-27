@@ -1,7 +1,7 @@
 import Foundation
 
 /// 外掛安裝流程的錯誤碼表。raw value 是穩定的 <領域>.<名稱>，供安裝記錄與診斷資訊引用；使用者看到的文字由 `text` 組出，與改成錯誤碼之前一字不差。
-enum PluginFailure: String, CaseIterable, Sendable {
+enum PluginFailure: String, CaseIterable, Codable, Sendable {
     case manifestInvalidJSON = "manifest.invalidJSON"
     case manifestBadFields = "manifest.badFields"
     case manifestLegacyDeclaration = "manifest.legacyDeclaration"
