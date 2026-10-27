@@ -427,6 +427,7 @@ check("group 可寫的外掛被拒且沒有執行", w?.problem?.contains("其他
       && !fm.fileExists(atPath: sdir + "/writable.1m.sh/ran"))
 check("symlink 依解析後目標檢查：所在資料夾 group 可寫被拒", plugin("linked.1m.sh")?.problem?.contains("資料夾") == true)
 check("非 0 結束標錯誤並附 stderr 最後一行", plugin("bad.1m.sh")?.error == "結束碼 3：壞掉的原因")
+check("非 0 結束保留錯誤碼供設定頁顯示；成功的外掛沒有錯誤碼", plugin("bad.1m.sh")?.errorCode == .runnerExitNonZero && plugin("good.1m.sh")?.errorCode == nil)
 // 逾時：腳本 sleep 30 一定會卡住，timeout 2 秒；整體耗時遠小於 30 秒即代表沒有等腳本自己結束
 let slowDir = root + "/slowdir"
 try! fm.createDirectory(atPath: slowDir, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])

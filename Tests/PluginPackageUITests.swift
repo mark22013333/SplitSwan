@@ -9,7 +9,10 @@ func runPackageUI() async throws -> Int {
     let fixtures = root.appendingPathComponent("fixtures")
     let preferences = UserDefaults(suiteName: "SplitSwan.PackageUI." + UUID().uuidString)!
     let runner = PluginRunner(directory: root.appendingPathComponent("plugins"), stateRoot: root.appendingPathComponent("state"), preferences: preferences, packageRoot: root.appendingPathComponent("packages"), appVersion: "1.8.6")
+    runner.eventLog = PluginEventLog(directory: root.appendingPathComponent("logs"))
     let model = PluginPackageModel(runner: runner)
+    var pasted: [String] = []
+    model.pasteboardWriter = { pasted.append($0) }
     var passed = 0, failed = 0
     func check(_ name: String, _ ok: Bool) { if ok { passed += 1 } else { failed += 1; print("❌ " + name) } }
     func settle(_ ready: () -> Bool) async {
@@ -26,11 +29,33 @@ func runPackageUI() async throws -> Int {
     let invalid = fixtures.appendingPathComponent("hash-mismatch.splitswan-plugin")
     await model.prepare(invalid)
     check("無效包顯示原因且沒有確認按鈕", model.failed && model.preview == nil && model.message != nil)
+    check("失敗保留錯誤碼與該次操作", model.lastFailure?.code == .archiveHashMismatch)
+    let screenshots = root.appendingPathComponent("screenshots")
+    try fm.createDirectory(at: screenshots, withIntermediateDirectories: true)
+    func snapshot(_ name: String, _ appearance: NSAppearance.Name) throws {
+        window.appearance = NSAppearance(named: appearance)
+        window.contentView?.layoutSubtreeIfNeeded(); window.displayIfNeeded()
+        guard let content = window.contentView, let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) else { check("\(name) 截圖可建立", false); return }
+        content.effectiveAppearance.performAsCurrentDrawingAppearance { content.cacheDisplay(in: content.bounds, to: bitmap) }
+        try bitmap.representation(using: .png, properties: [:])!.write(to: screenshots.appendingPathComponent(name + ".png"))
+    }
+    window.contentView?.frame = NSRect(x: 0, y: 0, width: 700, height: 230)
+    try snapshot("import-failed-light", .aqua)
+    try snapshot("import-failed-dark", .darkAqua)
+    await model.copyDiagnostics()
+    let copiedText = pasted.last ?? ""
+    check("複製診斷資訊只經注入的寫入端，內容含錯誤碼、失敗訊息與 SHA-256",
+          pasted.count == 1 && copiedText.contains(" failed archive.hashMismatch") && copiedText.contains("檔案雜湊不符")
+          && copiedText.range(of: "SHA-256 [0-9a-f]{64}", options: .regularExpression) != nil && copiedText.hasPrefix("SplitSwan "))
+    check("複製後按鈕顯示已複製", model.copied)
+    try snapshot("import-copied-light", .aqua)
     let valid = fixtures.appendingPathComponent("valid.splitswan-plugin")
     await model.prepare(valid, updateID: "package:org.example.other")
     check("指定更新識別碼不符拒絕", model.failed && model.preview == nil)
+    check("新的失敗換成新的錯誤碼", model.lastFailure?.code == .packageUpdateIDMismatch)
     await model.prepare(valid)
     check("有效包先預覽，尚未安裝", model.preview != nil && runner.packageStore.discover().installed.isEmpty)
+    check("開始新操作清掉上次失敗", model.lastFailure == nil && !model.copied)
     let staging = model.preview!.prepared.staging
     model.cancel()
     check("取消清理暫存、不安裝", !fm.fileExists(atPath: staging.path) && model.preview == nil && runner.plugins.isEmpty)
@@ -52,8 +77,12 @@ func runPackageUI() async throws -> Int {
     check("管理頁可保留背景授權，不會因此啟用外掛", runner.plugins[0].runWhenLocked && !runner.plugins[0].isEnabled
           && !fm.fileExists(atPath: root.appendingPathComponent("state").path))
     // 真正 NSHostingController 排版；截圖只包含去識別化範例，不讀真實設定。
-    let screenshots = root.appendingPathComponent("screenshots")
-    try fm.createDirectory(at: screenshots, withIntermediateDirectories: true)
+    let report = await runner.diagnosticsReport(pluginsEnabled: false)
+    let reportURL = root.appendingPathComponent("report.txt")
+    try PluginDiagnostics.writeReport(report, to: reportURL)
+    let reportPerms = ((try? fm.attributesOfItem(atPath: reportURL.path)[.posixPermissions]) as? Int ?? 0) & 0o777
+    check("診斷報告含總開關、已安裝套件與先前失敗，寫檔 600", reportPerms == 0o600 && report.contains("外掛總開關 關閉")
+          && report.contains("  org.example.fixture 1.0.0 · digest ") && report.contains("archive.hashMismatch"))
     for (name,appearance,size) in [("light",NSAppearance.Name.aqua,NSSize(width:720,height:500)),("dark-small",NSAppearance.Name.darkAqua,NSSize(width:620,height:430))] {
         let view = NSHostingController(rootView: Form { Section("外掛") { PluginSettingsView(runner: runner) } }.formStyle(.grouped))
         window.contentViewController = view;window.appearance = NSAppearance(named: appearance);window.setContentSize(size)
@@ -127,7 +156,7 @@ func runPackageUI() async throws -> Int {
         check("原生 Esc 取消移除，版本保持完整", handled && keyboard.removal == nil && runner.plugins.count == 1)
     }
     keyboard.beginRemoval(selected)
-    await keyboard.remove(trash: { _ in throw PluginPackage.fail("fixture trash failure") })
+    await keyboard.remove(trash: { _ in throw PluginPackage.fail(.storeExportWriteFailed, "fixture trash failure") })
     check("移除失敗留在確認頁並保留套件", keyboard.failed && keyboard.removal != nil && runner.plugins.count == 1)
     let privateState = root.appendingPathComponent("state/packages/org.example.fixture")
     try fm.createDirectory(at: privateState, withIntermediateDirectories: true)

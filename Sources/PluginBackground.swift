@@ -92,7 +92,7 @@ struct PluginBackground: Sendable {
         guard fm.fileExists(atPath: agents.path) else { return [] }
         try PluginPackageStore.securePath(agents.path, regular: false)
         let urls = try fm.contentsOfDirectory(at: agents, includingPropertiesForKeys: nil)
-        guard urls.count <= 2000 else { throw PluginPackage.fail("登入背景服務數量過多，無法完成移除前檢查") }
+        guard urls.count <= 2000 else { throw PluginPackage.fail(.backgroundTooManyJobs) }
         var matches: [Service] = []
         for url in urls where url.pathExtension == "plist" {
             var st = stat()
@@ -109,12 +109,12 @@ struct PluginBackground: Sendable {
             try PluginPackageStore.securePath(url.path, regular: true)
             guard let label = dict["Label"] as? String, !label.isEmpty, label.utf8.count <= 255,
                   label.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || [45, 46, 95].contains($0) }) else {
-                throw PluginPackage.fail("相關登入背景服務的識別碼無效，外掛已保留")
+                throw PluginPackage.fail(.backgroundInvalidLabel)
             }
             matches.append(Service(url: url, label: label, digest: Data(SHA256.hash(data: data))))
         }
-        guard Set(matches.map(\.label)).count == matches.count else { throw PluginPackage.fail("相關登入背景服務識別碼重複，外掛已保留") }
-        guard matches.count <= 20 else { throw PluginPackage.fail("相關登入背景服務過多，外掛已保留，請先檢查設定") }
+        guard Set(matches.map(\.label)).count == matches.count else { throw PluginPackage.fail(.backgroundDuplicateLabel) }
+        guard matches.count <= 20 else { throw PluginPackage.fail(.backgroundTooManyMatches) }
         return matches
     }
 
@@ -123,30 +123,30 @@ struct PluginBackground: Sendable {
         var result = Result()
         let serviceDeadline = ContinuousClock.now.advanced(by: .seconds(25))
         func status(_ target: String) async throws -> ServiceStatus {
-            guard .now < serviceDeadline else { throw PluginPackage.fail("背景服務檢查逾時，外掛尚未移除") }
+            guard .now < serviceDeadline else { throw PluginPackage.fail(.backgroundCheckTimeout) }
             return await serviceStatus(target)
         }
         func run(_ args: [String]) async throws -> Int32 {
-            guard .now < serviceDeadline else { throw PluginPackage.fail("背景服務停止逾時，外掛尚未移除") }
+            guard .now < serviceDeadline else { throw PluginPackage.fail(.backgroundStopTimeout) }
             return await command(args)
         }
         func verify(_ value: ServiceStatus, _ service: Service) throws {
             guard value.code == 0, value.path.hasPrefix("/"),
                   URL(fileURLWithPath: value.path).resolvingSymlinksInPath().path == service.url.resolvingSymlinksInPath().path,
                   context.matches(executable: value.executable, arguments: value.arguments, environment: value.environment) else {
-                throw PluginPackage.fail("已載入的服務與此外掛不符或無法確認，未操作該服務；外掛尚未移除")
+                throw PluginPackage.fail(.backgroundServiceMismatch)
             }
         }
         await progress("正在停用登入背景服務…")
         for service in try services(context) {
             try PluginPackageStore.securePath(service.url.path, regular: true)
             guard Data(SHA256.hash(data: try Data(contentsOf: service.url))) == service.digest else {
-                throw PluginPackage.fail("檢查期間登入背景服務已變更，請重新檢查；外掛尚未移除")
+                throw PluginPackage.fail(.backgroundChangedDuringCheck)
             }
             let target = "gui/\(getuid())/" + service.label
             let initial = try await status(target)
             if initial.code != 113 { try verify(initial, service) }
-            guard try await run(["disable", target]) == 0 else { throw PluginPackage.fail("無法停用相關登入背景服務，外掛尚未移除") }
+            guard try await run(["disable", target]) == 0 else { throw PluginPackage.fail(.backgroundDisableFailed) }
             let current = try await status(target)
             if current.code != 113 {
                 try verify(current, service)
@@ -172,13 +172,13 @@ struct PluginBackground: Sendable {
             }
             // 保留可復原的 plist；從 LaunchAgents 移出後，下次登入也不會再次排程。
             try PluginPackageStore.securePath(service.url.path, regular: true)
-            guard Data(SHA256.hash(data: try Data(contentsOf: service.url))) == service.digest else { throw PluginPackage.fail("登入背景服務內容已變更，請重新檢查") }
+            guard Data(SHA256.hash(data: try Data(contentsOf: service.url))) == service.digest else { throw PluginPackage.fail(.backgroundContentChanged) }
             try trash(service.url)
             result.services += 1
         }
         await progress("正在停止相關程序並確認結果…")
         result.processes += try await stopProcesses(context)
-        guard try services(context).isEmpty else { throw PluginPackage.fail("登入背景服務再次出現，外掛尚未移除") }
+        guard try services(context).isEmpty else { throw PluginPackage.fail(.backgroundReappeared) }
         return result
     }
 
@@ -195,7 +195,7 @@ struct PluginBackground: Sendable {
                 try await Task.sleep(for: .milliseconds(80))
                 if related(try readJobs(), context: context, known: tracked, includeDirect: roots == nil).isEmpty { break }
             }
-            guard start.duration(to: .now) < .seconds(5) else { throw PluginPackage.fail("背景程序仍在執行或持續重新啟動，外掛已保留並停用；請重試或查看背景服務設定") }
+            guard start.duration(to: .now) < .seconds(5) else { throw PluginPackage.fail(.backgroundProcessRestarting) }
             for job in alive {
                 let first = terminated.insert(job.identity).inserted
                 if first || start.duration(to: .now) >= .seconds(2) {
@@ -233,14 +233,14 @@ struct PluginBackground: Sendable {
     }
     static func sendSignal(_ expected: Identity, _ value: Int32) throws {
         guard identity(expected.pid)?.0 == expected else { return }
-        guard kill(expected.pid, value) == 0 || errno == ESRCH else { throw PluginPackage.fail("無法停止外掛的背景程序，外掛尚未移除") }
+        guard kill(expected.pid, value) == 0 || errno == ESRCH else { throw PluginPackage.fail(.backgroundKillFailed) }
     }
     static func processes() throws -> [Job] {
         let count = proc_listallpids(nil, 0)
-        guard count > 0, count < 32768 else { throw PluginPackage.fail("無法讀取背景程序，請重新檢查") }
+        guard count > 0, count < 32768 else { throw PluginPackage.fail(.backgroundProcessListUnreadable) }
         var pids = [Int32](repeating: 0, count: Int(count) + 256)
         let actual = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<Int32>.size))
-        guard actual >= 0, actual < pids.count else { throw PluginPackage.fail("背景程序清單持續變動，請重試") }
+        guard actual >= 0, actual < pids.count else { throw PluginPackage.fail(.backgroundProcessListChanging) }
         return pids.prefix(Int(actual)).compactMap { pid in
             guard let (id, parent) = identity(pid) else { return nil }
             var path = [CChar](repeating: 0, count: 4096)

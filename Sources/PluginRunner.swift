@@ -55,6 +55,7 @@ final class PluginRunner: ObservableObject {
         var problem: String?         // 權限檢查不通過的原因（不會執行）
         var output: PluginLogic.Output?
         var error: String?           // 上次執行的錯誤（非 0 結束、逾時）：選單只顯示原因
+        var errorCode: PluginFailure? // 與 error 同一次執行的錯誤碼，設定頁附在原因後面
         var actionError: String?     // 上次點擊動作的錯誤：保留上次的項目，只在標題加 ⚠︎
         var isEnabled: Bool = true   // 個別開關；停用時保留於設定頁，但不排程、不執行
         var runWhenLocked: Bool = false
@@ -92,6 +93,8 @@ final class PluginRunner: ObservableObject {
     /// 網址開啟端（測試時可改為記錄用閉包）。
     var urlOpener: (URL) -> Void = { _ = NSWorkspace.shared.open($0) }
     var now: () -> Date = Date.init
+    /// 安裝與執行記錄；測試換成暫存資料夾的實例。寫入在 PluginEventLog actor 上，不佔主執行緒
+    var eventLog = PluginEventLog.shared
 
     /// 開關打開後才為 true；false 時不持有任何 timer、監看或事件訂閱
     @Published private(set) var isActive = false
@@ -125,8 +128,10 @@ final class PluginRunner: ObservableObject {
     private var slotWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(directory: URL, stateRoot: URL, allowInactiveExecution: Bool = false,
-         preferences: UserDefaults = .standard, packageRoot: URL? = nil, appVersion: String = AppInfo.version) {
-        self.packageStore = PluginPackageStore(root: packageRoot ?? directory.deletingLastPathComponent().appendingPathComponent("plugin-packages"), appVersion: appVersion)
+         preferences: UserDefaults = .standard, packageRoot: URL? = nil, appVersion: String = AppInfo.version,
+         runtimeDirectories: [String] = PluginPackage.runtimeDirectories) {
+        self.packageStore = PluginPackageStore(root: packageRoot ?? directory.deletingLastPathComponent().appendingPathComponent("plugin-packages"),
+                                               appVersion: appVersion, runtimeDirectories: runtimeDirectories)
         self.directory = directory
         self.stateRoot = stateRoot
         self.allowInactiveExecution = allowInactiveExecution
@@ -372,6 +377,7 @@ final class PluginRunner: ObservableObject {
             var n = p
             n.output = o.output
             n.error = p.problem == nil ? o.error : nil
+            n.errorCode = p.problem == nil ? o.errorCode : nil
             n.actionError = o.actionError
             n.isEnabled = p.isEnabled
             return n
@@ -463,7 +469,11 @@ final class PluginRunner: ObservableObject {
         var output: PluginLogic.Output?
         var code: Int32 = 0
         var timedOut = false
+        var failure: PluginPackage.Problem?   // 只進安裝記錄；畫面仍顯示 error
     }
+
+    /// 記錄裡的外掛識別：套件用 manifest id，單檔用完整檔名
+    nonisolated static func logID(_ p: Plugin) -> String { p.package?.record.manifest.id ?? p.id }
 
     /// stderr 最多保留的 bytes（只用來顯示錯誤原因）
     nonisolated static let stderrLimit = 4096
@@ -499,11 +509,15 @@ final class PluginRunner: ObservableObject {
             pl.problem = r.problem
             guard r.problem == nil else { return }
             pl.error = r.error
+            pl.errorCode = r.error == nil ? nil : r.failure?.failure
             if r.error == nil { pl.output = r.output }
         }
         if r.problem == nil, r.error == nil, let out = r.output {
             await sendNotifications(plugin: p, output: out, epoch: myEpoch, generation: myGeneration)
         }
+        let attempt = PluginEventLog.Attempt(.run, plugin: Self.logID(p), log: eventLog)
+        if let why = r.problem { await attempt.failed(PluginPackage.fail(.runnerUnsafe, why), at: .run) }
+        else if let failure = r.failure { await attempt.failed(failure, at: .run) } else { await attempt.passed(.run) }
     }
 
     /// 在背景執行：完整檢查（掃描後可能被改過）→ 建立狀態資料夾 → 限時執行 → 解析輸出。
@@ -514,7 +528,7 @@ final class PluginRunner: ObservableObject {
         if let why = check.problem { return ExecResult(problem: why) }
         guard let exe = check.resolved else { return ExecResult(problem: "找不到檔案") }
         guard let state = executionState(root: stateRoot, id: id, package: package) else {
-            return ExecResult(error: "無法建立外掛的狀態資料夾")
+            return ExecResult(error: "無法建立外掛的狀態資料夾", failure: PluginPackage.fail(.runnerLaunchFailed, "無法建立外掛的狀態資料夾"))
         }
         var env = ["PATH": pluginPATH, "HOME": home, "SPLITSWAN_PLUGIN_STATE": state, "SPLITSWAN": "1",
                    "SPLITSWAN_PLUGIN_SETTINGS_PROTOCOL": "1", "SPLITSWAN_APP_PID": String(getpid())]
@@ -522,15 +536,23 @@ final class PluginRunner: ObservableObject {
         let r = await ProcessRunner.execute(exe, args, env: env, timeout: timeout, maxBytes: readLimit,
                                             qos: .utility, stderrLimit: stderrLimit)
         var out = ExecResult(code: r.code, timedOut: r.timedOut)
+        let stderrTail: [PluginEventLog.Fact] = r.errorOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? [] : [.stderrTail(r.errorOutput)]
         if let err = r.launchError {
             out.error = "無法執行：\(PluginLogic.clip(PluginLogic.sanitize(err)))"
+            out.failure = PluginPackage.fail(.runnerLaunchFailed, err)
         } else if r.timedOut {
             out.error = "執行逾時（超過 \(Int(timeout)) 秒）"
+            out.failure = PluginPackage.fail(.runnerTimedOut, facts: [.timedOut] + stderrTail)
         } else if r.code != 0 {
             let detail = lastLine(r.errorOutput)
             out.error = "結束碼 \(r.code)" + (detail.map { "：\($0)" } ?? "")
+            out.failure = PluginPackage.fail(.runnerExitNonZero, facts: [.exitCode(r.code)] + stderrTail)
         } else if parse {
-            out.output = PluginLogic.parseOutput(r.output)
+            let parsed = PluginLogic.parseOutput(r.output)
+            out.output = parsed
+            if parsed.title.isEmpty, parsed.items.isEmpty, !r.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                out.failure = PluginPackage.fail(.runnerOutputInvalid, facts: stderrTail)
+            }
         }
         return out
     }
@@ -799,10 +821,16 @@ final class PluginRunner: ObservableObject {
     /// 個別外掛開關：停用後立刻停止新排程；進行中的結果會丟棄，不再更新選單或發通知。
     func setPluginEnabled(_ id: String, _ on: Bool) {
         guard !updatingPackages.contains(id), let plugin = plugins.first(where: { $0.id == id }), plugin.isEnabled != on else { return }
+        let attempt = PluginEventLog.Attempt(on ? .enable : .disable, plugin: Self.logID(plugin), log: eventLog)
         if let package = plugin.package {
             do { try packageStore.setEnabled(package.record.manifest.id, on) }
-            catch { update(id) { $0.problem = error.localizedDescription }; return }
+            catch {
+                update(id) { $0.problem = error.localizedDescription }
+                Task { await attempt.failed(error, at: .enable) }
+                return
+            }
         }
+        Task { await attempt.passed(.enable) }
         var disabled = disabledPluginIDs
         if on { disabled.remove(id) } else { disabled.insert(id) }
         preferences.set(disabled.sorted(), forKey: Self.disabledPluginsKey)
@@ -820,7 +848,7 @@ final class PluginRunner: ObservableObject {
     nonisolated static func executionCheck(path: String, pluginDir: String, package: PluginPackageStore.Installed?) -> (resolved: String?, problem: String?) {
         guard let package else { return fullCheck(path: path, pluginDir: pluginDir, uid: getuid()) }
         do {
-            guard path == package.entrypoint else { throw PluginPackage.fail("套件執行入口不一致") }
+            guard path == package.entrypoint else { throw PluginPackage.fail(.runnerEntrypointMismatch) }
             try package.check()
             return (path, nil)
         } catch { return (nil, error.localizedDescription) }
@@ -835,7 +863,7 @@ final class PluginRunner: ObservableObject {
     func installPackage(_ prepared: PluginPackage.Prepared, replacing legacy: PluginLegacyReplacement.Match? = nil) async throws {
         let id = "package:" + prepared.manifest.id
         let ids: Set<String> = Set([id] + (legacy.map { [$0.fileName] } ?? []))
-        guard ids.isDisjoint(with: updatingPackages) else { throw PluginPackage.fail("此外掛正在更新或移除") }
+        guard ids.isDisjoint(with: updatingPackages) else { throw PluginPackage.fail(.runnerBusy) }
         updatingPackages.formUnion(ids)
         for key in ids {
             pluginGenerations[key, default: 0] += 1
@@ -877,9 +905,22 @@ final class PluginRunner: ObservableObject {
     @discardableResult
     func removePlugin(_ plugin: Plugin, trash: @escaping PluginPackageStore.TrashOperation = PluginPackageStore.moveToTrash,
                       progress: @escaping @Sendable (String) async -> Void = { _ in }) async throws -> PluginBackground.Result {
+        let attempt = PluginEventLog.Attempt(.remove, plugin: Self.logID(plugin), log: eventLog)
+        do {
+            let result = try await stopAndTrash(plugin, trash: trash, progress: progress)
+            await attempt.passed(.remove)
+            return result
+        } catch {
+            await attempt.failed(error, at: .remove)
+            throw error
+        }
+    }
+
+    private func stopAndTrash(_ plugin: Plugin, trash: @escaping PluginPackageStore.TrashOperation,
+                              progress: @escaping @Sendable (String) async -> Void) async throws -> PluginBackground.Result {
         let id = plugin.id
         guard !updatingPackages.contains(id), plugins.contains(where: { $0.id == id && $0.path == plugin.path }) else {
-            throw PluginPackage.fail("此外掛正在變更或已移除，請重新整理後再試")
+            throw PluginPackage.fail(.runnerChangedOrRemoved)
         }
         updatingPackages.insert(id)
         pluginGenerations[id, default: 0] += 1
@@ -911,11 +952,11 @@ final class PluginRunner: ObservableObject {
                 try packageStore.remove(package, trash: trash)
             } else {
                 guard PluginLogic.parseFileName(id) != nil,
-                      directory.appendingPathComponent(id).path == plugin.path else { throw PluginPackage.fail("單檔外掛路徑不一致") }
+                      directory.appendingPathComponent(id).path == plugin.path else { throw PluginPackage.fail(.runnerSinglePathMismatch) }
                 try PluginPackageStore.securePath(directory.path, regular: false)
                 var info = stat()
                 guard lstat(plugin.path, &info) == 0, info.st_uid == getuid(),
-                      [S_IFREG, S_IFLNK].contains(info.st_mode & S_IFMT) else { throw PluginPackage.fail("找不到可移除的單檔外掛") }
+                      [S_IFREG, S_IFLNK].contains(info.st_mode & S_IFMT) else { throw PluginPackage.fail(.runnerSingleNotFound) }
                 // 移動選到的檔案或連結本身，絕不解析連結後刪除其他位置的目標。
                 try trash(URL(fileURLWithPath: plugin.path))
             }

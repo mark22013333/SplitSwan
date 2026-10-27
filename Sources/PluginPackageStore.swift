@@ -23,12 +23,12 @@ struct PluginPackageStore: Sendable {
         var entrypoint: String { root.appendingPathComponent(record.manifest.entrypoint).path }
         func availability() throws {
             guard record.trusted, PluginPackage.validID(record.manifest.id),
-                  record.digest.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { throw PluginPackage.fail("套件尚未確認信任") }
+                  record.digest.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { throw PluginPackage.fail(.storeUntrusted) }
             // 每次執行重讀 active，排隊的舊版本不能在更新後開始。
-            guard try store.read(record.manifest.id).digest == record.digest else { throw PluginPackage.fail("套件版本已變更") }
+            guard try store.read(record.manifest.id).digest == record.digest else { throw PluginPackage.fail(.storeVersionChanged) }
             try PluginPackageStore.securePath(entrypoint, regular: true)
             let missing = PluginPackage.missingDependencies(record.manifest, directories: store.runtimeDirectories)
-            guard missing.isEmpty else { throw PluginPackage.fail("缺少執行環境：" + missing.joined(separator: "、")) }
+            guard missing.isEmpty else { throw PluginPackage.fail(.storeMissingRuntime, missing.joined(separator: "、")) }
         }
         func check() throws {
             try availability()
@@ -42,13 +42,13 @@ struct PluginPackageStore: Sendable {
     static func == (a: Self, b: Self) -> Bool { a.root == b.root && a.appVersion == b.appVersion && a.runtimeDirectories == b.runtimeDirectories }
     private func base(_ id: String) -> URL { root.appendingPathComponent(id) }
     func read(_ id: String) throws -> Record {
-        guard PluginPackage.validID(id) else { throw PluginPackage.fail("套件識別碼不合法") }
+        guard PluginPackage.validID(id) else { throw PluginPackage.fail(.storeInvalidID) }
         let url = base(id).appendingPathComponent("active.json")
         try Self.securePath(url.path, regular: true)
         let data = try Self.boundedRead(url, limit: PluginPackage.manifestLimit * 2)
-        guard data.count <= PluginPackage.manifestLimit * 2 else { throw PluginPackage.fail("套件登錄資料過大") }
+        guard data.count <= PluginPackage.manifestLimit * 2 else { throw PluginPackage.fail(.storeRecordTooLarge) }
         let r = try JSONDecoder().decode(Record.self, from: data)
-        guard r.manifest.id == id else { throw PluginPackage.fail("套件登錄識別碼不一致") }
+        guard r.manifest.id == id else { throw PluginPackage.fail(.storeRecordIDMismatch) }
         _ = try PluginPackage.decode(JSONEncoder().encode(r.manifest), appVersion: appVersion)
         return r
     }
@@ -68,13 +68,13 @@ struct PluginPackageStore: Sendable {
         let old = try read(p.manifest.id)
         if old.digest == p.digest { return .identical }
         guard let before = PluginPackage.Version(old.manifest.version), let after = PluginPackage.Version(p.manifest.version), after > before else {
-            throw PluginPackage.fail("相同版本不能變更內容，也不支援降版；請提高套件版本")
+            throw PluginPackage.fail(.storeVersionNotNewer)
         }
         return .update(old.manifest.version)
     }
     /// 必須由 UI 確認內容後呼叫；不將「具有雜湊」當作信任來源。
     func install(_ p: PluginPackage.Prepared, confirmed: Bool, pruneOldVersions: Bool = true) throws {
-        guard confirmed else { throw PluginPackage.fail("安裝尚未確認") }
+        guard confirmed else { throw PluginPackage.fail(.storeNotConfirmed) }
         let change = try change(for: p)
         if change == .identical {
             try verifyTree(Installed(store: self, record: read(p.manifest.id)))
@@ -111,7 +111,7 @@ struct PluginPackageStore: Sendable {
     }
     /// 升級交易失敗時還原登錄；安裝階段保留所有舊版本，避免復原點被清除。
     func restore(_ record: Record?, id: String) throws {
-        guard PluginPackage.validID(id), record == nil || record?.manifest.id == id else { throw PluginPackage.fail("無效的復原識別碼") }
+        guard PluginPackage.validID(id), record == nil || record?.manifest.id == id else { throw PluginPackage.fail(.storeInvalidRollbackID) }
         if let record { try write(record) }
         else if FileManager.default.fileExists(atPath: base(id).path) { try FileManager.default.removeItem(at: base(id)) }
     }
@@ -129,7 +129,7 @@ struct PluginPackageStore: Sendable {
     func remove(_ installed: Installed, trash: TrashOperation = Self.moveToTrash) throws {
         guard installed.store == self,
               try read(installed.record.manifest.id).digest == installed.record.digest else {
-            throw PluginPackage.fail("外掛版本已變更，請重新選擇要移除的外掛")
+            throw PluginPackage.fail(.storeRemoveChanged)
         }
         let target = base(installed.record.manifest.id)
         try Self.securePath(target.path, regular: false)
@@ -144,7 +144,7 @@ struct PluginPackageStore: Sendable {
         defer { try? FileManager.default.removeItem(at: temporary) }
         try data.write(to: temporary, options: .withoutOverwriting)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
-        guard rename(temporary.path, url.path) == 0 else { throw PluginPackage.fail("無法原子啟用套件，原版本已保留") }
+        guard rename(temporary.path, url.path) == 0 else { throw PluginPackage.fail(.storeActivateFailed) }
     }
     func verifyTree(_ p: Installed) throws {
         let fm = FileManager.default
@@ -153,65 +153,65 @@ struct PluginPackageStore: Sendable {
         try Self.securePath(manifestURL.path, regular: true)
         let manifestData = try Self.boundedRead(manifestURL, limit: PluginPackage.manifestLimit)
         guard PluginPackage.hash(manifestData) == p.record.digest,
-              try PluginPackage.decode(manifestData, appVersion: appVersion) == p.record.manifest else { throw PluginPackage.fail("已安裝的 Manifest 已變更") }
-        guard let physicalRoot = PluginRunner.realPath(p.root.path) else { throw PluginPackage.fail("找不到套件根目錄") }
+              try PluginPackage.decode(manifestData, appVersion: appVersion) == p.record.manifest else { throw PluginPackage.fail(.storeManifestChanged) }
+        guard let physicalRoot = PluginRunner.realPath(p.root.path) else { throw PluginPackage.fail(.storeRootMissing) }
         var actual: Set<String> = []
-        guard let enumerator = fm.enumerator(at: p.root, includingPropertiesForKeys: nil, options: []) else { throw PluginPackage.fail("無法讀取套件") }
+        guard let enumerator = fm.enumerator(at: p.root, includingPropertiesForKeys: nil, options: []) else { throw PluginPackage.fail(.storeUnreadable) }
         var count = 0
         for case let url as URL in enumerator {
             count += 1
-            guard count <= PluginPackage.entryLimit else { throw PluginPackage.fail("套件項目過多") }
+            guard count <= PluginPackage.entryLimit else { throw PluginPackage.fail(.storeTooManyItems) }
             let attrs = try fm.attributesOfItem(atPath: url.path)
             let isDir = attrs[.type] as? FileAttributeType == .typeDirectory
             try Self.securePath(url.path, regular: !isDir)
             if !isDir {
-                guard let physical = PluginRunner.realPath(url.path), physical.hasPrefix(physicalRoot + "/") else { throw PluginPackage.fail("套件檔案離開根目錄") }
+                guard let physical = PluginRunner.realPath(url.path), physical.hasPrefix(physicalRoot + "/") else { throw PluginPackage.fail(.storeEscapesRoot) }
                 actual.insert(String(physical.dropFirst(physicalRoot.count + 1)))
             }
         }
-        guard actual == Set(["manifest.json"] + p.record.manifest.files.map(\.path)) else { throw PluginPackage.fail("套件包含新增或遺失的檔案") }
+        guard actual == Set(["manifest.json"] + p.record.manifest.files.map(\.path)) else { throw PluginPackage.fail(.storeFileSetChanged) }
         var total = manifestData.count
         for f in p.record.manifest.files {
             let url = p.root.appendingPathComponent(f.path)
             let content = try Self.boundedRead(url, limit: PluginPackage.fileLimit)
             total += content.count
             guard total <= PluginPackage.expandedLimit, PluginPackage.hash(content) == f.sha256,
-                  !f.executable || access(url.path, X_OK) == 0 else { throw PluginPackage.fail("套件內容或權限已變更：\(f.path)") }
+                  !f.executable || access(url.path, X_OK) == 0 else { throw PluginPackage.fail(.storeContentChanged, f.path) }
         }
         try PluginPackage.validateEntrypoint(p.record.manifest, root: p.root)
     }
     func export(_ installed: Installed, to destination: URL) throws {
         let output = destination.resolvingSymlinksInPath().path
-        guard output != root.path, !output.hasPrefix(root.path + "/") else { throw PluginPackage.fail("匯出目的地不能位於套件管理目錄內") }
+        guard output != root.path, !output.hasPrefix(root.path + "/") else { throw PluginPackage.fail(.storeExportInsideRoot) }
         try verifyTree(installed)
         let source = installed.root.deletingLastPathComponent().appendingPathComponent("source.zip")
         try Self.securePath(source.path, regular: true)
         // 原始 ZIP 也重新驗證；不能只驗證 payload 後匯出遭替換的備份。
         let prepared = try PluginPackage.prepare(source, appVersion: appVersion)
         defer { prepared.discard() }
-        guard prepared.digest == installed.record.digest else { throw PluginPackage.fail("匯出來源已變更") }
+        guard prepared.digest == installed.record.digest else { throw PluginPackage.fail(.storeExportSourceChanged) }
         let data = try Self.boundedRead(source, limit: PluginPackage.archiveLimit)
         let quarantine = PluginPackage.readQuarantine(source.path) ?? PluginPackage.readQuarantine(destination.path)
-        if PluginRunner.hasQuarantine(source.path), quarantine == nil { throw PluginPackage.fail("無法讀取下載來源資訊") }
+        if PluginRunner.hasQuarantine(source.path), quarantine == nil { throw PluginPackage.fail(.packageQuarantineRead) }
         let temporary = destination.deletingLastPathComponent().appendingPathComponent(".splitswan-export-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: temporary) }
         try data.write(to: temporary, options: .withoutOverwriting)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
         if let quarantine {
             let result = quarantine.withUnsafeBytes { setxattr(temporary.path, "com.apple.quarantine", $0.baseAddress, quarantine.count, 0, 0) }
-            guard result == 0 else { throw PluginPackage.fail("匯出檔案無法保留下載來源資訊") }
+            guard result == 0 else { throw PluginPackage.fail(.storeExportQuarantine) }
         }
-        guard rename(temporary.path, destination.path) == 0 else { throw PluginPackage.fail("無法寫入匯出檔案") }
+        guard rename(temporary.path, destination.path) == 0 else { throw PluginPackage.fail(.storeExportWriteFailed) }
     }
     static func boundedRead(_ url: URL, limit: Int) throws -> Data {
         let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
-        guard (attrs[.size] as? Int ?? Int.max) <= limit else { throw PluginPackage.fail("檔案過大") }
+        guard (attrs[.size] as? Int ?? Int.max) <= limit else { throw PluginPackage.fail(.storeFileTooLarge) }
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         var data = Data()
         while let chunk = try handle.read(upToCount: min(32768, limit + 1 - data.count)), !chunk.isEmpty {
             data.append(chunk)
-            guard data.count <= limit else { throw PluginPackage.fail("檔案過大") }
+            guard data.count <= limit else { throw PluginPackage.fail(.storeFileTooLarge) }
         }
         return data
     }
@@ -231,7 +231,7 @@ struct PluginPackageStore: Sendable {
             guard lstat(d, &st) == 0, (st.st_mode & S_IFMT) == (first && regular ? S_IFREG : S_IFDIR),
                   st.st_uid == getuid() || ((!first || !regular) && st.st_uid == 0),
                   (st.st_mode & 0o022) == 0 || (!first && (st.st_mode & S_ISVTX) != 0),
-                  PluginRunner.aclProblem(d, uid: getuid()) == nil else { throw PluginPackage.fail("套件路徑擁有者、權限或 ACL 不安全：\(d)") }
+                  PluginRunner.aclProblem(d, uid: getuid()) == nil else { throw PluginPackage.fail(.storeUnsafePath, d) }
             if d == "/" { break }
             first = false; d = (d as NSString).deletingLastPathComponent
         }

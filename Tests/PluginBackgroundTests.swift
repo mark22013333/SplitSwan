@@ -112,7 +112,7 @@ func run() async throws {
     }
     _ = try await monitor.stop(context,trash:{ _ in fatalError("不應有服務") })
     check("PID 重用後不終止新的無關程序", killed.use { $0 } == [first])
-    monitor.readJobs = { throw PluginPackage.fail("fixture denied") }
+    monitor.readJobs = { throw PluginPackage.fail(.backgroundCheckTimeout, "fixture denied") }
     await reject("程序清單失敗不回報已停止") { _ = try await monitor.stop(context,trash:{ _ in fatalError("不應有服務") }) }
 
     // 真實原生程序、假外掛與假垃圾桶；拒絕 TERM 的根程序和子程序都須結束。
