@@ -87,6 +87,9 @@ actor PluginEventLog {
 
     static let fileName = "plugins.jsonl"
     static let rotatedName = "plugins.1.jsonl"
+    /// 外掛執行結果另存一檔、各自輪替：長期反覆失敗的外掛不會把匯入與安裝記錄擠掉
+    static let runFileName = "plugin-runs.jsonl"
+    static let runRotatedName = "plugin-runs.1.jsonl"
     static let dirOverrideKey = "PluginLogDir"   // 開發用：open SplitSwan.app --args -PluginLogDir <絕對路徑>
     static let maxStderrBytes = 1024
     /// 同一個外掛連續相同失敗最多合併這麼多次就先寫出一筆摘要，避免長時間失敗時完全沒有新紀錄
@@ -103,6 +106,8 @@ actor PluginEventLog {
     let directory: URL
     let fileURL: URL
     private let rotatedURL: URL
+    private let runURL: URL
+    private let runRotatedURL: URL
     private let now: @Sendable () -> Date
     private let maxBytes: Int
     private var runs: [String: RunState] = [:]
@@ -114,6 +119,8 @@ actor PluginEventLog {
         self.directory = directory
         fileURL = directory.appendingPathComponent(Self.fileName)
         rotatedURL = directory.appendingPathComponent(Self.rotatedName)
+        runURL = directory.appendingPathComponent(Self.runFileName)
+        runRotatedURL = directory.appendingPathComponent(Self.runRotatedName)
         self.now = now
         self.maxBytes = maxBytes
     }
@@ -169,7 +176,8 @@ actor PluginEventLog {
         guard var data = try? enc.encode(r) else { return }
         data.append(0x0A)
         guard prepareDirectory() else { return }
-        let fd = open(fileURL.path, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        let (file, rotated) = r.operation == .run ? (runURL, runRotatedURL) : (fileURL, rotatedURL)
+        let fd = open(file.path, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard fd >= 0 else { return }
         var st = Darwin.stat()
         guard fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFREG, st.st_uid == getuid() else { close(fd); return }
@@ -185,14 +193,14 @@ actor PluginEventLog {
         }
         let size = fstat(fd, &st) == 0 ? Int(st.st_size) : 0
         close(fd)
-        if ok && size > maxBytes { rotate() }
+        if ok && size > maxBytes { rotate(file, to: rotated) }
     }
 
     /// 只保留一份舊檔：先移掉舊的舊檔，再把目前檔改名
-    private func rotate() {
+    private func rotate(_ file: URL, to rotated: URL) {
         let fm = FileManager.default
-        try? fm.removeItem(at: rotatedURL)
-        try? fm.moveItem(at: fileURL, to: rotatedURL)
+        try? fm.removeItem(at: rotated)
+        try? fm.moveItem(at: file, to: rotated)
     }
 
     /// 資料夾必須是屬於目前使用者的真資料夾（不是 symlink）；不存在就建立成 700
@@ -216,12 +224,22 @@ actor PluginEventLog {
     private func all() -> [Record] {
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
-        return [rotatedURL, fileURL].flatMap { url -> [Record] in
-            let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
-            guard fd >= 0 else { return [] }
-            let data = (try? FileHandle(fileDescriptor: fd, closeOnDealloc: true).readToEnd()) ?? Data()
-            return data.split(separator: 0x0A).compactMap { try? dec.decode(Record.self, from: Data($0)) }
+        func read(_ urls: URL...) -> [Record] {
+            urls.flatMap { url -> [Record] in
+                let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+                guard fd >= 0 else { return [] }
+                let data = (try? FileHandle(fileDescriptor: fd, closeOnDealloc: true).readToEnd()) ?? Data()
+                return data.split(separator: 0x0A).compactMap { try? dec.decode(Record.self, from: Data($0)) }
+            }
         }
+        // 各檔保持寫入順序（合併摘要的時間可能略晚於下一筆），只在兩檔之間依時間穿插
+        let installs = read(rotatedURL, fileURL), runs = read(runRotatedURL, runURL)
+        var merged: [Record] = [], i = 0, j = 0
+        while i < installs.count || j < runs.count {
+            if j == runs.count || (i < installs.count && installs[i].time <= runs[j].time) { merged.append(installs[i]); i += 1 }
+            else { merged.append(runs[j]); j += 1 }
+        }
+        return merged
     }
 
     // MARK: 遮蔽（所有字串進記錄前的唯一入口）
@@ -229,11 +247,11 @@ actor PluginEventLog {
     private static let regexes: (home: NSRegularExpression?, url: NSRegularExpression?, auth: NSRegularExpression?,
                                 bearer: NSRegularExpression?, key: NSRegularExpression?, blob: NSRegularExpression?) = (
         try? NSRegularExpression(pattern: NSRegularExpression.escapedPattern(for: FileManager.default.homeDirectoryForCurrentUser.path) + #"(?![A-Za-z0-9_.-])"#),
-        // 私密日曆等網址的權杖常在路徑裡，只留 scheme 與主機
-        try? NSRegularExpression(pattern: #"(https?://[^\s/?#"'<>]+)[^\s"'<>]*"#),
-        try? NSRegularExpression(pattern: #"(?i)(Authorization[ \t]*:[ \t]*)[^\n]+"#),
+        // 私密日曆等網址的權杖常在路徑裡，只留 scheme 與主機；user:pass@ 一併丟掉
+        try? NSRegularExpression(pattern: #"(https?://)(?:[^\s/?#@"'<>]*@)?([^\s/?#@"'<>]+)[^\s"'<>]*"#),
+        try? NSRegularExpression(pattern: #"(?i)(\b(?:Proxy-Authorization|Authorization|Set-Cookie|Cookie)[ \t]*:[ \t]*)[^\n]+"#),
         try? NSRegularExpression(pattern: #"(?i)(Bearer[ \t]+)[^\s"']+"#),
-        try? NSRegularExpression(pattern: #"(?i)(\b(?:[A-Za-z]+_)?(?:token|key)[ \t]*[=:][ \t]*)[^\s&"']+"#),
+        try? NSRegularExpression(pattern: #"(?i)(\b(?:[A-Za-z]+_)?(?:token|key|apikey|pass|sid|session|secret|auth)[ \t]*[=:][ \t]*)[^\s&"';]+"#),
         // 不含 / 與 -：路徑與連字號名稱很長但不是秘密；base64 的 / 會把長串切成較短片段，仍有機會被其他規則攔下
         try? NSRegularExpression(pattern: #"[A-Za-z0-9+]{32,}={0,2}"#)
     )
@@ -246,7 +264,7 @@ actor PluginEventLog {
     static func redact(_ text: String) -> String {
         var s = sub(regexes.home, text, "~")
         s = DiagnosticReport.redact(s, secrets: [])
-        s = sub(regexes.url, s, "$1")
+        s = sub(regexes.url, s, "$1$2")
         s = sub(regexes.auth, s, "$1***")
         s = sub(regexes.bearer, s, "$1***")
         s = sub(regexes.key, s, "$1***")

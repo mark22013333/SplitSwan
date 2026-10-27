@@ -71,15 +71,27 @@ enum PluginDiagnostics {
         }
     }
 
-    /// 外掛資料夾第一層的一般檔案（不含隱藏檔）；symlink 依目標計算，超過上限或讀不到的照列並註明
+    static let scriptCountLimit = 200
+    static let scriptTotalLimit = 50 * 1024 * 1024
+
+    /// 外掛資料夾第一層的一般檔案（不含隱藏檔）。不跟隨 symlink、不讀 FIFO 等特殊檔，
+    /// 檔案數與總讀取量都有上限，報告不會因資料夾內容卡住或讀到資料夾外的檔案。
     static func scripts(in directory: URL) -> [Script] {
         let names = ((try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []).filter { !$0.hasPrefix(".") }.sorted()
-        return names.compactMap { name in
+        var total = 0
+        return names.prefix(scriptCountLimit).compactMap { name in
             let path = directory.appendingPathComponent(name).path
             var st = Darwin.stat()
-            guard stat(path, &st) == 0, st.st_mode & S_IFMT == S_IFREG else { return nil }
-            guard st.st_size <= scriptHashLimit else { return Script(name: name, sha256: "（超過 20 MiB，未計算）") }
-            guard let data = FileManager.default.contents(atPath: path) else { return Script(name: name, sha256: "（無法讀取）") }
+            guard lstat(path, &st) == 0 else { return nil }
+            if st.st_mode & S_IFMT == S_IFLNK { return Script(name: name, sha256: "（連結，未計算）") }
+            guard st.st_mode & S_IFMT == S_IFREG else { return nil }
+            guard Int(st.st_size) <= scriptHashLimit, total + Int(st.st_size) <= scriptTotalLimit else { return Script(name: name, sha256: "（超過大小上限，未計算）") }
+            let fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+            guard fd >= 0 else { return Script(name: name, sha256: "（無法讀取）") }
+            let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+            guard fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFREG, Int(st.st_size) <= scriptHashLimit,
+                  let data = st.st_size == 0 ? Data() : try? handle.read(upToCount: scriptHashLimit + 1), data.count <= scriptHashLimit else { return Script(name: name, sha256: "（無法讀取）") }
+            total += data.count
             return Script(name: name, sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined())
         }
     }

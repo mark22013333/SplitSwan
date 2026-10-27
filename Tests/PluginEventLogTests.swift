@@ -106,6 +106,15 @@ do {
     check("恢復之後再成功不再寫入", await log.recent(limit: 100).count == 3)
 }
 do {
+    let dir = freshDir(), log = makeLog(dir)
+    await log.append(runRec(.failed, .runnerBusy))
+    await log.append(rec())
+    check("執行記錄寫進 plugin-runs.jsonl，安裝類記錄留在 plugins.jsonl",
+          raw(dir.appendingPathComponent("plugin-runs.jsonl")).contains("runner.busy") && !raw(dir.appendingPathComponent("plugins.jsonl")).contains("runner.busy")
+          && !raw(dir.appendingPathComponent("plugins.jsonl")).isEmpty)
+    check("讀取時兩檔依時間合併", await log.recent(limit: 10).count == 2)
+}
+do {
     let log = makeLog(freshDir())
     for _ in 0..<61 { await log.append(runRec(.failed, .runnerBusy)) }
     var all = await log.recent(limit: 200)
@@ -145,6 +154,10 @@ do {
         "download https://example.com/cal.ics?token=SECRETFIXTURE#frag404 failed",
         "ical https://calendar.example.org/ical/private-PATHTOKENFIX/basic.ics",
         "api_key=KEYFIXTURE99",
+        "fetch https://alice:USERINFOPW@calendar.example.org/x failed",
+        "Cookie: sid=COOKIEFIXTURE; theme=dark",
+        "Set-Cookie: SETCOOKIEFIX=1",
+        "apikey=APIKEYFIX pass=PASSFIX sid=SIDFIX",
         "路徑 \(home)/Library/Application Support/demo",
         "雜湊 \(hex40)",
     ].joined(separator: "\n")
@@ -153,7 +166,7 @@ do {
     await log.append(rec(detail: detail, facts: [.sha256(sha), .legacyScript(name: "old.sh", sha256: sha), .topPaths(["\(home)/x/y", "plain/path"]), .stderrTail(tail), .manifest(id: "demo", version: "1.0.0")], attempt: id))
     let file = dir.appendingPathComponent("plugins.jsonl")
     let text = raw(file)
-    for secret in ["hunter2-fixture", "abcdefghijklmnopqrstuvwxyz0123456789", "SECRETFIXTURE", "KEYFIXTURE99", "dXNlcjpwYXNzRklYVFVSRQ", "frag404", "PATHTOKENFIX", "cal.ics", home, hex40] {
+    for secret in ["hunter2-fixture", "abcdefghijklmnopqrstuvwxyz0123456789", "SECRETFIXTURE", "KEYFIXTURE99", "dXNlcjpwYXNzRklYVFVSRQ", "frag404", "PATHTOKENFIX", "cal.ics", "USERINFOPW", "alice", "COOKIEFIXTURE", "SETCOOKIEFIX", "APIKEYFIX", "PASSFIX", "SIDFIX", home, hex40] {
         check("原始檔不含「\(secret)」", !text.contains(secret))
     }
     check("家目錄路徑換成 ~", text.contains("~/Library/Application Support/demo") && text.contains("~/x/y"))

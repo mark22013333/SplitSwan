@@ -136,10 +136,13 @@ try fm.createDirectory(at: plugins.appendingPathComponent("sub"), withIntermedia
 try Data("hi\n".utf8).write(to: plugins.appendingPathComponent("b.1m.sh"))
 try Data("x".utf8).write(to: plugins.appendingPathComponent(".hidden"))
 try fm.createSymbolicLink(at: plugins.appendingPathComponent("a.5m.sh"), withDestinationURL: plugins.appendingPathComponent("b.1m.sh"))
+try Data().write(to: plugins.appendingPathComponent("c.empty"))
+check("可建立 FIFO", mkfifo(plugins.appendingPathComponent("d.fifo").path, 0o600) == 0)
 let scripts = PluginDiagnostics.scripts(in: plugins)
 let hi = "98ea6e4f216f2fb4b69fff9b3a44842c38686ca685f3f55dc48c5d3fb1107be4"
-check("單檔腳本：第一層一般檔案依名稱排序，略過隱藏檔與資料夾，symlink 依目標計算",
-      scripts == [.init(name: "a.5m.sh", sha256: hi), .init(name: "b.1m.sh", sha256: hi)])
+let emptySHA = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+check("單檔腳本：第一層一般檔案依名稱排序，略過隱藏檔、資料夾與 FIFO，symlink 不跟隨，空檔案照算",
+      scripts == [.init(name: "a.5m.sh", sha256: "（連結，未計算）"), .init(name: "b.1m.sh", sha256: hi), .init(name: "c.empty", sha256: emptySHA)])
 check("外掛資料夾不存在時回空清單", PluginDiagnostics.scripts(in: root.appendingPathComponent("none")).isEmpty)
 
 try? fm.removeItem(at: root)
