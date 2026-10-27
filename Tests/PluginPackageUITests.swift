@@ -127,7 +127,7 @@ func runPackageUI() async throws -> Int {
         check("原生 Esc 取消移除，版本保持完整", handled && keyboard.removal == nil && runner.plugins.count == 1)
     }
     keyboard.beginRemoval(selected)
-    await keyboard.remove(trash: { _ in throw PluginPackage.fail("fixture trash failure") })
+    await keyboard.remove(trash: { _ in throw PluginPackage.fail(.storeExportWriteFailed, "fixture trash failure") })
     check("移除失敗留在確認頁並保留套件", keyboard.failed && keyboard.removal != nil && runner.plugins.count == 1)
     let privateState = root.appendingPathComponent("state/packages/org.example.fixture")
     try fm.createDirectory(at: privateState, withIntermediateDirectories: true)

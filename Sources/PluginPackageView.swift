@@ -47,16 +47,16 @@ final class PluginPackageModel: ObservableObject {
         busy = true; message = "正在驗證安裝包…"; failed = false
         defer { busy = false }
         do {
-            guard ["zip", "splitswan-plugin"].contains(url.pathExtension.lowercased()) else { throw PluginPackage.fail("請選擇 .splitswan-plugin 或 .zip 安裝包") }
+            guard ["zip", "splitswan-plugin"].contains(url.pathExtension.lowercased()) else { throw PluginPackage.fail(.packageBadExtension) }
             let store = runner.packageStore
             let prepared = try await Task.detached(priority: .utility) { try PluginPackage.prepare(url, appVersion: store.appVersion) }.value
             do {
-                if let updateID, "package:" + prepared.manifest.id != updateID { throw PluginPackage.fail("更新套件的識別碼與所選外掛不同") }
+                if let updateID, "package:" + prepared.manifest.id != updateID { throw PluginPackage.fail(.packageUpdateIDMismatch) }
                 let change = try store.change(for: prepared)
                 let legacy = try runner.legacyReplacement(for: prepared)
                 if change == .identical, legacy == nil { prepared.discard(); message = "已安裝相同版本及內容，不需重新安裝。"; return }
                 if change == .install, runner.plugins.count >= PluginLogic.maxPlugins,
-                   !runner.plugins.contains(where: { $0.id == legacy?.fileName }) { throw PluginPackage.fail("外掛已達數量上限，請先移除不需要的外掛") }
+                   !runner.plugins.contains(where: { $0.id == legacy?.fileName }) { throw PluginPackage.fail(.packagePluginLimit) }
                 let previous = try? store.read(prepared.manifest.id).manifest
                 preview = Preview(prepared: prepared, change: change, previous: previous, legacy: legacy)
                 message = nil

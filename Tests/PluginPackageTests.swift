@@ -9,17 +9,21 @@ func runTests() async throws {
 let fm = FileManager.default
 let root = URL(fileURLWithPath: CommandLine.arguments[1]).resolvingSymlinksInPath()
 let fixtures = root.appendingPathComponent("fixtures")
-struct Case: Decodable { let file: String; let valid: Bool; let message: String? }
+struct Case: Decodable { let file: String; let valid: Bool; let code: String? }
 let cases = try JSONDecoder().decode([Case].self, from: Data(contentsOf: fixtures.appendingPathComponent("cases.json")))
 for c in cases {
     do {
         let p = try PluginPackage.prepare(fixtures.appendingPathComponent(c.file), appVersion: "1.8.6")
         p.discard(); check("Swift 共用案例：" + c.file, c.valid)
     } catch {
-        let message = error.localizedDescription
-        check("Swift 共用案例：" + c.file + "：" + message, !c.valid && (c.message.map { message.contains($0) } ?? true))
+        let failure = (error as? PluginPackage.Problem)?.failure.rawValue
+        check("Swift 共用案例：" + c.file + "：" + error.localizedDescription, !c.valid && (c.code.map { $0 == failure } ?? true))
     }
 }
+let codes = PluginFailure.allCases.map(\.rawValue)
+check("錯誤碼唯一", Set(codes).count == codes.count)
+check("錯誤碼格式為 領域.名稱", codes.allSatisfy { $0.range(of: "^[a-z]+\\.[a-z][a-zA-Z0-9]*$", options: .regularExpression) != nil })
+check("每個錯誤碼都有訊息", PluginFailure.allCases.allSatisfy { !$0.message.isEmpty })
 // 已隔離下載的來源，確認信任後才安裝，匯出仍保留來源隔離資訊。
 let quarantinedURL = root.appendingPathComponent("quarantined.splitswan-plugin")
 try fm.copyItem(at: fixtures.appendingPathComponent("valid.splitswan-plugin"), to: quarantinedURL)
@@ -135,7 +139,7 @@ let trash: PluginPackageStore.TrashOperation = { url in
 }
 let selected = runner.plugins.first { $0.id == id }!
 do {
-    try await runner.removePlugin(selected, trash: { _ in throw PluginPackage.fail("fixture trash failure") })
+    try await runner.removePlugin(selected, trash: { _ in throw PluginPackage.fail(.storeExportWriteFailed, "fixture trash failure") })
     check("垃圾桶失敗不可回報移除成功", false)
 } catch { check("移除失敗保留原版本並停用，避免恢復排程", (try? runner.packageStore.read(first.manifest.id).enabled) == false && runner.plugins.contains { $0.id == id }) }
 runner.setPluginEnabled(id, true)
@@ -222,7 +226,7 @@ try Data("damaged".utf8).write(to: failedReplacement.payload.appendingPathCompon
 rejected("升級安裝失敗會回滾") { _ = try PluginLegacyReplacement.commit(failedReplacement, match: match, store: upgradeRunner.packageStore, directory: upgradeDir, stateRoot: root.appendingPathComponent("upgrade-state")) }
 check("失敗還原原入口、收據及 active", (try? Data(contentsOf: upgradeEntry)) == legacyBytes && (try? JSONDecoder().decode(PluginLegacyReplacement.Receipt.self, from: Data(contentsOf: receiptURL)).backup) == backup.path && (try? upgradeRunner.packageStore.read(replacement.manifest.id).digest) == replacement.digest)
 upgradeRunner.scan();upgradeRunner.setPluginEnabled("legacy.1m.sh", false)
-guard let disabledMatch = try upgradeRunner.legacyReplacement(for: replacement) else { throw PluginPackage.fail("測試：復原舊入口遺失") }
+guard let disabledMatch = try upgradeRunner.legacyReplacement(for: replacement) else { throw PluginPackage.fail(.legacyChanged, "測試：復原舊入口遺失") }
 try await upgradeRunner.installPackage(replacement, replacing: disabledMatch)
 check("停用舊入口升級後仍停用", !upgradeRunner.plugins[0].isEnabled)
 // 安裝階段失敗必須保留目前 active。

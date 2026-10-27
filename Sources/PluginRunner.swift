@@ -820,7 +820,7 @@ final class PluginRunner: ObservableObject {
     nonisolated static func executionCheck(path: String, pluginDir: String, package: PluginPackageStore.Installed?) -> (resolved: String?, problem: String?) {
         guard let package else { return fullCheck(path: path, pluginDir: pluginDir, uid: getuid()) }
         do {
-            guard path == package.entrypoint else { throw PluginPackage.fail("套件執行入口不一致") }
+            guard path == package.entrypoint else { throw PluginPackage.fail(.runnerEntrypointMismatch) }
             try package.check()
             return (path, nil)
         } catch { return (nil, error.localizedDescription) }
@@ -835,7 +835,7 @@ final class PluginRunner: ObservableObject {
     func installPackage(_ prepared: PluginPackage.Prepared, replacing legacy: PluginLegacyReplacement.Match? = nil) async throws {
         let id = "package:" + prepared.manifest.id
         let ids: Set<String> = Set([id] + (legacy.map { [$0.fileName] } ?? []))
-        guard ids.isDisjoint(with: updatingPackages) else { throw PluginPackage.fail("此外掛正在更新或移除") }
+        guard ids.isDisjoint(with: updatingPackages) else { throw PluginPackage.fail(.runnerBusy) }
         updatingPackages.formUnion(ids)
         for key in ids {
             pluginGenerations[key, default: 0] += 1
@@ -879,7 +879,7 @@ final class PluginRunner: ObservableObject {
                       progress: @escaping @Sendable (String) async -> Void = { _ in }) async throws -> PluginBackground.Result {
         let id = plugin.id
         guard !updatingPackages.contains(id), plugins.contains(where: { $0.id == id && $0.path == plugin.path }) else {
-            throw PluginPackage.fail("此外掛正在變更或已移除，請重新整理後再試")
+            throw PluginPackage.fail(.runnerChangedOrRemoved)
         }
         updatingPackages.insert(id)
         pluginGenerations[id, default: 0] += 1
@@ -911,11 +911,11 @@ final class PluginRunner: ObservableObject {
                 try packageStore.remove(package, trash: trash)
             } else {
                 guard PluginLogic.parseFileName(id) != nil,
-                      directory.appendingPathComponent(id).path == plugin.path else { throw PluginPackage.fail("單檔外掛路徑不一致") }
+                      directory.appendingPathComponent(id).path == plugin.path else { throw PluginPackage.fail(.runnerSinglePathMismatch) }
                 try PluginPackageStore.securePath(directory.path, regular: false)
                 var info = stat()
                 guard lstat(plugin.path, &info) == 0, info.st_uid == getuid(),
-                      [S_IFREG, S_IFLNK].contains(info.st_mode & S_IFMT) else { throw PluginPackage.fail("找不到可移除的單檔外掛") }
+                      [S_IFREG, S_IFLNK].contains(info.st_mode & S_IFMT) else { throw PluginPackage.fail(.runnerSingleNotFound) }
                 // 移動選到的檔案或連結本身，絕不解析連結後刪除其他位置的目標。
                 try trash(URL(fileURLWithPath: plugin.path))
             }
