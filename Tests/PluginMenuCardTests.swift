@@ -47,11 +47,17 @@ func cardJSON(_ change: (inout [String: Any]) -> Void = { _ in }) -> [String: An
 }
 
 // MARK: 解碼
+let todayDone = Card.decode(encode(cardJSON {
+    var t = $0["timeline"] as! [String: Any]; t["actual"] = "08:30"; $0["timeline"] = t
+    var h = $0["history"] as! [[String: Any]]; h[h.count - 1]["time"] = "08:30"; h[h.count - 1]["result"] = "auto"; $0["history"] = h
+}))
+check("卡片：今天已打卡時，歷史最後一筆標為今天", todayDone?.isToday(index: 9) == true && todayDone?.isToday(index: 8) == false)
 let decoded = Card.decode(encode(cardJSON()))
 check("卡片：合法內容解碼成功", decoded?.headline == "今天上班 · 預定 08:41 打卡" && decoded?.tone == .ok && decoded?.enabled == true
       && decoded?.timeline?.planned == Card.Clock("08:41") && decoded?.timeline?.actual == nil
       && decoded?.conditions.map(\.label) == ["App", "電源", "VPN"] && decoded?.history.count == 10
       && decoded?.history[5].time == nil && decoded?.history[5].result == .leave && decoded?.history[0].shortDate == "10/8")
+check("卡片：今天尚未打卡時沒有標為今天的點", decoded?.isToday(index: 9) == false)
 check("卡片：近期統計與圖例", decoded?.historySummary == "自動打卡平均 08:39（7 天） · 人工處理 1、請假 1、未執行 1"
       && decoded?.legend == [.auto, .manual, .leave, .missed] && Card.Result.manual.label == "人工處理")
 let minimal = Card.decode(encode(["version": 1, "headline": "簡短", "tone": "neutral", "enabled": false, "conditions": [], "history": []]))
@@ -142,7 +148,8 @@ MainActor.assumeIsolated {
         ("done", cardJSON {
             $0["headline"] = "今天已打卡 · 08:41 自動打卡"
             $0["detail"] = "政府日曆：上班日"
-            $0["timeline"] = ["start": "08:20", "end": "09:05", "check": "08:24", "windowStart": "08:30", "windowEnd": "09:00", "planned": "08:41", "actual": "08:41", "now": "08:52"]
+            $0["timeline"] = ["start": "08:20", "end": "09:05", "check": "08:24", "windowStart": "08:30", "windowEnd": "09:00", "planned": "08:30", "actual": "08:30", "now": "08:52"]
+            var h = $0["history"] as! [[String: Any]]; h[h.count - 1]["time"] = "08:30"; h[h.count - 1]["result"] = "auto"; $0["history"] = h
         }),
         ("holiday", cardJSON {
             $0["headline"] = "今天不上班"; $0["tone"] = "info"; $0["detail"] = "政府日曆：補假"

@@ -91,6 +91,12 @@ struct PluginMenuCard: Equatable, Sendable {
         Result.allCases.filter { r in r == .auto || history.contains { $0.result == r } }
     }
 
+    /// 今天已打卡時，歷史最後一筆就是今天（時間軸的實際打卡時間與它相同）；圖表用較大的點標出。
+    func isToday(index: Int) -> Bool {
+        guard index == history.count - 1, let actual = timeline?.actual else { return false }
+        return history[index].time == actual
+    }
+
     /// 例：「自動打卡平均 08:41（7 天）· 人工處理 1、請假 1、未執行 1」；沒有歷史回 nil。
     var historySummary: String? {
         guard !history.isEmpty else { return nil }
