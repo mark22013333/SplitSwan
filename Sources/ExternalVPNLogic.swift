@@ -409,7 +409,8 @@ enum ExternalVPNPlanner {
             ExternalIPv4Network(address: try ExternalIPv4($0), prefix: 32)
         }
         let required = publicNetworks(excluding: protected + vpnPrecise + vpnDNS + [baseline.localNetwork])
-        let precise = current.routes.filter { $0.network.prefix >= 2 }.map(\.network)
+        // 限定介面（I）的路由只給綁定該介面的流量用，覆蓋驗證也不採計；若當成既有細部路由略過，會留下沒有實體路由的缺口。
+        let precise = current.routes.filter { $0.network.prefix >= 2 && !$0.flags.contains("I") }.map(\.network)
         let networks = publicNetworks(excluding: protected + precise + vpnDNS + [baseline.localNetwork] + direct)
         guard required.count <= 2048, networks.count <= 2048 else { throw ExternalVPNError.invalid("外網路由範圍無法安全分流") }
         var additions = networks.map { ExternalRoute(network: $0, gateway: baseline.gateway, interface: baseline.interface, flags: "UGS1") }
