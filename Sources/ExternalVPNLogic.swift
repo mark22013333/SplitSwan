@@ -190,6 +190,7 @@ struct ExternalDNSState: Codable {
 struct ExternalDNSPlan {
     let changes: [ExternalDNSChange]
     let preserved: ExternalDNSState?
+    var skippedEndpointDNS: [String] = []
 }
 
 struct ExternalVPNFailure: Codable, Equatable {
@@ -456,6 +457,18 @@ enum ExternalVPNPlanner {
         return ExternalVPNRoutePlan(additions: additions, evidence: evidence)
     }
 
+    // point-to-point 通道的對端位址：主機路由 A 經本端位址 L（無 G），且同介面有 L/32 指回 A。
+    static func tunnelEndpoints(_ routes: [ExternalRoute], interface: String) -> Set<ExternalIPv4> {
+        let local = routes.filter { $0.interface == interface }
+        return Set(local.compactMap { route -> ExternalIPv4? in
+            guard route.network.prefix == 32, route.flags.contains("H"), !route.flags.contains("G"),
+                  let peer = try? ExternalIPv4(route.gateway),
+                  local.contains(where: { $0.network == ExternalIPv4Network(address: peer, prefix: 32) && (try? ExternalIPv4($0.gateway)) == route.network.address })
+            else { return nil }
+            return route.network.address
+        })
+    }
+
     static func dnsPlan(_ session: ExternalVPNSession, current: ExternalNetworkSnapshot, tunnel: String) throws -> ExternalDNSPlan {
         let changed = current.dns.filter { entry in !ExternalDNSEntry.equalValues(session.baseline.dns.first(where: { $0.key == entry.key })?.value, entry.value) }
         let tunnelDNS = changed.filter { $0.interface == tunnel }
@@ -484,14 +497,23 @@ enum ExternalVPNPlanner {
               ExternalDNSEntry.equalValues(session.baseline.dns.first(where: { $0.key == entry.key })?.value, entry.value) else {
             throw ExternalVPNError.invalid("無法確定原本上網 DNS 的歸屬，未套用分流")
         }
+        let endpoints = tunnelEndpoints(current.routes, interface: tunnel)
+        var skipped: [String] = []
         for server in entry.servers {
             guard let ip = try? ExternalIPv4(server) else { throw ExternalVPNError.invalid("原本 DNS 含 IPv6 位址，此版本無法安全分流") }
             guard !tunnelDNS.contains(where: { $0.servers.contains(server) }) else {
                 throw ExternalVPNError.invalid("原本與 VPN 的 DNS 位址重疊，無法安全分開查詢")
             }
-            if current.routes.contains(where: { $0.isTunnel && $0.network.prefix >= 2 && $0.network.contains(ip) }) {
-                throw ExternalVPNError.invalid("原本的 DNS 位址被 VPN 細部路由接管，未套用分流")
+            let covering = current.routes.filter { $0.isTunnel && $0.network.prefix >= 2 && $0.network.contains(ip) }
+            guard let finest = covering.max(by: { $0.network.prefix < $1.network.prefix }) else { continue }
+            let host = ExternalIPv4Network(address: ip, prefix: 32)
+            guard endpoints.contains(ip), covering.allSatisfy({ $0.interface == tunnel && $0.network == host }) else {
+                throw ExternalVPNError.invalid("原本的 DNS \(server) 被 \(finest.interface) 的 \(finest.network) 路由接管，未套用分流")
             }
+            skipped.append(server)
+        }
+        guard skipped.count < entry.servers.count else {
+            throw ExternalVPNError.invalid("原本的 DNS（\(skipped.joined(separator: "、"))）全部被 VPN 通道端點佔用，未套用分流")
         }
         if session.profile.dnsMode == .preserveVPN {
             let knownDNS = tunnelDNS + [entry]
@@ -501,7 +523,7 @@ enum ExternalVPNPlanner {
                     throw ExternalVPNError.invalid("VPN 的預設 DNS 無法確定服務歸屬，未套用分流")
                 }
             }
-            return ExternalDNSPlan(changes: [], preserved: ExternalDNSState(current))
+            return ExternalDNSPlan(changes: [], preserved: ExternalDNSState(current), skippedEndpointDNS: skipped)
         }
         var changes = try tunnelDNS.map { entry in
             var dictionary = entry.dictionary
@@ -527,7 +549,7 @@ enum ExternalVPNPlanner {
         dictionary["SearchOrder"] = 1
         let after = try PropertyListSerialization.data(fromPropertyList: dictionary, format: .binary, options: 0)
         changes.append(ExternalDNSChange(key: entry.key, before: entry.value, after: after))
-        return ExternalDNSPlan(changes: changes, preserved: nil)
+        return ExternalDNSPlan(changes: changes, preserved: nil, skippedEndpointDNS: skipped)
     }
 }
 
@@ -663,6 +685,9 @@ final class ExternalVPNEngine {
             session.message = session.profile.dnsMode == .preserveVPN
                 ? "IPv4 路由已套用；DNS 維持 VPN 連線後原設定，外網與內網仍待確認"
                 : "IPv4 分流已套用；請確認外網與 VPN 系統皆可使用"
+            if !dns.skippedEndpointDNS.isEmpty {
+                session.message += "；\(dns.skippedEndpointDNS.joined(separator: "、")) 是 VPN 通道端點，這段期間改用其他 DNS 查詢"
+            }
             try runtime.save(session)
             return session
         } catch {

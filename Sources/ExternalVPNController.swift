@@ -12,6 +12,7 @@ final class ExternalVPNController: ObservableObject {
     @Published var directIPv4 = ""
     @Published var dnsMode = ExternalVPNDNSMode.splitDomains
     private let transport: Transport
+    private let recordFailure: (String) -> Void
     private let preferences: UserDefaults
     private var monitor: Task<Void, Never>?
     private var monitorGeneration: UInt = 0
@@ -26,8 +27,10 @@ final class ExternalVPNController: ObservableObject {
              (status.companyState == nil || status.companyState == .active)))
     }
 
-    init(preferences: UserDefaults = .standard, autoRefresh: Bool = true, transport: Transport? = nil) {
+    init(preferences: UserDefaults = .standard, autoRefresh: Bool = true, transport: Transport? = nil, recordFailure: ((String) -> Void)? = nil) {
         self.preferences = preferences
+        // 注入 transport 的是測試，預設不留現場紀錄，免得執行系統指令或寫進真實的 ~/Library/Logs。
+        self.recordFailure = recordFailure ?? (transport == nil ? Self.failureRecorder(ExternalFailureLog.directory(preferences)) : { _ in })
         self.transport = transport ?? { operation, data in
             let result = await ProcessRunner.execute("/usr/bin/sudo", ["-n", "/usr/local/libexec/splitswan-helper", "external", operation], timeout: 120, maxBytes: 65_536, input: data)
             return (result.code, result.output)
@@ -99,6 +102,16 @@ final class ExternalVPNController: ObservableObject {
         }
     }
 
+    private static func failureRecorder(_ directory: URL) -> (String) -> Void {
+        { statusJSON in
+            Task.detached(priority: .utility) {
+                _ = await ExternalFailureLog.record(statusJSON: statusJSON, directory: directory) { exe, args in
+                    await ProcessRunner.execute(exe, args, timeout: 10, maxBytes: 1_000_000, qos: .utility).output
+                }
+            }
+        }
+    }
+
     private func perform(_ operation: String, input: Data? = nil) async {
         guard !busy else { return }
         busy = true
@@ -115,7 +128,9 @@ final class ExternalVPNController: ObservableObject {
                 decoded.tunnel = status.tunnel
                 decoded.routeCount = status.routeCount
             }
+            let previous = status.phase
             status = decoded
+            if ExternalFailureLog.shouldRecord(operation: operation, previous: previous, next: decoded.phase) { recordFailure(output) }
         }
         else {
             status = ExternalVPNStatus(phase: isManaging ? .recoveryRequired : .failed,
