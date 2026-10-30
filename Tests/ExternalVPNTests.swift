@@ -453,7 +453,6 @@ for (name, replacement) in [
     ("錯誤閘道", route(representative.network.description, "192.0.2.254", "en0", "UGS1")),
     ("錯誤介面", route(representative.network.description, "192.0.2.1", "en1", "UGS1")),
     ("down", route(representative.network.description, "192.0.2.1", "en0", "GS1")),
-    ("scoped", route(representative.network.description, "192.0.2.1", "en0", "UGS1I")),
     ("reject", route(representative.network.description, "192.0.2.1", "en0", "UGSR1")),
     ("blackhole", route(representative.network.description, "192.0.2.1", "en0", "UGSB1"))
 ] {
@@ -461,6 +460,13 @@ for (name, replacement) in [
     state.routes.removeAll { $0 == representative }; state.routes.append(replacement)
     check("借用覆蓋\(name)不能通過初始規劃", rejected { try ExternalVPNPlanner.plan(borrowedPending, current: state, tunnel: "ppp0") })
     check("借用覆蓋\(name)不能通過公司驗證", rejected { try CompanyVPNPlanner.validateExternal(borrowedActive, state) })
+}
+do {
+    var state = borrowedSnapshot
+    state.routes.removeAll { $0 == representative }; state.routes.append(route(representative.network.description, "192.0.2.1", "en0", "UGS1I"))
+    let plan = try? ExternalVPNPlanner.plan(borrowedPending, current: state, tunnel: "ppp0")
+    check("限定介面的路由不借用為覆蓋，改由新增的實體路由涵蓋該區間", plan?.additions.contains { $0.network == representative.network && $0.interface == "en0" && !$0.flags.contains("I") } == true)
+    check("借用覆蓋改成限定介面時不能通過公司驗證", rejected { try CompanyVPNPlanner.validateExternal(borrowedActive, state) })
 }
 for (name, extra) in [
     ("區間內部 VPN /32", route("\(interior)/32", "198.51.100.1", "ppp0", "UGHS")),
@@ -756,6 +762,18 @@ check("其他介面不認定 F5 端點", ExternalVPNPlanner.tunnelEndpoints(f5Ro
 check("帶 G 的主機路由不是通道端點", ExternalVPNPlanner.tunnelEndpoints(ExternalVPNPlanner.parseRoutes("1.1.1.1 10.0.0.127 UGHr utun4\n10.0.0.127/32 1.1.1.1 USc utun4\n"), interface: "utun4").isEmpty)
 check("反向路由指向別的位址不是通道端點", ExternalVPNPlanner.tunnelEndpoints(ExternalVPNPlanner.parseRoutes("1.1.1.1 10.0.0.127 UHr utun4\n10.0.0.127/32 1.0.0.1 USc utun4\n"), interface: "utun4").isEmpty)
 
+// 虛擬機與容器的 bridge 介面會為連過的公共 IP 留下限定介面（I）的主機路由；一般流量不走它，不能在分流覆蓋留下缺口。
+let bridgeScoped = """
+9.9.9.9            da.9b.d0.54.e2.80  UHLWIg          bridge101      !
+9.9.9.9            da.9b.d0.54.e2.81  UHLWIg          bridge102      !
+default            link#21            UCSIg           bridge100      !
+192.168.215        link#23            UC              bridge101      !
+"""
+var withBridges = f5Connected(companyDNS)
+withBridges.routes += ExternalVPNPlanner.parseRoutes(bridgeScoped)
+let bridgePlan = try? ExternalVPNPlanner.plan(f5Session(companyDNS), current: withBridges, tunnel: "utun4")
+check("bridge 介面限定介面的公共 IP 主機路由不影響外網分流規劃", bridgePlan != nil)
+check("限定介面主機路由所在的公共位址仍由新增的實體路由涵蓋", bridgePlan?.additions.contains { $0.network.contains(try! ExternalIPv4("9.9.9.9")) && $0.interface == "en0" } == true)
 let f5Plan = try? ExternalVPNPlanner.dnsPlan(f5Session(companyDNS), current: f5Connected(companyDNS), tunnel: "utun4")
 check("(a) F5 端點撞 DNS 1.1.1.1 但另有實體 DNS 時照常規劃", f5Plan != nil)
 check("(a) 略過的端點 DNS 只有 1.1.1.1", f5Plan?.skippedEndpointDNS == ["1.1.1.1"])
