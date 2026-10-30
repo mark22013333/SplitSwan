@@ -12,7 +12,7 @@ trap 'command rm -r "$OUT"' EXIT
 
 bash tools/build-zipfoundation.sh "$OUT/zip" || exit 1
 
-ALL_GROUPS="reconnect export security settings diagnostic hostcheck update about external-vpn coexistence root-lifetime root-backend external-ui plugins plugin-ui plugin-card packages package-ui background plugin-log plugin-log-flow plugin-diag settings-ui"
+ALL_GROUPS="reconnect export security settings diagnostic hostcheck update about external-vpn external-failure-log coexistence root-lifetime root-backend external-ui plugins plugin-ui plugin-card packages package-ui background plugin-log plugin-log-flow plugin-diag settings-ui"
 
 # 每組的測試檔與要一起編譯的原始檔（第一個是測試檔，會被複製成 main.swift）。
 # 新增 Sources 檔時，要加進用到它的每一組，否則該組會編譯失敗。
@@ -21,8 +21,9 @@ files() {
     root-lifetime) echo Tests/RootOperationLifetimeTests.swift tools/external-vpn/RootOperationLifetime.swift ;;
     root-backend) echo Tests/CompanyBackendTests.py ;;
     external-vpn) echo Tests/ExternalVPNTests.swift $S/ExternalVPNLogic.swift $S/VPNCoexistenceLogic.swift ;;
+    external-failure-log) echo Tests/ExternalFailureLogTests.swift $S/ExternalFailureLog.swift $S/ExternalVPNLogic.swift $S/VPNCoexistenceLogic.swift ;;
     coexistence) echo Tests/VPNCoexistenceTests.swift $S/ExternalVPNLogic.swift $S/VPNCoexistenceLogic.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
-    external-ui) echo Tests/ExternalVPNUITests.swift $S/ExternalVPNLogic.swift $S/VPNCoexistenceLogic.swift $S/ExternalVPNController.swift $S/ExternalVPNView.swift $S/ProcessRunner.swift ;;
+    external-ui) echo Tests/ExternalVPNUITests.swift $S/ExternalVPNLogic.swift $S/VPNCoexistenceLogic.swift $S/ExternalVPNController.swift $S/ExternalFailureLog.swift $S/ExternalVPNView.swift $S/ProcessRunner.swift ;;
     reconnect)  echo Tests/ReconnectTests.swift $S/VPNController.swift $S/GatewayHistory.swift $S/DropNotifier.swift \
                      $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift $S/LogStore.swift \
                      $S/ProcessRunner.swift $S/DiagnosticReport.swift ;;

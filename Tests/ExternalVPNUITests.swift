@@ -238,6 +238,28 @@ func runExternalUI() async throws -> Int {
     await keepModel.stop()
     await model.stop()
     check("UI 測試完全使用假的系統傳輸", calls.allSatisfy { ["prepare", "tick", "restore", "status"].contains($0) })
+    var recorded: [String] = []
+    var failTicks = false
+    let failureJSON = String(decoding: try! JSONEncoder().encode(ExternalVPNStatus(phase: .failed, message: "原本的 DNS 1.1.1.1 被 utun4 的 1.1.1.0/24 路由接管，未套用分流", interface: "en0", tunnel: "utun4", routeCount: 0, canRetry: true)), as: UTF8.self)
+    let failureModel = ExternalVPNController(preferences: preferences, autoRefresh: false, transport: { operation, _ in
+        if operation == "tick" || operation == "status", failTicks { return (0, failureJSON) }
+        let status = operation == "restore" ? .idle : ExternalVPNStatus(phase: .waiting, message: "等待外部 VPN", interface: "en0", tunnel: nil, routeCount: 0)
+        return (0, String(decoding: try! JSONEncoder().encode(status), as: UTF8.self))
+    }, recordFailure: { recorded.append($0) })
+    await failureModel.start()
+    await settle { failureModel.status.phase == .waiting }
+    check("等待中尚未失敗不留紀錄", recorded.isEmpty)
+    failTicks = true
+    await settle { failureModel.status.phase == .failed }
+    await failureModel.refresh()
+    try? await Task.sleep(for: .milliseconds(100))
+    check("轉為 failed 只記錄一次，帶出當次狀態 JSON", failureModel.status.phase == .failed && recorded == [failureJSON])
+    failTicks = false
+    await failureModel.start()
+    failTicks = true
+    await settle { recorded.count == 2 }
+    check("重新開始後再次失敗才另記一份", recorded.count == 2)
+    await failureModel.stop()
     print("通過 \(passed)，失敗 \(failed)")
     return failed
 }

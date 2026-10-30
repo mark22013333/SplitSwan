@@ -721,5 +721,70 @@ let bootDriftAdds = bootDriftRuntime.adds, bootDriftRemovesBefore = bootDriftRun
 let bootDriftStop = try! bootDriftEngine.restore(bootDriftActive)
 check("boottime 微秒漂移後停止會實際移除自己的路由", bootDriftStop.phase == .idle && bootDriftRuntime.removes - bootDriftRemovesBefore == bootDriftAdds)
 
+// F5 point-to-point 通道：對端位址剛好是公司 DHCP 給的 DNS 1.1.1.1，路由形狀照實測 netstat -rn 欄位。
+let f5Tunnel = """
+0/1                10.0.0.127         UScg                utun4
+1.1.1.1            10.0.0.127         UHr                 utun4
+1.1.1.1/32         link#34            UCS                 utun4
+10/8               10.0.0.127         UGSc                utun4
+10.0.0.127/32      1.1.1.1            USc                 utun4
+128.0/1            10.0.0.127         USc                 utun4
+"""
+let f5DNS = ExternalDNSEntry(key: "State:/Network/Service/f5/DNS", interface: "utun4", value: plist(["ServerAddresses": ["10.0.0.53"], "SupplementalMatchDomains": ["internal.example.com"]]))
+func f5Baseline(_ servers: [String]) -> ExternalNetworkSnapshot {
+    var state = baseline()
+    state.dns = [ExternalDNSEntry(key: physicalDNS.key, interface: "en0", value: plist(["ServerAddresses": servers]))]
+    state.defaultDNSServers = servers
+    return state
+}
+func f5Connected(_ servers: [String], tunnel: String = f5Tunnel) -> ExternalNetworkSnapshot {
+    var state = f5Baseline(servers)
+    state.routes += ExternalVPNPlanner.parseRoutes(tunnel)
+    state.dns.append(f5DNS)
+    return state
+}
+func f5Session(_ servers: [String], _ profile: ExternalVPNProfile = ExternalVPNProfile()) -> ExternalVPNSession {
+    ExternalVPNSession(owner: 501, baseline: f5Baseline(servers), profile: profile)
+}
+func dnsError(_ session: ExternalVPNSession, _ current: ExternalNetworkSnapshot) -> String? {
+    do { _ = try ExternalVPNPlanner.dnsPlan(session, current: current, tunnel: "utun4"); return nil } catch { return error.localizedDescription }
+}
+let companyDNS = ["1.1.1.1", "168.95.1.1", "8.8.8.8"]
+let f5Routes = ExternalVPNPlanner.parseRoutes(f5Tunnel)
+check("F5 對端主機路由加成對反向路由認定為通道端點", ExternalVPNPlanner.tunnelEndpoints(f5Routes, interface: "utun4") == [try! ExternalIPv4("1.1.1.1")])
+check("其他介面不認定 F5 端點", ExternalVPNPlanner.tunnelEndpoints(f5Routes, interface: "utun5").isEmpty)
+check("帶 G 的主機路由不是通道端點", ExternalVPNPlanner.tunnelEndpoints(ExternalVPNPlanner.parseRoutes("1.1.1.1 10.0.0.127 UGHr utun4\n10.0.0.127/32 1.1.1.1 USc utun4\n"), interface: "utun4").isEmpty)
+check("反向路由指向別的位址不是通道端點", ExternalVPNPlanner.tunnelEndpoints(ExternalVPNPlanner.parseRoutes("1.1.1.1 10.0.0.127 UHr utun4\n10.0.0.127/32 1.0.0.1 USc utun4\n"), interface: "utun4").isEmpty)
+
+let f5Plan = try? ExternalVPNPlanner.dnsPlan(f5Session(companyDNS), current: f5Connected(companyDNS), tunnel: "utun4")
+check("(a) F5 端點撞 DNS 1.1.1.1 但另有實體 DNS 時照常規劃", f5Plan != nil)
+check("(a) 略過的端點 DNS 只有 1.1.1.1", f5Plan?.skippedEndpointDNS == ["1.1.1.1"])
+for mode in [ExternalVPNDNSMode.splitDomains, .preserveVPN] {
+    let runtime = FakeRuntime(); runtime.state = f5Baseline(companyDNS)
+    let engine = ExternalVPNEngine(runtime: runtime)
+    let pending = try! engine.prepare(owner: 501, profile: ExternalVPNProfile(dnsMode: mode))
+    runtime.state = f5Connected(companyDNS)
+    let active = try! engine.tick(pending)
+    check("(a) \(mode.rawValue) F5 端點撞 DNS 時啟用分流並說明", active.phase == .active && active.message.contains("1.1.1.1 是 VPN 通道端點"))
+    let again = try! engine.tick(active)
+    check("(a) \(mode.rawValue) 作用中重新驗證維持 active 且不重複附註", again.phase == .active && again.message == active.message && runtime.adds == active.addedRoutes.count)
+}
+let onlyEndpoint = dnsError(f5Session(["1.1.1.1"]), f5Connected(["1.1.1.1"]))
+check("(b) 原本 DNS 只有通道端點時拒絕", onlyEndpoint?.contains("全部") == true && onlyEndpoint?.contains("1.1.1.1") == true)
+let coveredOnly = dnsError(f5Session(companyDNS), f5Connected(companyDNS, tunnel: "0/1 10.0.0.127 UScg utun4\n1.1.1/24 10.0.0.127 USc utun4\n10/8 10.0.0.127 UGSc utun4\n128.0/1 10.0.0.127 USc utun4\n"))
+check("(c) 原本 DNS 被一般通道網段接管照舊拒絕並寫出細節", coveredOnly == "原本的 DNS 1.1.1.1 被 utun4 的 1.1.1.0/24 路由接管，未套用分流")
+let coveredEndpoint = dnsError(f5Session(companyDNS), f5Connected(companyDNS, tunnel: f5Tunnel + "\n1.1.1/24 10.0.0.127 USc utun4\n"))
+check("(c) 端點同時被較寬通道網段覆蓋仍拒絕", coveredEndpoint?.contains("原本的 DNS 1.1.1.1 被 utun4") == true)
+let oneWay = dnsError(f5Session(companyDNS), f5Connected(companyDNS, tunnel: "0/1 10.0.0.127 UScg utun4\n1.1.1.1 10.0.0.127 UHr utun4\n10/8 10.0.0.127 UGSc utun4\n128.0/1 10.0.0.127 USc utun4\n"))
+check("(d) 只有單向主機路由不認定為端點且照舊拒絕", oneWay == "原本的 DNS 1.1.1.1 被 utun4 的 1.1.1.1/32 路由接管，未套用分流")
+let otherTunnel = dnsError(f5Session(companyDNS), f5Connected(companyDNS, tunnel: f5Tunnel + "\n1.1.1.1/32 10.0.0.9 USc utun9\n"))
+check("端點另被其他通道介面的 /32 覆蓋時拒絕", otherTunnel != nil)
+let failedRuntime = FakeRuntime(); failedRuntime.state = f5Baseline(["1.1.1.1"])
+let failedF5Engine = ExternalVPNEngine(runtime: failedRuntime)
+let failedF5Pending = try! failedF5Engine.prepare(owner: 501, profile: ExternalVPNProfile())
+failedRuntime.state = f5Connected(["1.1.1.1"])
+let failedF5 = try! failedF5Engine.tick(failedF5Pending)
+check("(b) 只有端點 DNS 時 tick 失敗且零寫入", failedF5.phase == .failed && failedRuntime.adds == 0 && failedRuntime.dnsWrites == 0)
+
 print("通過 \(pass)，失敗 \(fail)")
 exit(fail == 0 ? 0 : 1)
