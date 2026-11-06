@@ -64,6 +64,10 @@ final class PluginRunner: ObservableObject {
             if let t = output?.title, !t.isEmpty { return t }
             return name
         }
+        /// 安裝包保留前一版，versions 底下有多個 digest；只選目前生效版本的 manifest.json
+        var finderSelection: URL {
+            package.map { $0.root.appendingPathComponent("manifest.json") } ?? URL(fileURLWithPath: path)
+        }
         /// 讓選單只顯示原因、不顯示項目的錯誤
         var blocking: String? { problem ?? error }
         /// 選單與設定頁顯示的錯誤原因
@@ -873,6 +877,7 @@ final class PluginRunner: ObservableObject {
         defer { updatingPackages.subtract(ids); scan(); syncTimers() }
         for key in ids { await waitUntilIdle(key) }
         try Task.checkCancellation()
+        let previous = plugins.first(where: { $0.id == id })?.package?.record.manifest
         latestLegacyBackup = try await Task.detached(priority: .utility) { [packageStore, directory, stateRoot] () -> URL? in
             if let legacy {
                 return try PluginLegacyReplacement.commit(prepared, match: legacy, store: packageStore, directory: directory, stateRoot: stateRoot)
@@ -880,6 +885,9 @@ final class PluginRunner: ObservableObject {
             try packageStore.install(prepared, confirmed: true)
             return nil
         }.value
+        if PluginPackage.adoptsRunWhenLocked(prepared.manifest, previous: previous) {
+            preferences.set(backgroundPluginIDs.union([id]).sorted(), forKey: Self.backgroundPluginsKey)
+        }
         if let legacy {
             var disabled = disabledPluginIDs
             if legacy.enabled { disabled.remove(id) } else { disabled.insert(id) }

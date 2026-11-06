@@ -324,6 +324,9 @@ struct PluginPackagePreviewView: View {
                             GridRow { Text("原執行環境").foregroundStyle(.secondary); Text(([old.runtime] + old.dependencies).joined(separator: "、")) }
                         }
                         GridRow { Text("安裝內容").foregroundStyle(.secondary); Text("\(manifest.files.count) 個程式、資源或文件") }
+                        if PluginPackage.adoptsRunWhenLocked(manifest, previous: preview.previous) {
+                            GridRow { Text("鎖定時").foregroundStyle(.secondary); Text("開發者要求鎖定時持續執行，安裝後會開啟；可在「管理」選單關閉") }
+                        }
                     }.font(.callout)
                     Text("作者資訊由開發者自行提供，尚未驗證身分。外掛會以你的使用者身分執行，能存取帳號可讀寫的檔案；只安裝可信任的來源。")
                         .font(.callout).foregroundStyle(.secondary)

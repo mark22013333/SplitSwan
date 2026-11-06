@@ -112,6 +112,9 @@
         }
       }
     },
+    "runWhenLocked": {
+      "type": "boolean"
+    },
     "legacyReplacement": {
       "type": "object",
       "additionalProperties": false,

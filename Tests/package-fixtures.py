@@ -86,6 +86,10 @@ for label,value in [('null',None),('path',{'fileName':'../legacy.sh','sha256s':[
 archive('stored',valid=True,compression=zipfile.ZIP_STORED)
 archive('with-directory',extra=[('resources/',b'',stat.S_IFDIR|0o700)],valid=True)
 new=copy.deepcopy(base);new['version']='1.1.0';new['name']='Updated Fixture';archive('update',new,valid=True)
+locked=copy.deepcopy(base);locked['version']='1.4.0';locked['runWhenLocked']=True;archive('run-when-locked',locked,valid=True)
+lockedNext=copy.deepcopy(locked);lockedNext['version']='1.5.0';archive('run-when-locked-next',lockedNext,valid=True)
+for label,value in [('number',1),('string','true'),('null',None)]:
+    bad=copy.deepcopy(base);bad['runWhenLocked']=value;archive('run-when-locked-'+label,bad)
 same=copy.deepcopy(base);same['description']='Same version changed';archive('same-version',same,valid=True)
 future=copy.deepcopy(base);future['minimumAppVersion']='999.0.0';archive('future',future,valid=False)
 # Python 工具不限制本機 App 版本；原生 App 另行驗證最低版本。

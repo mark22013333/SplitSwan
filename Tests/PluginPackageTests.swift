@@ -74,6 +74,10 @@ check("更新保留啟用狀態與前一版本", updated.enabled && updated.prev
 rejected("降版拒絕") { _ = try store.change(for: first) }
 rejected("舊排隊描述不可在更新後執行") { try installed.check() }
 let current = PluginPackageStore.Installed(store: store, record: updated)
+let shown = PluginRunner.Plugin(id: current.id, package: current, name: "x", interval: 60, path: current.entrypoint).finderSelection
+check("安裝包在 Finder 中選取目前版本的 manifest，不是前一版", shown.lastPathComponent == "manifest.json"
+      && shown.path.contains(updated.digest) && !shown.path.contains(first.digest)
+      && FileManager.default.fileExists(atPath: shown.path))
 let original = try Data(contentsOf: current.root.appendingPathComponent("main.sh"))
 try Data("tampered".utf8).write(to: current.root.appendingPathComponent("main.sh"))
 rejected("程式遭修改阻擋執行") { try current.check() }
@@ -159,6 +163,23 @@ try await runner.installPackage(first)
 check("移除後重新匯入視為新安裝且停用", !runner.plugins.first { $0.id == id }!.isEnabled && (try? String(contentsOf: state.appendingPathComponent("settings.json"), encoding: .utf8)) == "private-state")
 rejected("舊版本移除描述不能移除重新安裝的不同版本") { try runner.packageStore.remove(selected.package!, trash: trash) }
 rejected("移除識別碼不能路徑穿越") { _ = try store.read("../outside") }
+let locked = try PluginPackage.prepare(fixtures.appendingPathComponent("run-when-locked.splitswan-plugin"), appVersion: "1.8.6")
+let lockedNext = try PluginPackage.prepare(fixtures.appendingPathComponent("run-when-locked-next.splitswan-plugin"), appVersion: "1.8.6")
+defer { locked.discard(); lockedNext.discard() }
+let lockedPrefs = UserDefaults(suiteName: "SplitSwan.PackageTests.Locked." + UUID().uuidString)!
+let lockedRunner = PluginRunner(directory: root.appendingPathComponent("missing-legacy"), stateRoot: root.appendingPathComponent("locked-state"), allowInactiveExecution: true, preferences: lockedPrefs, packageRoot: root.appendingPathComponent("locked-packages"), appVersion: "1.8.6")
+let lockedFlag = { lockedRunner.plugins.first { $0.id == id }?.runWhenLocked }
+try await lockedRunner.installPackage(first)
+check("未宣告鎖定時執行的套件維持預設關閉", lockedFlag() == false)
+try await lockedRunner.installPackage(locked)
+check("更新到首次宣告鎖定時執行的版本會開啟", lockedFlag() == true)
+lockedRunner.setRunWhenLocked(id, false)
+try await lockedRunner.installPackage(lockedNext)
+check("使用者關閉後，已宣告的後續更新不改回", lockedFlag() == false)
+let lockedSelected = lockedRunner.plugins.first { $0.id == id }!
+_ = try await lockedRunner.removePlugin(lockedSelected, trash: trash)
+try await lockedRunner.installPackage(lockedNext)
+check("移除後重新安裝宣告的套件會再開啟", lockedFlag() == true)
 // 舊腳本和套件不會自動合併；移除舊腳本只移動入口，不追蹤連結或外部服務。
 let legacyDirectory = root.appendingPathComponent("legacy-remove")
 try fm.createDirectory(at: legacyDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -174,6 +195,7 @@ try await legacyRunner.removePlugin(legacyRunner.plugins[0], trash: trash)
 check("單檔移除不影響周邊資料", legacyRunner.plugins.isEmpty && !fm.fileExists(atPath: legacyEntry.path) && fm.fileExists(atPath: legacyState.appendingPathComponent("settings.json").path))
 try fm.createSymbolicLink(at: legacyEntry, withDestinationURL: legacyState.appendingPathComponent("settings.json"))
 let linked = PluginRunner.Plugin(id: "legacy.1m.sh", name: "Legacy", interval: 60, path: legacyEntry.path)
+check("單檔外掛在 Finder 中選取外掛資料夾內的檔案", linked.finderSelection.path == legacyEntry.path)
 // 掃描只列出可執行目標；讓目標可執行以確認「移除連結本身」的邊界。
 try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: legacyState.appendingPathComponent("settings.json").path)
 legacyRunner.scan()
