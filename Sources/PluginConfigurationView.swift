@@ -196,7 +196,7 @@ final class PluginConfigurationWindows: NSObject, NSWindowDelegate {
             return
         }
         let model = PluginConfigurationModel(pluginID: pluginID)
-        let view = PluginConfigurationView(model: model)
+        let view = PluginConfigurationView(model: model, runner: PluginRunner.shared)
         let window = NSWindow(contentViewController: NSHostingController(rootView: view))
         window.title = "外掛設定：\(pluginID)"
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
@@ -267,9 +267,24 @@ private extension PluginSettingsProtocol.Tone {
     }
 }
 
+/// App 自己的排程選項，不屬於外掛設定協定，所以切換立即生效、不進入儲存／取消流程
+private struct RunWhenLockedToggle: View {
+    @ObservedObject var runner: PluginRunner
+    let pluginID: String
+    var body: some View {
+        let plugin = runner.plugins.first { $0.id == pluginID }
+        Toggle("鎖定時持續執行", isOn: Binding(get: { plugin?.runWhenLocked == true },
+                                          set: { runner.setRunWhenLocked(pluginID, $0) }))
+            .toggleStyle(.switch).controlSize(.small)
+            .disabled(plugin == nil)
+            .help("螢幕鎖定、關閉或螢幕保護程式時照常執行；電腦睡眠時仍會暫停。切換後立即生效，不需儲存。")
+    }
+}
+
 struct PluginConfigurationView: View {
     typealias P = PluginSettingsProtocol
     @ObservedObject var model: PluginConfigurationModel
+    var runner: PluginRunner?
     @State private var confirming: P.Action?
     @State private var stepExpanded: [String: Bool] = [:]
     @State private var editingGuides: Set<String> = []
@@ -288,6 +303,7 @@ struct PluginConfigurationView: View {
                 }
                 Spacer()
                 if model.busy { ProgressView().controlSize(.small).accessibilityLabel("正在載入外掛設定") }
+                if let runner { RunWhenLockedToggle(runner: runner, pluginID: model.pluginID) }
             }
             if let message = model.error {
                 Text(P.displayText(message)).foregroundStyle(.red).textSelection(.enabled)
