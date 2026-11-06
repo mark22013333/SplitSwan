@@ -101,10 +101,12 @@ struct PluginSettingsView: View {
             }
             Spacer()
             Menu("管理") {
-                Toggle("鎖定時持續執行", isOn: Binding(
-                    get: { p.runWhenLocked },
-                    set: { runner.setRunWhenLocked(p.id, $0) }
-                ))
+                if !hasSettingsWindow(p) {
+                    Toggle("鎖定時持續執行", isOn: Binding(
+                        get: { p.runWhenLocked },
+                        set: { runner.setRunWhenLocked(p.id, $0) }
+                    ))
+                }
                 Button("在 Finder 中顯示") { NSWorkspace.shared.activateFileViewerSelecting([p.finderSelection]) }
                 Divider()
                 if let package = p.package {
@@ -114,7 +116,7 @@ struct PluginSettingsView: View {
                 }
                 Button("移除外掛…", role: .destructive) { packages.beginRemoval(p) }
             }.fixedSize().disabled(packages.busy || packages.preview != nil || packages.removal != nil)
-            if p.package.map({ $0.record.manifest.settings }) ?? (p.output?.settingsAvailable == true || !p.isEnabled || !runner.isActive) {
+            if hasSettingsWindow(p) {
                 Button("設定…") { PluginConfigurationWindows.shared.open(pluginID: p.id) }
                     .disabled(p.problem != nil)
             }
@@ -127,6 +129,11 @@ struct PluginSettingsView: View {
             .disabled(p.problem != nil && !p.isEnabled)
             .help(p.isEnabled ? "停用此外掛" : "啟用此外掛")
         }
+    }
+
+    /// 有設定視窗的外掛把「鎖定時持續執行」放在視窗裡，沒有的才留在「管理」選單
+    private func hasSettingsWindow(_ p: PluginRunner.Plugin) -> Bool {
+        p.package.map { $0.record.manifest.settings } ?? (p.output?.settingsAvailable == true || !p.isEnabled || !runner.isActive)
     }
 
     private func statusText(_ p: PluginRunner.Plugin) -> String {

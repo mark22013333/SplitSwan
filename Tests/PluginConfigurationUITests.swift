@@ -321,6 +321,44 @@ func runConfigurationTests() async throws -> Int {
     let contentWidth = manyWindow.contentView?.bounds.width ?? 0
     check("頁籤超出寬度時改用選單，不超出視窗", manySegments.isEmpty && menus.count == 1 && menus[0].numberOfItems == 8
           && windowX(menus[0]) >= 0 && windowX(menus[0]) + menus[0].bounds.width <= contentWidth)
+
+    let fm = FileManager.default
+    let lockedRoot = fm.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("splitswan-locked-" + UUID().uuidString)
+    let lockedPlugins = lockedRoot.appendingPathComponent("plugins")
+    try fm.createDirectory(at: lockedPlugins, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    defer { try? fm.removeItem(at: lockedRoot) }
+    let script = lockedPlugins.appendingPathComponent("locked.1m.sh")
+    try Data("#!/bin/bash\necho x\n".utf8).write(to: script)
+    try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
+    let lockedRunner = PluginRunner(directory: lockedPlugins, stateRoot: lockedRoot.appendingPathComponent("state"),
+                                    preferences: UserDefaults(suiteName: "SplitSwan.ConfigUITests." + UUID().uuidString)!)
+    lockedRunner.scan()
+    let lockedModel = PluginConfigurationModel(pluginID: "locked.1m.sh", command: { _, _ in try manyTabsForm() })
+    let lockedWindow = NSWindow(contentViewController: NSHostingController(rootView: PluginConfigurationView(model: lockedModel, runner: lockedRunner)))
+    lockedWindow.setFrameOrigin(NSPoint(x: -20000, y: -20000))
+    lockedWindow.setContentSize(NSSize(width: 780, height: 680))
+    lockedWindow.orderBack(nil)
+    defer { lockedWindow.orderOut(nil); lockedModel.stop() }
+    func switches() -> [NSControl] {
+        (lockedWindow.contentView.map(descendants) ?? []).compactMap { $0 as? NSControl }
+            .filter { String(describing: type(of: $0)).contains("Switch") && !$0.isHiddenOrHasHiddenAncestor }
+    }
+    for _ in 0..<150 where switches().isEmpty {
+        lockedWindow.contentView?.layoutSubtreeIfNeeded()
+        try? await Task.sleep(for: .milliseconds(20))
+    }
+    let lockedSwitch = switches().first
+    check("外掛設定視窗顯示「鎖定時持續執行」開關，預設關閉", lockedRunner.plugins.count == 1 && lockedSwitch?.isEnabled == true
+          && (lockedSwitch as? NSSwitch)?.state == .off)
+    lockedSwitch?.performClick(nil)
+    for _ in 0..<50 where lockedRunner.plugins.first?.runWhenLocked != true { try? await Task.sleep(for: .milliseconds(20)) }
+    check("切換視窗內的開關立即寫入外掛的鎖定時設定", lockedRunner.plugins.first?.runWhenLocked == true)
+    let plainWindow = NSWindow(contentViewController: NSHostingController(rootView: PluginConfigurationView(model: lockedModel)))
+    plainWindow.setFrameOrigin(NSPoint(x: -20000, y: -20000))
+    plainWindow.orderBack(nil)
+    plainWindow.contentView?.layoutSubtreeIfNeeded()
+    check("沒有 runner 時不顯示開關", !(plainWindow.contentView.map(descendants) ?? []).contains { String(describing: type(of: $0)).contains("Switch") })
+    plainWindow.orderOut(nil)
     print("通過 \(passed)，失敗 \(failed)")
     return failed
 }
