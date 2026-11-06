@@ -363,7 +363,7 @@ func runConfigurationTests() async throws -> Int {
     // MARK: 日期標記編輯器（日期與備註均為虛構）
     let screenshots = URL(fileURLWithPath: CommandLine.arguments[1]).appendingPathComponent("screenshots")
     try fm.createDirectory(at: screenshots, withIntermediateDirectories: true)
-    func datesForm(_ revision: String, _ lines: [String], locked: String? = nil, dates: Bool = true) throws -> P.Snapshot {
+    func datesForm(_ revision: String, _ lines: [String], locked: String? = nil, dates: Bool = true, calendarTitle: String = "範例日曆") throws -> P.Snapshot {
         var field: [String: Any] = [
             "id": "overrides", "tab": "overrides", "title": "手動覆寫", "type": "stringList", "help": "每行一筆：YYYY-MM-DD work|off 備註。",
             "options": [["id": "work", "title": "上班"], ["id": "off", "title": "放假"]]]
@@ -371,7 +371,7 @@ func runConfigurationTests() async throws -> Int {
             field["dates"] = [
                 "today": "2026-11-06", "noteLimit": 20, "maxEntries": 400, "earliest": "2025-11-06", "latest": "2028-11-06",
                 "locked": locked ?? NSNull(), "expiredHelp": "範例：近 45 天內的覆寫仍會影響近期紀錄。",
-                "baseline": ["title": "範例日曆", "weekly": ["off", "work", "work", "work", "work", "work", "off"], "weeklyTitle": "週一至週五",
+                "baseline": ["title": calendarTitle, "weekly": ["off", "work", "work", "work", "work", "work", "off"], "weeklyTitle": "週一至週五",
                              "known": ["from": "2026-01-01", "to": "2026-12-31"],
                              "days": [["date": "2026-11-20", "option": "off", "label": "範例節日"]]]] as [String: Any]
         }
@@ -517,6 +517,14 @@ func runConfigurationTests() async throws -> Int {
     check("locked 時按遍所有按鈕草稿仍不變", lockedDates.draft["overrides"]?.list == initialLines && !lockedDates.dirty)
     capture(lockedDatesWindow, "date-marks-locked")
     closeWindow(lockedDatesWindow, lockedDates)
+
+    // 外掛給的 baseline 標題帶 bidi 反轉（U+202E）與控制字元（U+0007），選取區摘要畫出來前要先濾掉。
+    let hostileSpec = try datesForm("h1", initialLines, calendarTitle: "範例\u{202E}日曆\u{0007}").fields[0].dates!
+    let hostileMarks = try DateMarks(lines: [], optionIDs: ["work", "off"], spec: hostileSpec)
+    let tenth = CalendarDay("2026-11-10")!
+    let summary = DateMarksEditor.summaryText(hostileMarks, of: tenth...tenth, titles: ["work": "上班", "off": "放假"])
+    check("選取區摘要濾掉外掛標題的控制與格式字元（實際 \(summary.unicodeScalars.map { String($0.value, radix: 16) }.joined(separator: " "))）",
+          summary == "原本：上班 1 天（範例日曆）")
 
     print("通過 \(passed)，失敗 \(failed)")
     return failed

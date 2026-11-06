@@ -111,6 +111,9 @@ struct DateMarksEditor: View {
     private func rangeLabel(_ days: ClosedRange<CalendarDay>) -> String {
         days.count == 1 ? dateLabel(days.lowerBound) : "\(dateLabel(days.lowerBound))～\(dateLabel(days.upperBound))"
     }
+    static func summaryText(_ marks: DateMarks, of days: ClosedRange<CalendarDay>, titles: [String: String]) -> String {
+        marks.summary(of: days, titles: titles)
+    }
     private func describe(_ day: CalendarDay, _ marks: DateMarks) -> String {
         let r = marks.resolve(day)
         var parts = [dateLabel(day)]
@@ -164,7 +167,7 @@ struct DateMarksEditor: View {
                 Text(selection.map { "共 \($0.count) 天" } ?? "尚未選取日期").foregroundStyle(.secondary)
             }
             if let selection {
-                Text(marks.summary(of: selection, titles: titles)).font(.callout).foregroundStyle(.secondary)
+                Text(Self.summaryText(marks, of: selection, titles: titles)).font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 10) {
