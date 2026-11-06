@@ -43,6 +43,11 @@ enum PluginPackage {
         let settings: Bool
         let files: [File]
         let legacyReplacement: LegacyReplacement?
+        var runWhenLocked: Bool?
+    }
+    /// 開發者宣告排程需要在鎖定時執行；只在新宣告時套用一次，之後使用者關掉不會被更新改回來
+    static func adoptsRunWhenLocked(_ manifest: Manifest, previous: Manifest?) -> Bool {
+        manifest.runWhenLocked == true && previous?.runWhenLocked != true
     }
     struct Version: Comparable {
         let core: [Int]
@@ -90,7 +95,8 @@ enum PluginPackage {
     private static func decodeValidated(_ data: Data, appVersion: String) throws -> Manifest {
         let required: Set<String> = ["formatVersion", "id", "name", "author", "description", "version", "minimumAppVersion", "entrypoint", "interval", "runtime", "dependencies", "settings", "files"]
         guard data.count <= manifestLimit, let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              required.isSubset(of: Set(object.keys)), Set(object.keys).isSubset(of: required.union(["legacyReplacement"])) else { throw fail(.manifestBadFields) }
+              required.isSubset(of: Set(object.keys)), Set(object.keys).isSubset(of: required.union(["legacyReplacement", "runWhenLocked"])) else { throw fail(.manifestBadFields) }
+        if let flag = object["runWhenLocked"], CFGetTypeID(flag as CFTypeRef) != CFBooleanGetTypeID() { throw fail(.manifestBadFields) }
         if let replacement = object["legacyReplacement"] {
             guard let fields = replacement as? [String: Any], Set(fields.keys) == ["fileName", "sha256s"] else { throw fail(.manifestLegacyDeclaration) }
         }

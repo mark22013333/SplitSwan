@@ -47,7 +47,7 @@ resources/           # 可選，須逐檔列出
 
 ## Manifest
 
-正式結構見 [JSON Schema](plugin-package.schema.json)。v1 基本欄位必填，另支援可選的 `legacyReplacement`；不接受其他未知欄位或安裝鉤子。
+正式結構見 [JSON Schema](plugin-package.schema.json)。v1 基本欄位必填，另支援可選的 `legacyReplacement` 與 `runWhenLocked`；不接受其他未知欄位或安裝鉤子。
 
 | 欄位 | 規則 |
 |---|---|
@@ -61,6 +61,7 @@ resources/           # 可選，須逐檔列出
 | `dependencies` | 其他必要環境名稱，使用相同白名單，最多 5 個，不重複 |
 | `settings` | 是否提供原生設定協定 v1，布林值 |
 | `files` | 每檔 `path`、小寫 SHA-256 `sha256`、布林 `executable`；不含 Manifest 本身 |
+| `runWhenLocked` | 可選布林值。排程必須在螢幕鎖定、關閉或螢幕保護程式時照常執行才設 `true`；安裝或更新到首次宣告的版本時，App 會開啟該外掛的「鎖定時持續執行」，之後使用者關掉不會被更新改回。電腦睡眠時仍會暫停。需要 `minimumAppVersion` 1.9.10 以上 |
 
 入口第一行必須與 runtime 相符且沒有附加參數，例如 `#!/bin/sh`、`#!/usr/bin/env python3`、`#!/usr/bin/env node`。程式直接執行，不將命令與參數拼成 shell 指令。多檔資源透過 `SPLITSWAN_PLUGIN_ROOT` 定位，不依賴目前工作目錄。
 

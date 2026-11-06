@@ -877,6 +877,7 @@ final class PluginRunner: ObservableObject {
         defer { updatingPackages.subtract(ids); scan(); syncTimers() }
         for key in ids { await waitUntilIdle(key) }
         try Task.checkCancellation()
+        let previous = plugins.first(where: { $0.id == id })?.package?.record.manifest
         latestLegacyBackup = try await Task.detached(priority: .utility) { [packageStore, directory, stateRoot] () -> URL? in
             if let legacy {
                 return try PluginLegacyReplacement.commit(prepared, match: legacy, store: packageStore, directory: directory, stateRoot: stateRoot)
@@ -884,6 +885,9 @@ final class PluginRunner: ObservableObject {
             try packageStore.install(prepared, confirmed: true)
             return nil
         }.value
+        if PluginPackage.adoptsRunWhenLocked(prepared.manifest, previous: previous) {
+            preferences.set(backgroundPluginIDs.union([id]).sorted(), forKey: Self.backgroundPluginsKey)
+        }
         if let legacy {
             var disabled = disabledPluginIDs
             if legacy.enabled { disabled.remove(id) } else { disabled.insert(id) }

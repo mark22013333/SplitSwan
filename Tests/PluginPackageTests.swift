@@ -163,6 +163,23 @@ try await runner.installPackage(first)
 check("移除後重新匯入視為新安裝且停用", !runner.plugins.first { $0.id == id }!.isEnabled && (try? String(contentsOf: state.appendingPathComponent("settings.json"), encoding: .utf8)) == "private-state")
 rejected("舊版本移除描述不能移除重新安裝的不同版本") { try runner.packageStore.remove(selected.package!, trash: trash) }
 rejected("移除識別碼不能路徑穿越") { _ = try store.read("../outside") }
+let locked = try PluginPackage.prepare(fixtures.appendingPathComponent("run-when-locked.splitswan-plugin"), appVersion: "1.8.6")
+let lockedNext = try PluginPackage.prepare(fixtures.appendingPathComponent("run-when-locked-next.splitswan-plugin"), appVersion: "1.8.6")
+defer { locked.discard(); lockedNext.discard() }
+let lockedPrefs = UserDefaults(suiteName: "SplitSwan.PackageTests.Locked." + UUID().uuidString)!
+let lockedRunner = PluginRunner(directory: root.appendingPathComponent("missing-legacy"), stateRoot: root.appendingPathComponent("locked-state"), allowInactiveExecution: true, preferences: lockedPrefs, packageRoot: root.appendingPathComponent("locked-packages"), appVersion: "1.8.6")
+let lockedFlag = { lockedRunner.plugins.first { $0.id == id }?.runWhenLocked }
+try await lockedRunner.installPackage(first)
+check("未宣告鎖定時執行的套件維持預設關閉", lockedFlag() == false)
+try await lockedRunner.installPackage(locked)
+check("更新到首次宣告鎖定時執行的版本會開啟", lockedFlag() == true)
+lockedRunner.setRunWhenLocked(id, false)
+try await lockedRunner.installPackage(lockedNext)
+check("使用者關閉後，已宣告的後續更新不改回", lockedFlag() == false)
+let lockedSelected = lockedRunner.plugins.first { $0.id == id }!
+_ = try await lockedRunner.removePlugin(lockedSelected, trash: trash)
+try await lockedRunner.installPackage(lockedNext)
+check("移除後重新安裝宣告的套件會再開啟", lockedFlag() == true)
 // 舊腳本和套件不會自動合併；移除舊腳本只移動入口，不追蹤連結或外部服務。
 let legacyDirectory = root.appendingPathComponent("legacy-remove")
 try fm.createDirectory(at: legacyDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
