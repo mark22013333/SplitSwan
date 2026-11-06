@@ -1306,6 +1306,83 @@ let layoutRejections: [(String, (inout [String: Any]) -> Void)] = [
 for (name, change) in layoutRejections {
     check("分組協定：拒絕\(name)", (try? PluginSettingsProtocol.decode(layoutForm(change))) == nil)
 }
+
+// MARK: 日期標記欄位（dates）
+func datesForm(_ edit: (inout [String: Any]) -> Void = { _ in }) throws -> Data {
+    var field: [String: Any] = [
+        "id": "overrides", "tab": "overrides", "title": "手動覆寫", "type": "stringList", "help": "每行一筆。",
+        "options": [["id": "work", "title": "上班"], ["id": "off", "title": "放假"]],
+        "dates": ["today": "2026-11-06", "noteLimit": 20, "maxEntries": 400, "earliest": "2025-11-06", "latest": "2028-11-06",
+                  "locked": NSNull(), "expiredHelp": "範例說明。",
+                  "baseline": ["title": "範例日曆", "weekly": ["off", "work", "work", "work", "work", "work", "off"], "weeklyTitle": "週一至週五",
+                               "known": ["from": "2026-01-01", "to": "2026-12-31"],
+                               "days": [["date": "2026-10-09", "option": "off", "label": "範例補假"]]]] as [String: Any],
+    ]
+    var object: [String: Any] = [
+        "version": 1, "title": "日期標記", "revision": "r1",
+        "tabs": [["id": "settings", "title": "設定", "groups": [["id": "days", "title": "上班日", "fields": ["aliases"], "actions": ["open"]]]],
+                 ["id": "overrides", "title": "手動覆寫", "hidden": true]],
+        "fields": [["id": "aliases", "tab": "settings", "title": "別名", "type": "stringList"]],
+        "values": ["aliases": ["隨意文字", "", "  不需正規  "],
+                   "overrides": ["2026-11-10 off 員工旅遊", "2026-11-11 off 員工旅遊", "2026-11-21 work 補上班"]],
+        "actions": [["id": "open", "tab": "settings", "title": "管理…", "opensTab": "overrides"]],
+    ]
+    edit(&field)
+    object["fields"] = (object["fields"] as! [[String: Any]]) + [field]
+    edit(&object)
+    return try JSONSerialization.data(withJSONObject: object)
+}
+func datesValue(_ value: inout [String: Any], _ lines: [String]) {
+    guard var values = value["values"] as? [String: Any] else { return }
+    values["overrides"] = lines
+    value["values"] = values
+}
+func datesSpec(_ value: inout [String: Any], _ key: String, _ new: Any) {
+    guard var d = value["dates"] as? [String: Any] else { return }
+    d[key] = new
+    value["dates"] = d
+}
+if let parsed = try? PluginSettingsProtocol.decode(datesForm()),
+   let field = parsed.fields.first(where: { $0.id == "overrides" }), let spec = field.dates {
+    check("日期標記：完整範例解析為型別", spec.today == CalendarDay("2026-11-06") && spec.baseline?.days.first?.label == "範例補假"
+          && spec.locked == nil && parsed.values["overrides"]?.list.count == 3)
+    check("日期標記：沒有 dates 的 stringList 照舊接受任意文字行", parsed.fields.first { $0.id == "aliases" }?.dates == nil
+          && parsed.values["aliases"]?.list == ["隨意文字", "", "  不需正規  "])
+    let again = try? PluginSettingsProtocol.decode(JSONEncoder().encode(parsed))
+    check("日期標記：編碼後再解碼結果相同", again == parsed)
+} else { check("日期標記：完整範例可解析", false) }
+let withoutDates = try datesForm { value in value["dates"] = nil }
+check("日期標記：1.9.11 的形狀（沒有 dates）仍可解碼，覆寫欄位是一般 stringList",
+      (try? PluginSettingsProtocol.decode(withoutDates))?.fields.allSatisfy { $0.dates == nil } == true)
+check("日期標記：沒有 dates 時舊式非正規行照常接受",
+      (try? PluginSettingsProtocol.decode(datesForm { value in value["dates"] = nil; datesValue(&value, ["2026-11-10  off", "壞行"]) })) != nil)
+check("日期標記：空清單可解析", (try? PluginSettingsProtocol.decode(datesForm { datesValue(&$0, []) })) != nil)
+check("日期標記：locked 原因可解析", (try? PluginSettingsProtocol.decode(datesForm { datesSpec(&$0, "locked", "範例：權限不安全") }))?
+      .fields.last?.dates?.locked == "範例：權限不安全")
+let datesRejections: [(String, (inout [String: Any]) -> Void)] = [
+    ("欄位不是 stringList", { if $0["type"] != nil { $0["type"] = "multiselect" } }),
+    ("行不合規", { datesValue(&$0, ["2026-11-10 off 員工旅遊", "2026-11-11 half"]) }),
+    ("不存在的日期", { datesValue(&$0, ["2026-02-30 off"]) }),
+    ("日期重複", { datesValue(&$0, ["2026-11-10 off", "2026-11-10 work"]) }),
+    ("未排序", { datesValue(&$0, ["2026-11-11 off", "2026-11-10 off"]) }),
+    ("備註超長", { datesValue(&$0, ["2026-11-10 off " + String(repeating: "旅", count: 21)]) }),
+    ("備註含 |", { datesValue(&$0, ["2026-11-10 off a|b"]) }),
+    ("today 不是真實日期", { datesSpec(&$0, "today", "2026-02-30") }),
+    ("缺少 today", { datesSpec(&$0, "today", NSNull()) }),
+    ("noteLimit 超出範圍", { datesSpec(&$0, "noteLimit", 61) }),
+    ("maxEntries 超出範圍", { datesSpec(&$0, "maxEntries", 401) }),
+    ("today 晚於 latest", { datesSpec(&$0, "latest", "2026-11-05") }),
+    ("weekly 不是 7 筆", { datesSpec(&$0, "baseline", ["title": "t", "weekly": ["work"], "weeklyTitle": "w", "days": [] as [Any]]) }),
+    ("選項 id 不合規", { if $0["options"] != nil { $0["options"] = [["id": "Work", "title": "上班"], ["id": "off", "title": "放假"]] } }),
+    ("沒有選項", { if $0["options"] != nil { $0["options"] = [] as [Any] } }),
+    ("放進 groups", { value in
+        guard var tabs = value["tabs"] as? [[String: Any]] else { return }
+        tabs[1]["groups"] = [["id": "g", "title": "覆寫", "fields": ["overrides"], "actions": [] as [Any]]]
+        value["tabs"] = tabs }),
+]
+for (name, change) in datesRejections {
+    check("日期標記：整份拒收\(name)", (try? PluginSettingsProtocol.decode(datesForm(change))) == nil)
+}
 for (name, raw) in [
     ("動作參照不存在欄位", settingsRaw.replacingOccurrences(of: "\"afterField\":\"name\"", with: "\"afterField\":\"missing\"")),
     ("未知版本", settingsRaw.replacingOccurrences(of: "\"version\":1", with: "\"version\":2")),

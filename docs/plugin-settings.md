@@ -119,6 +119,58 @@ v1 頁籤可再加入下列選填欄位。舊版 App 忽略它們並照原本方
 
 頂端訊息顯示目前背景工作的 `job.message`。由設定視窗觸發的工作會加上動作標題與觸發時間；工作結束後可關閉訊息，使用者切換到其他頁籤時已成功的訊息自動收起（開窗後第一次進入頁籤不收起），失敗訊息保留到使用者關閉或下一個工作開始。
 
+### 日期標記編輯器（`dates`，選填）
+
+在 `type: "stringList"` 欄位上加 `dates` 物件，新版 App 就會把這個欄位畫成月曆編輯器。舊版 App 會忽略這個鍵，照常畫成多行文字框。不需要提高 `minimumAppVersion`，也沒有能力協商。
+
+- **值**：仍是字串陣列，每個元素是一行正規行：`YYYY-MM-DD <optionId>[ <備註>]`。陣列依日期遞增排序，日期不重複。
+- **正規行文法**：日期必須是真實存在的日期（不接受 2026-02-30），數字只收 `[0-9]`。`optionId` 必須是欄位 `options[].id` 之一。備註為 1～`noteLimit` 個 Unicode scalar，不含 Cc／Cf／Zl／Zp 與 `|`，前後不能有空白，也不能有連續空白或 tab。各部分之間剛好一個半形空白；沒有備註時行尾不留空白。
+- **新版 App 的驗證**：帶 `dates` 的欄位逐行嚴格驗證，任何一行不合規就**整份 snapshot 拒收**（與其他欄位的 decode 規則相同）。值必須由外掛產生，不可直接轉送使用者手寫的內容。早於 `earliest` 的既有行仍可接受，`earliest`／`latest` 只限制新套用的日期。
+- **外掛 save 必須寬鬆解析**：舊版 App 會原樣送回文字框內容，可能有空行、多餘空白、順序錯亂或同日重複。外掛要去頭尾空白、跳過空行、同日以最後一行為準，再正規化；錯誤訊息要附行號。
+- 帶 `dates` 的欄位不可放進 `groups[].fields`，只能放在獨立欄位，編輯器會佔滿整個寬度。新版 App 不顯示這個欄位的 `help`，因為它是寫給舊版文字框的格式說明；給月曆使用者的說明請放在頁籤的 `help`。
+- App 只寫 `draft[fieldID]`，所有修改都走既有的「草稿 → 儲存」流程，不會呼叫外掛動作。新版 App 送出的備註已把任何空白換成一個半形空白並去頭尾。
+
+| 鍵 | 必填 | 規則 | App 怎麼用 |
+|----|------|------|-----------|
+| `options`（Field 既有） | 是 | 1～8 個；id 符合 `[a-z][a-z0-9-]{0,15}` | 分段選擇器；第 0 個在月曆上畫空心圈，其餘畫實心點 |
+| `dates.today` | 是 | `YYYY-MM-DD`，外掛時區的今天 | 區分「即將生效／已過期」與「今」標記；App 不使用本機時鐘 |
+| `dates.noteLimit` | 否 | 1～60，預設 20 | 輸入到上限後無法再輸入，不截斷 |
+| `dates.maxEntries` | 否 | 1～400，預設 400 | 套用後若超過上限，停用「套用」按鈕並說明原因 |
+| `dates.earliest`／`latest` | 否 | `earliest ≤ today ≤ latest` | 限制月曆翻頁範圍與「從／到」可選範圍 |
+| `dates.locked` | 否 | `null` 或 1～200 字的原因 | 有原因時編輯器唯讀，並顯示原因 |
+| `dates.expiredHelp` | 否 | ≤ 200 字 | 「已過期」段首的說明 |
+| `dates.baseline` | 否 | 見下 | 灰字、「原本：…」、預設類型取反 |
+| `baseline.title`／`weeklyTitle` | 是 | 1～40 字 | 「原本：上班（政府日曆）」 |
+| `baseline.weekly` | 是 | 7 個 option id，索引 0＝週日 | `known` 範圍外的日子用它推定 |
+| `baseline.known` | 否 | `{from,to}`，`from ≤ to` | 範圍外顯示「（以週一至週五推定）」 |
+| `baseline.days` | 是 | ≤ 400 筆 `{date, option, label?}`，日期不重複，`label` 1～40 字；只列與 weekly 不同或需要標籤的日子 | 例外日 |
+
+月曆上的灰字代表原本判定不是第 0 個選項。選取的日子原本判定全部相同時，「覆寫為」預設成另一個選項；混合或沒有 `baseline` 時沿用上一次的選擇。
+
+snapshot 片段（日期與備註均為虛構）：
+
+```json
+{
+  "tabs": [ { "id": "overrides", "title": "手動覆寫", "hidden": true,
+              "help": "覆寫優先於政府日曆與週一至週五。「上班」覆寫仍須通過請假檢查。" } ],
+  "actions": [ { "id": "overrides-open", "tab": "settings", "title": "管理…", "opensTab": "overrides" } ],
+  "fields": [ {
+    "id": "overrides", "tab": "overrides", "title": "手動覆寫", "type": "stringList",
+    "help": "每行一筆：YYYY-MM-DD work|off 備註（20 字內）。同一天寫兩行以最後一行為準。更新 SplitSwan 後會改成月曆。",
+    "options": [ { "id": "work", "title": "上班" }, { "id": "off", "title": "放假" } ],
+    "dates": {
+      "today": "2026-11-06", "noteLimit": 20, "maxEntries": 400,
+      "earliest": "2025-11-06", "latest": "2028-11-06", "locked": null,
+      "expiredHelp": "近 45 天內的覆寫仍會影響選單「近期紀錄」的分類。",
+      "baseline": {
+        "title": "政府日曆", "weekly": ["off","work","work","work","work","work","off"],
+        "weeklyTitle": "週一至週五", "known": { "from": "2026-01-01", "to": "2026-12-31" },
+        "days": [ { "date": "2026-10-09", "option": "off", "label": "範例補假" },
+                  { "date": "2026-10-10", "option": "off", "label": "範例節日" } ] } } } ],
+  "values": { "overrides": [ "2026-11-10 off 員工旅遊", "2026-11-11 off 員工旅遊", "2026-11-21 work 補上班" ] }
+}
+```
+
 ## 選單資訊卡片（選填）
 
 標題行可再加 `card=<base64url 編碼的 JSON>`，App 會在此外掛子選單最上方顯示一張不可點的卡片，下方仍是一般輸出列與「開啟設定…」。卡片從 App 1.9.4 起支援，舊版 App 會忽略這個參數。外掛若在有卡片時省略文字列，必須把 `minimumAppVersion` 提高到 1.9.4 以上，否則舊版 App 上狀態資訊會整個消失；要相容舊版 App 就保留文字列。
