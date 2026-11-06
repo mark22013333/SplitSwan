@@ -82,9 +82,24 @@ enum UpdateLogic {
         return nil
     }
 
-    /// 等目前的程序結束後重新開啟 App 的指令（/bin/sh 參數；路徑與 PID 以參數傳入，不拼進指令字串）
-    static func relaunchArguments(pid: Int32, appPath: String) -> [String] {
-        ["-c", "for i in $(seq 1 150); do kill -0 \"$1\" 2>/dev/null || break; sleep 0.2; done; /usr/bin/open \"$2\"",
-         "relaunch", String(pid), appPath]
+    /// 等目前的程序結束後重新開啟 App 的指令（/bin/sh 參數；路徑與 PID 以參數傳入，不拼進指令字串）。
+    /// 舊程序剛結束時 LaunchServices 可能還沒登出它，open 會解析到舊 PID 而回 -600、不產生新程序，
+    /// 所以 open 之後要確認 "$2/Contents/MacOS/" 底下有舊 PID 以外的程序，沒有就重試（8 次，每次等 2 秒）。
+    /// 舊程序逾時仍在時只 open 一次：open 不加 -n，只會啟用舊實例，不會跑出第二個。open 參數只給測試換成假實作。
+    static func relaunchArguments(pid: Int32, appPath: String, open: String = "/usr/bin/open", waitTicks: Int = 150) -> [String] {
+        let script = """
+        i=0; while [ $i -lt "$4" ]; do kill -0 "$1" 2>/dev/null || break; sleep 0.2; i=$((i+1)); done
+        kill -0 "$1" 2>/dev/null && exec "$3" "$2"
+        running() {
+          /bin/ps -axo pid=,comm= | OLD="$1" DIR="$2/Contents/MacOS/" /usr/bin/awk \
+            '$1 != ENVIRON["OLD"] { sub(/^[ \\t]*[0-9]+[ \\t]+/, ""); if (index($0, ENVIRON["DIR"]) == 1) found = 1 } END { exit !found }'
+        }
+        n=0; while [ $n -lt 8 ]; do
+          n=$((n+1)); "$3" "$2"
+          t=0; while [ $t -lt 10 ]; do running "$1" "$2" && exit 0; sleep 0.2; t=$((t+1)); done
+        done
+        exit 1
+        """
+        return ["-c", script, "relaunch", String(pid), appPath, open, String(waitTicks)]
     }
 }

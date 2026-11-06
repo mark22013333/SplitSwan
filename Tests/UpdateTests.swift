@@ -75,7 +75,58 @@ check("位置：不可寫 → 擋下", UpdateLogic.installBlocker(bundlePath: "/
 check("位置：從 dmg 執行 → 擋下", UpdateLogic.installBlocker(bundlePath: "/Volumes/SplitSwan 1.6.1/SplitSwan.app", parentWritable: true) != nil)
 check("位置：App Translocation → 擋下", UpdateLogic.installBlocker(bundlePath: "/private/var/folders/x/AppTranslocation/y/d/SplitSwan.app", parentWritable: true) != nil)
 let ra = UpdateLogic.relaunchArguments(pid: 4242, appPath: "/Applications/My \"App\".app")
-check("重新開啟：PID 與路徑以參數傳入，不拼進指令", ra.count == 5 && ra[0] == "-c" && ra[3] == "4242" && ra[4] == "/Applications/My \"App\".app" && !ra[1].contains("4242"))
+check("重新開啟：PID 與路徑以參數傳入，不拼進指令", ra.count == 7 && ra[0] == "-c" && ra[3] == "4242" && ra[4] == "/Applications/My \"App\".app" && !ra[1].contains("4242"))
+check("重新開啟：正式路徑用 /usr/bin/open、最多等 30 秒", ra[5] == "/usr/bin/open" && ra[6] == "150")
+
+// MARK: 重新開啟腳本實跑（假 open：前 fails 次不產生新程序，第 1 次是 open 本身失敗，之後是 LaunchServices 解析到舊 PID 的 -600）
+struct Relaunch { let dir: URL; let app: URL; let proc: Process; let started: Date }
+func startRelaunch(_ name: String, fails: Int, oldPID: Int32, waitTicks: Int = 150) -> Relaunch {
+    let dir = T.appendingPathComponent("relaunch-\(name)")
+    let app = dir.appendingPathComponent("Fake App.app")
+    let macos = app.appendingPathComponent("Contents/MacOS")
+    try! FileManager.default.createDirectory(at: macos, withIntermediateDirectories: true)
+    try! FileManager.default.copyItem(atPath: "/bin/sleep", toPath: macos.appendingPathComponent("Fake").path)
+    _ = sh("/usr/bin/codesign", ["--force", "--sign", "-", macos.appendingPathComponent("Fake").path])
+    let open = dir.appendingPathComponent("open")
+    try! """
+    #!/bin/sh
+    d=$(dirname "$0"); n=$(( $(cat "$d/count" 2>/dev/null || echo 0) + 1 )); echo $n >| "$d/count"
+    [ "$n" -le \(fails) ] && exit $((n % 2))
+    "$1/Contents/MacOS/Fake" 60 </dev/null >/dev/null 2>&1 &
+    echo $! >> "$d/pids"
+    """.write(to: open, atomically: true, encoding: .utf8)
+    _ = sh("/bin/chmod", ["755", open.path])
+    let p = Process(); p.executableURL = URL(fileURLWithPath: "/bin/sh")
+    p.arguments = UpdateLogic.relaunchArguments(pid: oldPID, appPath: app.path, open: open.path, waitTicks: waitTicks)
+    p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
+    try! p.run()
+    return Relaunch(dir: dir, app: app, proc: p, started: Date())
+}
+func opens(_ r: Relaunch) -> Int { Int((try? String(contentsOf: r.dir.appendingPathComponent("count"), encoding: .utf8))?
+    .trimmingCharacters(in: .whitespacesAndNewlines) ?? "") ?? 0 }
+func spawned(_ r: Relaunch) -> [Int32] { ((try? String(contentsOf: r.dir.appendingPathComponent("pids"), encoding: .utf8)) ?? "")
+    .split(separator: "\n").compactMap { Int32($0) } }
+func finish(_ r: Relaunch) -> TimeInterval {
+    while r.proc.isRunning && Date().timeIntervalSince(r.started) < 60 { usleep(100_000) }
+    return Date().timeIntervalSince(r.started)
+}
+let gone = Process(); gone.executableURL = URL(fileURLWithPath: "/usr/bin/true"); try! gone.run(); gone.waitUntilExit()
+let alive = Process(); alive.executableURL = URL(fileURLWithPath: "/bin/sleep"); alive.arguments = ["30"]; try! alive.run()
+let rOK = startRelaunch("ok", fails: 0, oldPID: gone.processIdentifier)
+let rRace = startRelaunch("race", fails: 2, oldPID: gone.processIdentifier)
+let rNever = startRelaunch("never", fails: 99, oldPID: gone.processIdentifier)
+let rAlive = startRelaunch("alive", fails: 99, oldPID: alive.processIdentifier, waitTicks: 2)
+let aliveTime = finish(rAlive)
+check("重新開啟：舊程序沒結束 → 照舊 open 一次就停，不重試（\(opens(rAlive)) 次、\(Int(aliveTime)) 秒）",
+      opens(rAlive) == 1 && !rAlive.proc.isRunning && aliveTime < 5)
+_ = finish(rOK)
+check("重新開啟：第一次就起來 → 只 open 一次", opens(rOK) == 1 && spawned(rOK).count == 1)
+_ = finish(rRace)
+check("重新開啟：open 失敗、再被解析到舊 PID → 重試到新程序起來（共 3 次）", opens(rRace) == 3 && spawned(rRace).count == 1)
+let neverTime = finish(rNever)
+check("重新開啟：一直沒起來 → 有上限地停止（\(opens(rNever)) 次、\(Int(neverTime)) 秒）",
+      !rNever.proc.isRunning && opens(rNever) == 8 && neverTime < 25)
+for pid in [rOK, rRace].flatMap(spawned) + [alive.processIdentifier] { kill(pid, SIGTERM) }
 
 // MARK: 用假 App 實際跑一次掛載、檢查、複製、替換
 func makeApp(_ dir: URL, id: String, version: String) -> URL {
