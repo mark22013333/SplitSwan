@@ -64,6 +64,10 @@ final class PluginRunner: ObservableObject {
             if let t = output?.title, !t.isEmpty { return t }
             return name
         }
+        /// 安裝包保留前一版，versions 底下有多個 digest；只選目前生效版本的 manifest.json
+        var finderSelection: URL {
+            package.map { $0.root.appendingPathComponent("manifest.json") } ?? URL(fileURLWithPath: path)
+        }
         /// 讓選單只顯示原因、不顯示項目的錯誤
         var blocking: String? { problem ?? error }
         /// 選單與設定頁顯示的錯誤原因

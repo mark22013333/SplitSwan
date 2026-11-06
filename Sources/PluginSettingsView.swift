@@ -105,6 +105,7 @@ struct PluginSettingsView: View {
                     get: { p.runWhenLocked },
                     set: { runner.setRunWhenLocked(p.id, $0) }
                 ))
+                Button("在 Finder 中顯示") { NSWorkspace.shared.activateFileViewerSelecting([p.finderSelection]) }
                 Divider()
                 if let package = p.package {
                     Button("更新…") { packages.choose(updateID: p.id) }

@@ -74,6 +74,10 @@ check("更新保留啟用狀態與前一版本", updated.enabled && updated.prev
 rejected("降版拒絕") { _ = try store.change(for: first) }
 rejected("舊排隊描述不可在更新後執行") { try installed.check() }
 let current = PluginPackageStore.Installed(store: store, record: updated)
+let shown = PluginRunner.Plugin(id: current.id, package: current, name: "x", interval: 60, path: current.entrypoint).finderSelection
+check("安裝包在 Finder 中選取目前版本的 manifest，不是前一版", shown.lastPathComponent == "manifest.json"
+      && shown.path.contains(updated.digest) && !shown.path.contains(first.digest)
+      && FileManager.default.fileExists(atPath: shown.path))
 let original = try Data(contentsOf: current.root.appendingPathComponent("main.sh"))
 try Data("tampered".utf8).write(to: current.root.appendingPathComponent("main.sh"))
 rejected("程式遭修改阻擋執行") { try current.check() }
@@ -174,6 +178,7 @@ try await legacyRunner.removePlugin(legacyRunner.plugins[0], trash: trash)
 check("單檔移除不影響周邊資料", legacyRunner.plugins.isEmpty && !fm.fileExists(atPath: legacyEntry.path) && fm.fileExists(atPath: legacyState.appendingPathComponent("settings.json").path))
 try fm.createSymbolicLink(at: legacyEntry, withDestinationURL: legacyState.appendingPathComponent("settings.json"))
 let linked = PluginRunner.Plugin(id: "legacy.1m.sh", name: "Legacy", interval: 60, path: legacyEntry.path)
+check("單檔外掛在 Finder 中選取外掛資料夾內的檔案", linked.finderSelection.path == legacyEntry.path)
 // 掃描只列出可執行目標；讓目標可執行以確認「移除連結本身」的邊界。
 try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: legacyState.appendingPathComponent("settings.json").path)
 legacyRunner.scan()
