@@ -112,7 +112,7 @@ struct DateMarksEditor: View {
         days.count == 1 ? dateLabel(days.lowerBound) : "\(dateLabel(days.lowerBound))～\(dateLabel(days.upperBound))"
     }
     static func summaryText(_ marks: DateMarks, of days: ClosedRange<CalendarDay>, titles: [String: String]) -> String {
-        marks.summary(of: days, titles: titles)
+        PluginLogic.sanitize(marks.summary(of: days, titles: titles))
     }
     private func describe(_ day: CalendarDay, _ marks: DateMarks) -> String {
         let r = marks.resolve(day)
