@@ -359,6 +359,165 @@ func runConfigurationTests() async throws -> Int {
     plainWindow.contentView?.layoutSubtreeIfNeeded()
     check("沒有 runner 時不顯示開關", !(plainWindow.contentView.map(descendants) ?? []).contains { String(describing: type(of: $0)).contains("Switch") })
     plainWindow.orderOut(nil)
+
+    // MARK: 日期標記編輯器（日期與備註均為虛構）
+    let screenshots = URL(fileURLWithPath: CommandLine.arguments[1]).appendingPathComponent("screenshots")
+    try fm.createDirectory(at: screenshots, withIntermediateDirectories: true)
+    func datesForm(_ revision: String, _ lines: [String], locked: String? = nil, dates: Bool = true) throws -> P.Snapshot {
+        var field: [String: Any] = [
+            "id": "overrides", "tab": "overrides", "title": "手動覆寫", "type": "stringList", "help": "每行一筆：YYYY-MM-DD work|off 備註。",
+            "options": [["id": "work", "title": "上班"], ["id": "off", "title": "放假"]]]
+        if dates {
+            field["dates"] = [
+                "today": "2026-11-06", "noteLimit": 20, "maxEntries": 400, "earliest": "2025-11-06", "latest": "2028-11-06",
+                "locked": locked ?? NSNull(), "expiredHelp": "範例：近 45 天內的覆寫仍會影響近期紀錄。",
+                "baseline": ["title": "範例日曆", "weekly": ["off", "work", "work", "work", "work", "work", "off"], "weeklyTitle": "週一至週五",
+                             "known": ["from": "2026-01-01", "to": "2026-12-31"],
+                             "days": [["date": "2026-11-20", "option": "off", "label": "範例節日"]]]] as [String: Any]
+        }
+        return try P.decode(JSONSerialization.data(withJSONObject: [
+            "version": 1, "title": "日期標記測試", "revision": revision,
+            "tabs": [["id": "overrides", "title": "手動覆寫", "help": "覆寫優先於範例日曆與週一至週五。"]],
+            "fields": [field], "values": ["overrides": lines], "actions": [] as [Any]] as [String: Any]))
+    }
+    let initialLines = ["2026-10-30 off 颱風假", "2026-11-21 work 補上班", "2026-11-24 off 範例活動", "2026-11-25 off 範例活動"]
+    var datesSaved = try datesForm("d1", initialLines)
+    var datesSaves: [[String]] = []
+    let datesModel = PluginConfigurationModel(pluginID: "dates-fixture", command: { operation, request in
+        if operation == "save", let lines = request?.values?["overrides"]?.list {
+            datesSaves.append(lines)
+            datesSaved = try datesForm("d\(datesSaves.count + 1)", lines)
+        }
+        return datesSaved
+    })
+    // 視窗搬移、開關後，WindowServer 會非同步送來 windowMoved 等事件，HIToolbox 收到時會排一個 CFRunLoopStop(main)
+    // 去喚醒 nextEvent。這支測試跑在 async main 的 CFRunLoopRun 而不是 NSApp.run，若事件剛好在 Task.sleep 期間到達，
+    // 主迴圈會被停掉、程式以 0 離開且不印結果。所以每次動到視窗後，先在 nextEvent 迴圈裡把這些事件收完。
+    func drainWindowEvents() {
+        var quietUntil = Date().addingTimeInterval(0.5)
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < quietUntil, Date() < deadline {
+            if let e = NSApp.nextEvent(matching: .any, until: Date().addingTimeInterval(0.02), inMode: .default, dequeue: true) {
+                NSApp.sendEvent(e)
+                quietUntil = Date().addingTimeInterval(0.5)
+            }
+        }
+    }
+    func openWindow(_ m: PluginConfigurationModel, height: CGFloat = 1000) -> NSWindow {
+        let w = NSWindow(contentViewController: NSHostingController(rootView: PluginConfigurationView(model: m)))
+        w.styleMask = [.titled, .closable, .resizable]
+        w.setFrameOrigin(NSPoint(x: -20000, y: -20000))
+        w.setContentSize(NSSize(width: 780, height: height))
+        w.orderBack(nil)
+        drainWindowEvents()
+        return w
+    }
+    func closeWindow(_ w: NSWindow, _ m: PluginConfigurationModel) {
+        w.orderOut(nil)
+        m.stop()
+        drainWindowEvents()
+    }
+    func views(_ w: NSWindow) -> [NSView] { w.contentView.map(descendants) ?? [] }
+    func datePickers(_ w: NSWindow) -> [NSDatePicker] { views(w).compactMap { $0 as? NSDatePicker }.filter { !$0.isHiddenOrHasHiddenAncestor } }
+    func buttons(_ w: NSWindow) -> [NSButton] { views(w).compactMap { $0 as? NSButton }.filter { !$0.isHiddenOrHasHiddenAncestor } }
+    func enabledButtons(_ w: NSWindow) -> Set<ObjectIdentifier> { Set(buttons(w).filter(\.isEnabled).map(ObjectIdentifier.init)) }
+    func settleWindow(_ w: NSWindow, _ ready: () -> Bool) async {
+        let deadline = Date().addingTimeInterval(3)
+        repeat {
+            w.contentView?.layoutSubtreeIfNeeded()
+            if ready() { return }
+            try? await Task.sleep(for: .milliseconds(20))
+        } while Date() < deadline
+    }
+    // 快取繪製不含視窗底色，深色模式下白字會畫在透明底上看不見，所以截圖固定用淺色外觀。
+    func capture(_ w: NSWindow, _ name: String) {
+        w.appearance = NSAppearance(named: .aqua)
+        w.contentView?.layoutSubtreeIfNeeded(); w.displayIfNeeded()
+        guard let content = w.contentView, let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) else {
+            print("⚠️ \(name) 截圖無法建立"); return
+        }
+        content.effectiveAppearance.performAsCurrentDrawingAppearance { content.cacheDisplay(in: content.bounds, to: bitmap) }
+        if (try? bitmap.representation(using: .png, properties: [:])?.write(to: screenshots.appendingPathComponent(name + ".png"))) == nil {
+            print("⚠️ \(name) 截圖無法寫出")
+        }
+    }
+    func pick(_ picker: NSDatePicker, _ text: String) {
+        picker.dateValue = CalendarDay(text)!.date
+        picker.sendAction(picker.action, to: picker.target)
+    }
+
+    let datesWindow = openWindow(datesModel)
+    await settleWindow(datesWindow) { datePickers(datesWindow).count == 2 }
+    check("有 dates 時出現月曆編輯器的「從／到」欄位，不是文字框",
+          datePickers(datesWindow).count == 2 && !views(datesWindow).contains { $0 is NSTextView })
+    check("「從／到」以 UTC 顯示，不受本機時區影響", datePickers(datesWindow).allSatisfy { $0.timeZone?.secondsFromGMT() == 0 })
+    let noteFields = views(datesWindow).compactMap { $0 as? NSTextField }.filter(\.isEditable)
+    if let noteField = noteFields.first, noteFields.count == 1 {
+        datesWindow.makeFirstResponder(noteField)
+        (noteField.currentEditor() as? NSTextView)?.insertText("員工旅遊", replacementRange: NSRange(location: 0, length: 0))
+        await settleWindow(datesWindow) { noteField.stringValue == "員工旅遊" }
+        let before = noteField.stringValue
+        (noteField.currentEditor() as? NSTextView)?.insertText(String(repeating: "長", count: 17), replacementRange: NSRange(location: 4, length: 0))
+        await settleWindow(datesWindow) { noteField.stringValue == before }
+        check("備註到上限後無法再輸入、不截斷（輸入後仍為「\(noteField.stringValue)」）", noteField.stringValue == "員工旅遊")
+        datesWindow.makeFirstResponder(nil)
+    } else { check("備註欄位只有一個（實際 \(noteFields.count)）", false) }
+    let beforeSelection = enabledButtons(datesWindow)
+    let existingBeforeSelection = Set(buttons(datesWindow).map(ObjectIdentifier.init))
+    let rangePickers = datePickers(datesWindow)
+    pick(rangePickers[0], "2026-11-12")
+    pick(rangePickers[1], "2026-11-09")
+    await settleWindow(datesWindow) { enabledButtons(datesWindow).subtracting(beforeSelection).count == 1 }
+    let newlyEnabled = buttons(datesWindow).filter { $0.isEnabled && !beforeSelection.contains(ObjectIdentifier($0)) }
+    check("選取 11/09～11/12（起訖顛倒自動對調）後只多出可按的「套用」", newlyEnabled.count == 1 && !datesModel.dirty)
+    newlyEnabled.first?.performClick(nil)
+    let applied = ["2026-10-30 off 颱風假", "2026-11-09 off 員工旅遊", "2026-11-10 off 員工旅遊", "2026-11-11 off 員工旅遊",
+                   "2026-11-12 off 員工旅遊", "2026-11-21 work 補上班", "2026-11-24 off 範例活動", "2026-11-25 off 範例活動"]
+    await settleWindow(datesWindow) { datesModel.draft["overrides"]?.list == applied }
+    check("套用後草稿是正規行，預設類型取原本判定的反向（上班 → 放假）", datesModel.draft["overrides"]?.list == applied && datesModel.dirty)
+    // 套用前就存在、原本停用的按鈕只有「清除這幾天的覆寫」與視窗底部的「儲存」（位置最低）；清單新增的那段另有自己的展開與移除。
+    let afterApply = buttons(datesWindow).filter { $0.isEnabled && existingBeforeSelection.contains(ObjectIdentifier($0)) && !beforeSelection.contains(ObjectIdentifier($0)) }
+    func windowY(_ v: NSView) -> CGFloat { v.convert(v.bounds, to: nil).minY }
+    let saveButton = afterApply.min { windowY($0) < windowY($1) }
+    let clearButton = afterApply.first { $0 !== saveButton && $0 !== newlyEnabled.first }
+    check("套用後「儲存」與「清除這幾天的覆寫」變成可按（實際 \(afterApply.count) 顆）", afterApply.count == 3 && saveButton != nil && clearButton != nil)
+    clearButton?.performClick(nil)
+    await settleWindow(datesWindow) { !datesModel.dirty }
+    check("清除這幾天的覆寫後回到原本內容，不再有未儲存變更", datesModel.draft["overrides"]?.list == initialLines && !datesModel.dirty)
+    newlyEnabled.first?.performClick(nil)
+    await settleWindow(datesWindow) { datesModel.dirty && saveButton?.isEnabled == true }
+    saveButton?.performClick(nil)
+    await settleWindow(datesWindow) { datesSaves.count == 1 && !datesModel.dirty }
+    check("按「儲存」送出正規行，草稿換成外掛回傳的值", datesSaves == [applied] && datesModel.snapshot?.revision == "d2"
+          && datesModel.draft["overrides"]?.list == applied && !datesModel.dirty)
+    capture(datesWindow, "date-marks-editor")
+    closeWindow(datesWindow, datesModel)
+
+    let legacyDates = PluginConfigurationModel(pluginID: "dates-legacy", command: { _, _ in try datesForm("x1", initialLines, dates: false) })
+    let legacyDatesWindow = openWindow(legacyDates, height: 600)
+    await settleWindow(legacyDatesWindow) { views(legacyDatesWindow).contains { $0 is NSTextView } }
+    let legacyEditor = views(legacyDatesWindow).compactMap { $0 as? NSTextView }.first
+    check("沒有 dates 時仍是多行文字框", legacyEditor?.string == initialLines.joined(separator: "\n") && datePickers(legacyDatesWindow).isEmpty)
+    capture(legacyDatesWindow, "date-marks-legacy")
+    closeWindow(legacyDatesWindow, legacyDates)
+
+    let lockedDates = PluginConfigurationModel(pluginID: "dates-locked", command: { _, _ in
+        try datesForm("l1", initialLines, locked: "範例：覆寫檔權限不安全，請在終端機執行 chmod go-w 修正。")
+    })
+    let lockedDatesWindow = openWindow(lockedDates, height: 760)
+    await settleWindow(lockedDatesWindow) { datePickers(lockedDatesWindow).count == 2 }
+    check("locked 時「從／到」與備註都不可編輯", datePickers(lockedDatesWindow).count == 2
+          && datePickers(lockedDatesWindow).allSatisfy { !$0.isEnabled }
+          && views(lockedDatesWindow).compactMap { $0 as? NSTextField }.filter(\.isEditable).allSatisfy { !$0.isEnabled })
+    for picker in datePickers(lockedDatesWindow) { pick(picker, "2026-11-10") }
+    // 只按編輯器內的按鈕；視窗底部的「重新載入／取消／儲存」屬於視窗流程，不在這裡驗證。
+    for button in buttons(lockedDatesWindow) where windowY(button) > 60 { button.performClick(nil) }
+    await settleWindow(lockedDatesWindow) { !lockedDates.busy }
+    check("locked 時仍可翻月瀏覽（按過上個月、下個月、今天後編輯器仍在）", datePickers(lockedDatesWindow).count == 2)
+    check("locked 時按遍所有按鈕草稿仍不變", lockedDates.draft["overrides"]?.list == initialLines && !lockedDates.dirty)
+    capture(lockedDatesWindow, "date-marks-locked")
+    closeWindow(lockedDatesWindow, lockedDates)
+
     print("通過 \(passed)，失敗 \(failed)")
     return failed
 }
