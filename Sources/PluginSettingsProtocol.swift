@@ -107,6 +107,8 @@ enum PluginSettingsProtocol {
         let type: String
         let help: String?
         let options: [Option]?
+        /// 只用於 stringList：新版 App 畫成月曆編輯器，舊版 App 忽略此鍵、照常畫成多行文字框。
+        var dates: PluginDateSpec? = nil
     }
     struct Action: Codable, Equatable, Identifiable {
         let id: String
@@ -198,6 +200,16 @@ enum PluginSettingsProtocol {
             case ("secret", .text(let value)) where value.isEmpty: break
             default: throw Problem(message: "外掛設定欄位值型別不正確")
             }
+            if let spec = f.dates {
+                do {
+                    guard f.type == "stringList" else { throw DateMarksError("只有 stringList 欄位可以使用 dates") }
+                    let ids = options.map(\.id)
+                    try spec.validate(optionIDs: ids)
+                    _ = try DateMarks(lines: v.list, optionIDs: ids, spec: spec)
+                } catch {
+                    throw Problem(message: "外掛設定的日期標記不正確：\(error.localizedDescription)")
+                }
+            }
         }
         for tab in s.tabs {
             guard let guide = tab.guide else { continue }
@@ -262,7 +274,7 @@ enum PluginSettingsProtocol {
                 let rows = group.rows ?? []
                 guard validID(group.id), text(group.title, 60), optional(group.help, 2000), rows.count <= 12,
                       rows.allSatisfy({ text($0.label, 40) && $0.value.count <= 300 }),
-                      group.fields.allSatisfy({ fields[$0] != nil }),
+                      group.fields.allSatisfy({ fields[$0] != nil && fields[$0]?.dates == nil }),
                       group.memberActions.allSatisfy(actionIDs.contains) else { throw fail }
                 placedFields += group.fields
                 placedActions += group.memberActions

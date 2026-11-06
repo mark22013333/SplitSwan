@@ -581,6 +581,9 @@ struct PluginConfigurationView: View {
     private func textBinding(_ id: String) -> Binding<String> {
         Binding(get: { model.draft[id]?.text ?? "" }, set: { model.draft[id] = .text($0) })
     }
+    private func listBinding(_ id: String) -> Binding<[String]> {
+        Binding(get: { model.draft[id]?.list ?? [] }, set: { model.draft[id] = .list($0) })
+    }
     private func flagBinding(_ id: String) -> Binding<Bool> {
         Binding(get: { model.draft[id]?.flag ?? false }, set: { model.draft[id] = .flag($0) })
     }
@@ -714,6 +717,8 @@ struct PluginConfigurationView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(minHeight: 28).frame(maxWidth: compact ? 300 : .infinity)
                 .accessibilityLabel(label(f.title))
+        case "stringList" where f.dates != nil:
+            DateMarksEditor(field: f, spec: f.dates!, lines: listBinding(f.id), locked: locked || f.dates?.locked != nil)
         case "stringList":
             TextEditor(text: Binding(get: { (model.draft[f.id]?.list ?? []).joined(separator: "\n") }, set: {
                 model.draft[f.id] = .list($0.components(separatedBy: "\n"))
@@ -750,7 +755,8 @@ struct PluginConfigurationView: View {
                 Text(label(f.title)).font(.headline)
                 control(f)
             }
-            if let help = f.help { Text(P.displayText(help)).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+            // 日期欄位的 help 是寫給舊版 App 文字框的格式說明，月曆不需要。
+            if let help = f.help, f.dates == nil { Text(P.displayText(help)).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
         }
         // 重新排版時，單行原生控制項的高度不能被壓縮為零。
         .fixedSize(horizontal: false, vertical: true)
