@@ -17,6 +17,7 @@ final class ExternalVPNController: ObservableObject {
     private var monitor: Task<Void, Never>?
     private var monitorGeneration: UInt = 0
     private var stopping = false
+    private var busyRecheck: Task<Void, Never>?
     var willStop: () -> Void = {}
 
     var canConnectCompany: Bool { !busy && status.busy != true && companyPolicyAllowsConnection }
@@ -102,6 +103,18 @@ final class ExternalVPNController: ObservableObject {
         }
     }
 
+    // 公司連線的 root 操作（啟動時的 log-ready、reload-settings）與分流共用一把鎖；撞鎖時沒有其他操作會清掉 busy，要自己重查。
+    private func scheduleBusyRecheck() {
+        guard busyRecheck == nil else { return }
+        busyRecheck = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard let self else { return }
+            self.busyRecheck = nil
+            guard self.status.busy == true, !self.stopping else { return }
+            await self.refresh()
+        }
+    }
+
     private static func failureRecorder(_ directory: URL) -> (String) -> Void {
         { statusJSON in
             Task.detached(priority: .utility) {
@@ -120,6 +133,7 @@ final class ExternalVPNController: ObservableObject {
         if let data = output.data(using: .utf8), var decoded = try? JSONDecoder().decode(ExternalVPNStatus.self, from: data) {
             if decoded.busy == true {
                 status.busy = true
+                scheduleBusyRecheck()
                 return
             }
             if code != 0, isManaging, decoded.phase == .failed, decoded.canRetry != true {

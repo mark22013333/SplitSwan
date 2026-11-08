@@ -215,6 +215,19 @@ func runExternalUI() async throws -> Int {
     await dualModel.stop()
     check("停止先取消重連意圖並等 root busy 後復原", stopNotified && stopAttempts == 2 && dualModel.status.phase == .idle)
     check("明確復原至閒置後恢復獨立公司連線許可", dualModel.companyPolicyAllowsConnection)
+    var launchStatusCalls = 0
+    let launchModel = ExternalVPNController(preferences: preferences, autoRefresh: false) { operation, _ in
+        var response = ExternalVPNStatus.idle
+        if operation == "status" {
+            launchStatusCalls += 1
+            if launchStatusCalls == 1 { response.busy = true }
+        }
+        return (0, String(decoding: try! JSONEncoder().encode(response), as: UTF8.self))
+    }
+    await launchModel.refresh()
+    check("啟動查詢撞上公司操作的鎖時暫時阻擋連線", launchModel.status.busy == true && !launchModel.canConnectCompany)
+    await settle { launchModel.canConnectCompany }
+    check("鎖放開後自動重查，不必手動開始再停止分流", launchModel.canConnectCompany && launchStatusCalls >= 2)
     let root = URL(fileURLWithPath: CommandLine.arguments[1]).appendingPathComponent("screenshots")
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     try JSONSerialization.data(withJSONObject: menuEvidence, options: [.prettyPrinted, .sortedKeys]).write(to: root.appendingPathComponent("external-vpn-menu.json"))
