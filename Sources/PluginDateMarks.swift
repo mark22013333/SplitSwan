@@ -219,39 +219,86 @@ struct DateMarks: Equatable, Sendable {
 
     /// 同日已有覆寫就取代（最後一次套用為準）。範圍外、選項不存在、備註不合規或超過上限就 throw，內容不變。
     mutating func apply(option: String, note: String, to days: ClosedRange<CalendarDay>) throws {
+        let note = try validated(option: option, note: note)
+        guard Self.range(from: days.lowerBound, to: days.upperBound, spec: spec) == days else {
+            throw DateMarksError("日期超出可設定的範圍")
+        }
+        try replace(Array(days), option: option, note: note)
+    }
+
+    struct WeeklyResult: Equatable { let applied: [CalendarDay]; let skipped: [CalendarDay] }
+    /// 從 `from` 起、到 `until` 前一天為止（`until` 當天不套用），把勾選星期的日子設成同一個覆寫；已有覆寫的日子略過。
+    @discardableResult
+    mutating func applyWeekly(option: String, note: String, weekdays: Set<Int>, from: CalendarDay, until: CalendarDay) throws -> WeeklyResult {
+        let note = try validated(option: option, note: note)
+        guard !weekdays.isEmpty else { throw DateMarksError("請至少勾選一個星期") }
+        guard from < until else { throw DateMarksError("結束日期必須晚於開始日期") }
+        guard Self.range(from: from, to: until.adding(days: -1), spec: spec) != nil else { throw DateMarksError("日期超出可設定的範圍") }
+        let candidates = (from..<until).filter { weekdays.contains($0.weekday) }
+        let marked = Set(marks.map(\.day))
+        let result = WeeklyResult(applied: candidates.filter { !marked.contains($0) }, skipped: candidates.filter(marked.contains))
+        guard !result.applied.isEmpty else {
+            throw DateMarksError(candidates.isEmpty ? "這段期間沒有勾選的星期" : "這段期間勾選的日子都已有覆寫")
+        }
+        try replace(result.applied, option: option, note: note)
+        return result
+    }
+
+    private func validated(option: String, note: String) throws -> String {
         guard optionIDs.contains(option) else { throw DateMarksError("沒有這個覆寫類型") }
         let note = Self.normalizedNote(note)
         guard note.unicodeScalars.count <= spec.effectiveNoteLimit else { throw DateMarksError("備註最多 \(spec.effectiveNoteLimit) 個字") }
         guard Self.validNote(note, limit: spec.effectiveNoteLimit) else { throw DateMarksError("備註不能包含「|」或控制字元") }
-        guard Self.range(from: days.lowerBound, to: days.upperBound, spec: spec) == days else {
-            throw DateMarksError("日期超出可設定的範圍")
-        }
-        let kept = marks.filter { !days.contains($0.day) }
-        guard kept.count + days.count <= spec.effectiveMaxEntries else {
+        return note
+    }
+    private mutating func replace(_ days: [CalendarDay], option: String, note: String) throws {
+        let targets = Set(days)
+        let kept = marks.filter { !targets.contains($0.day) }
+        guard kept.count + targets.count <= spec.effectiveMaxEntries else {
             throw DateMarksError("套用後會超過 \(spec.effectiveMaxEntries) 筆上限，請先清除已過期或不需要的覆寫")
         }
-        marks = (kept + days.map { DateMark(day: $0, option: option, note: note) }).sorted { $0.day < $1.day }
+        marks = (kept + targets.map { DateMark(day: $0, option: option, note: note) }).sorted { $0.day < $1.day }
     }
-    mutating func remove(_ days: ClosedRange<CalendarDay>) { marks.removeAll { days.contains($0.day) } }
+    mutating func remove<S: Sequence>(_ days: S) where S.Element == CalendarDay {
+        let targets = Set(days)
+        marks.removeAll { targets.contains($0.day) }
+    }
     mutating func remove(_ day: CalendarDay) { marks.removeAll { $0.day == day } }
     mutating func removeExpired() { marks.removeAll { $0.day < spec.today } }
 
     struct Run: Equatable {
-        let days: ClosedRange<CalendarDay>; let option: String; let note: String; let base: [Resolution.Base?]
+        let days: [CalendarDay]; let option: String; let note: String; let base: [Resolution.Base?]
+        /// 每週重複：至少兩天、彼此相隔 7 天。
+        var weekly: Bool { days.count > 1 && days[1] == days[0].adding(days: 7) }
     }
-    /// 連續日期、同類型、同備註合成一段；跨越「今天」的段落在今天切開，過去的部分歸入已過期。
+    /// 連續日期、同類型、同備註合成一段；剩下的單日若同類型、同備註且剛好相隔 7 天，再合成每週一段。
+    /// 跨越「今天」的段落在今天切開，過去的部分歸入已過期。
     func runs() -> (upcoming: [Run], expired: [Run]) {
-        var spans: [(days: ClosedRange<CalendarDay>, option: String, note: String)] = []
+        typealias Span = (days: [CalendarDay], option: String, note: String)
+        func expired(_ day: CalendarDay) -> Bool { day < spec.today }
+        var spans: [Span] = []
         for m in marks {
-            if let last = spans.last, last.days.upperBound.adding(days: 1) == m.day, last.option == m.option,
-               last.note == m.note, (last.days.upperBound < spec.today) == (m.day < spec.today) {
-                spans[spans.count - 1].days = last.days.lowerBound...m.day
+            if let last = spans.last?.days.last, last.adding(days: 1) == m.day, spans[spans.count - 1].option == m.option,
+               spans[spans.count - 1].note == m.note, expired(last) == expired(m.day) {
+                spans[spans.count - 1].days.append(m.day)
             } else {
-                spans.append((m.day...m.day, m.option, m.note))
+                spans.append(([m.day], m.option, m.note))
             }
         }
-        let all = spans.map { Run(days: $0.days, option: $0.option, note: $0.note, base: $0.days.map { resolve($0).base }) }
-        return (all.filter { $0.days.lowerBound >= spec.today }, all.filter { $0.days.lowerBound < spec.today })
+        var grouped: [Span] = []
+        var open: [String: Int] = [:]
+        for span in spans {
+            guard span.days.count == 1, let day = span.days.first else { grouped.append(span); continue }
+            let key = "\(span.option)|\(span.note)|\(day.weekday)|\(expired(day))"
+            if let i = open[key], grouped[i].days.last?.adding(days: 7) == day {
+                grouped[i].days.append(day)
+            } else {
+                open[key] = grouped.count
+                grouped.append(span)
+            }
+        }
+        let all = grouped.map { Run(days: $0.days, option: $0.option, note: $0.note, base: $0.days.map { resolve($0).base }) }
+        return (all.filter { !expired($0.days[0]) }, all.filter { expired($0.days[0]) })
     }
 
     func mark(on day: CalendarDay) -> DateMark? { marks.first { $0.day == day } }
