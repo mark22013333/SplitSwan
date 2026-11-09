@@ -134,9 +134,9 @@ let history = marks(["2026-07-31 work 盤點", "2026-08-01 work 盤點", "2026-1
                      "2026-11-10 off 員工旅遊", "2026-11-11 off 員工旅遊", "2026-11-12 off 員工旅遊",
                      "2026-11-13 off 其他", "2026-11-14 work 員工旅遊", "2026-11-21 work 補上班"])!
 let (upcoming, expired) = history.runs()
-check("分段：連續、同類型、同備註合成一段，其他條件不同就切開", upcoming.map { "\($0.days.lowerBound)~\($0.days.upperBound)" }
+check("分段：連續、同類型、同備註合成一段，其他條件不同就切開", upcoming.map { "\($0.days.first!)~\($0.days.last!)" }
       == ["2026-11-06~2026-11-07", "2026-11-10~2026-11-12", "2026-11-13~2026-11-13", "2026-11-14~2026-11-14", "2026-11-21~2026-11-21"])
-check("分段：今天以前歸入已過期，跨今天的段落在今天切開", expired.map { "\($0.days.lowerBound)~\($0.days.upperBound)" }
+check("分段：今天以前歸入已過期，跨今天的段落在今天切開", expired.map { "\($0.days.first!)~\($0.days.last!)" }
       == ["2026-07-31~2026-08-01", "2026-10-30~2026-10-30", "2026-11-05~2026-11-05"])
 check("分段：每段附逐日原本判定", upcoming[1].base.map { $0?.option } == ["work", "work", "work"] && upcoming[1].base.count == 3)
 var cleaned = history
@@ -170,6 +170,50 @@ check("從／到：起訖顛倒自動對調", DateMarks.range(from: day("2026-11
 check("從／到：超出 earliest／latest 回 nil", DateMarks.range(from: day("2025-11-05"), to: day("2026-11-09"), spec: spec) == nil
       && DateMarks.range(from: day("2026-11-09"), to: day("2028-11-07"), spec: spec) == nil
       && DateMarks.range(from: day("2025-11-06"), to: day("2028-11-06"), spec: spec) != nil)
+
+// MARK: 每週重複
+func fridays(_ m: DateMarks) -> [String] { m.marks.filter { $0.note == "讀書會" }.map(\.day.description) }
+var weekly = marks(sample)!
+let fri = try weekly.applyWeekly(option: "off", note: "讀書會", weekdays: [5], from: day("2026-11-06"), until: day("2026-11-27"))
+check("每週：結束日期當天不套用", fridays(weekly) == ["2026-11-06", "2026-11-13", "2026-11-20"] && fri.applied.count == 3 && fri.skipped.isEmpty)
+var multi = marks(sample)!
+let tt = try multi.applyWeekly(option: "work", note: "支援", weekdays: [2, 4], from: day("2026-11-09"), until: day("2026-11-20"))
+check("每週：多個星期，已有覆寫的日子略過並保留原設定", tt.applied.map(\.description) == ["2026-11-12", "2026-11-17", "2026-11-19"]
+      && tt.skipped == [day("2026-11-10")] && multi.mark(on: day("2026-11-10"))?.note == "員工旅遊")
+var edge = marks([])!
+try edge.applyWeekly(option: "off", note: "", weekdays: [1], from: day("2028-10-30"), until: day("2028-11-07"))
+check("每週：結束日期可設在 latest 隔天，latest 當天仍套用", edge.lines == ["2028-10-30 off", "2028-11-06 off"])
+func weeklyRejects(_ name: String, _ body: (inout DateMarks) throws -> Void) {
+    var m = marks(sample)!
+    let before = m
+    let threw = (try? body(&m)) == nil
+    check("每週拒絕：\(name)，內容不變", threw && m == before)
+}
+weeklyRejects("沒選星期") { try $0.applyWeekly(option: "off", note: "", weekdays: [], from: day("2026-11-06"), until: day("2026-12-06")) }
+weeklyRejects("結束日期不晚於開始日期") { try $0.applyWeekly(option: "off", note: "", weekdays: [5], from: day("2026-11-13"), until: day("2026-11-13")) }
+weeklyRejects("開始日期早於 earliest") { try $0.applyWeekly(option: "off", note: "", weekdays: [5], from: day("2025-11-05"), until: day("2025-12-06")) }
+weeklyRejects("結束日期超過 latest 隔天") { try $0.applyWeekly(option: "off", note: "", weekdays: [5], from: day("2028-10-30"), until: day("2028-11-08")) }
+weeklyRejects("期間內每一天都已有覆寫") { try $0.applyWeekly(option: "off", note: "", weekdays: [2, 3], from: day("2026-11-09"), until: day("2026-11-12")) }
+weeklyRejects("期間內沒有勾選的星期") { try $0.applyWeekly(option: "off", note: "", weekdays: [0], from: day("2026-11-09"), until: day("2026-11-14")) }
+weeklyRejects("備註含「|」") { try $0.applyWeekly(option: "off", note: "a|b", weekdays: [5], from: day("2026-11-06"), until: day("2026-12-06")) }
+weeklyRejects("未知類型") { try $0.applyWeekly(option: "half", note: "", weekdays: [5], from: day("2026-11-06"), until: day("2026-12-06")) }
+weeklyRejects("超過筆數上限") { try $0.applyWeekly(option: "off", note: "", weekdays: Set(0...6), from: day("2026-11-06"), until: day("2028-11-06")) }
+
+// MARK: 每週分段與整串移除
+var series = marks(sample)!
+try series.applyWeekly(option: "off", note: "讀書會", weekdays: [5], from: day("2026-11-13"), until: day("2026-12-12"))
+try series.apply(option: "off", note: "讀書會", to: days("2027-01-01", "2027-01-01"))
+try series.apply(option: "work", note: "讀書會", to: days("2027-01-08", "2027-01-08"))
+let seriesRuns = series.runs().upcoming
+let fridayRun = seriesRuns.first { $0.weekly }
+check("分段：同類型同備註、隔 7 天的單日合成每週一段", fridayRun?.days.map(\.description) == ["2026-11-13", "2026-11-20", "2026-11-27", "2026-12-04", "2026-12-11"])
+check("分段：連續區間與單日不受影響，隔超過 7 天或類型不同不合併", seriesRuns.filter { $0.weekly }.count == 1
+      && seriesRuns.map { $0.days.count } == [2, 5, 1, 1, 1, 1] && seriesRuns.map { $0.days.first!.description }
+      == ["2026-11-10", "2026-11-13", "2026-11-21", "2026-11-30", "2027-01-01", "2027-01-08"])
+check("分段：每週段落附逐日原本判定", fridayRun?.base.count == 5)
+var removedSeries = series
+removedSeries.remove(fridayRun!.days)
+check("移除：整串每週覆寫一次刪掉，其他覆寫保留", fridays(removedSeries) == ["2027-01-01", "2027-01-08"] && removedSeries.marks.count == 6)
 
 print("通過 \(pass)，失敗 \(fail)")
 exit(fail == 0 ? 0 : 1)

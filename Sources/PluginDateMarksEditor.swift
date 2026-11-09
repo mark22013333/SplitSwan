@@ -16,6 +16,10 @@ struct DateMarksEditor: View {
     @State private var note = ""
     @State private var expanded: Set<CalendarDay> = []
     @State private var showExpired = false
+    @State private var repeatWeekly = false
+    @State private var weekdays: Set<Int> = []
+    @State private var weeklyFrom: CalendarDay
+    @State private var weeklyUntil: CalendarDay
 
     init(field: P.Field, spec: PluginDateSpec, lines: Binding<[String]>, locked: Bool) {
         self.field = field
@@ -24,6 +28,9 @@ struct DateMarksEditor: View {
         self.locked = locked
         _month = State(initialValue: spec.today.monthStart)
         _option = State(initialValue: field.options?.first?.id ?? "")
+        _weeklyFrom = State(initialValue: spec.today)
+        let fourWeeks = spec.today.adding(days: 28)
+        _weeklyUntil = State(initialValue: spec.latest.map { min(fourWeeks, $0.adding(days: 1)) } ?? fourWeeks)
     }
 
     private var options: [P.Option] { field.options ?? [] }
@@ -40,22 +47,37 @@ struct DateMarksEditor: View {
         }
     }
 
+    private struct Preview { var next: DateMarks; var weekly: DateMarks.WeeklyResult?; var problem: String? }
+    private func preview(_ marks: DateMarks) -> Preview {
+        var next = marks
+        do {
+            if repeatWeekly {
+                let result = try next.applyWeekly(option: option, note: note, weekdays: weekdays, from: weeklyFrom, until: weeklyUntil)
+                return Preview(next: next, weekly: result)
+            }
+            if let selection { try next.apply(option: option, note: note, to: selection) }
+            return Preview(next: next)
+        } catch { return Preview(next: marks, problem: error.localizedDescription) }
+    }
+
     private func editor(_ marks: DateMarks) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
+        let preview = preview(marks)
+        let highlighted = repeatWeekly ? Set(preview.weekly?.applied ?? []) : Set(selection.map(Array.init) ?? [])
+        return VStack(alignment: .leading, spacing: 14) {
             if let reason = spec.locked {
                 Label(P.displayText(reason), systemImage: "lock.fill")
                     .font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
             }
             monthHeader
             HStack(alignment: .top, spacing: 20) {
-                MonthGrid(month: month, marks: marks, selection: selection, optionIDs: options.map(\.id),
+                MonthGrid(month: month, marks: marks, highlighted: highlighted, optionIDs: options.map(\.id),
                           describe: { describe($0, marks) }, onTap: tap)
                     .frame(maxWidth: 420)
                     .disabled(locked)
                 legend
             }
             Divider()
-            selectionPanel(marks).disabled(locked)
+            selectionPanel(marks, preview).disabled(locked)
             Divider()
             list(marks)
         }
@@ -96,6 +118,7 @@ struct DateMarksEditor: View {
     }
 
     private func tap(_ day: CalendarDay, extend: Bool) {
+        repeatWeekly = false
         if extend, let start = anchor ?? selection?.lowerBound {
             selection = DateMarks.range(from: start, to: day, spec: spec) ?? selection
         } else {
@@ -108,8 +131,12 @@ struct DateMarksEditor: View {
         let prefix = day.year == spec.today.year ? "" : "\(day.year)/"
         return "\(prefix)\(day.month)/\(day.day)（\(Self.weekdays[day.weekday])）"
     }
-    private func rangeLabel(_ days: ClosedRange<CalendarDay>) -> String {
-        days.count == 1 ? dateLabel(days.lowerBound) : "\(dateLabel(days.lowerBound))～\(dateLabel(days.upperBound))"
+    private func rangeLabel(_ days: [CalendarDay]) -> String {
+        guard let first = days.first, let last = days.last else { return "" }
+        return first == last ? dateLabel(first) : "\(dateLabel(first))～\(dateLabel(last))"
+    }
+    private func runLabel(_ run: DateMarks.Run) -> String {
+        run.weekly ? "每週\(Self.weekdays[run.days[0].weekday]) \(rangeLabel(run.days))（\(run.days.count) 天）" : rangeLabel(run.days)
     }
     static func summaryText(_ marks: DateMarks, of days: ClosedRange<CalendarDay>, titles: [String: String]) -> String {
         PluginLogic.sanitize(marks.summary(of: days, titles: titles))
@@ -134,9 +161,9 @@ struct DateMarksEditor: View {
             month = picked.monthStart
         })
     }
-    @ViewBuilder private func dayPicker(_ label: String, _ binding: Binding<Date>) -> some View {
+    @ViewBuilder private func dayPicker(_ label: String, _ binding: Binding<Date>, in lower: CalendarDay?, _ upper: CalendarDay?) -> some View {
         let picker: some View = Group {
-            switch (spec.earliest, spec.latest) {
+            switch (lower, upper) {
             case let (e?, l?): DatePicker(label, selection: binding, in: e.date...l.date, displayedComponents: .date)
             case let (e?, nil): DatePicker(label, selection: binding, in: e.date..., displayedComponents: .date)
             case let (nil, l?): DatePicker(label, selection: binding, in: ...l.date, displayedComponents: .date)
@@ -152,23 +179,65 @@ struct DateMarksEditor: View {
         }
     }
 
-    private func selectionPanel(_ marks: DateMarks) -> some View {
-        let limit = spec.effectiveNoteLimit
-        var preview = marks
-        var problem: String?
-        if let selection {
-            do { try preview.apply(option: option, note: note, to: selection) } catch { problem = error.localizedDescription }
-        }
-        let marked = selection.map { s in marks.marks.contains { s.contains($0.day) } } ?? false
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 14) {
-                dayPicker("從", dayBinding(\.lowerBound, isStart: true))
-                dayPicker("到", dayBinding(\.upperBound, isStart: false))
-                Text(selection.map { "共 \($0.count) 天" } ?? "尚未選取日期").foregroundStyle(.secondary)
+    private func weeklyBinding(_ day: Binding<CalendarDay>, isStart: Bool) -> Binding<Date> {
+        Binding(get: { day.wrappedValue.date }, set: { date in
+            let picked = CalendarDay(date: date)
+            day.wrappedValue = picked
+            if isStart, weeklyUntil <= picked { weeklyUntil = picked.adding(days: 1) }
+            month = (isStart ? picked : picked.adding(days: -1)).monthStart
+        })
+    }
+    private func dayList(_ days: [CalendarDay]) -> String {
+        days.prefix(5).map(dateLabel).joined(separator: "、") + (days.count > 5 ? " 等 \(days.count) 天" : "")
+    }
+
+    @ViewBuilder private func weeklyFields(_ result: DateMarks.WeeklyResult?) -> some View {
+        HStack(spacing: 6) {
+            Text("每週")
+            ForEach(Array(Self.weekdays.enumerated()), id: \.offset) { index, name in
+                Toggle(name, isOn: Binding(get: { weekdays.contains(index) },
+                                           set: { if $0 { weekdays.insert(index) } else { weekdays.remove(index) } }))
+                    .toggleStyle(.button)
+                    .accessibilityLabel("星期\(name)")
             }
-            if let selection {
-                Text(Self.summaryText(marks, of: selection, titles: titles)).font(.callout).foregroundStyle(.secondary)
+        }
+        HStack(spacing: 14) {
+            dayPicker("從", weeklyBinding($weeklyFrom, isStart: true), in: spec.earliest, spec.latest)
+            dayPicker("結束日期", weeklyBinding($weeklyUntil, isStart: false),
+                      in: weeklyFrom.adding(days: 1), spec.latest.map { $0.adding(days: 1) })
+            Text("結束日期當天起不套用").font(.caption).foregroundStyle(.secondary)
+        }
+        if let result, let last = result.applied.last {
+            Text("會套用 \(result.applied.count) 天，最後一次是 \(dateLabel(last))").font(.callout).foregroundStyle(.secondary)
+            if !result.skipped.isEmpty {
+                Text("略過已有覆寫的 \(dayList(result.skipped))，保留原本設定").font(.callout).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func selectionPanel(_ marks: DateMarks, _ preview: Preview) -> some View {
+        let limit = spec.effectiveNoteLimit
+        let marked = selection.map { s in marks.marks.contains { s.contains($0.day) } } ?? false
+        let count = repeatWeekly ? preview.weekly?.applied.count : selection?.count
+        return VStack(alignment: .leading, spacing: 10) {
+            Picker("重複", selection: $repeatWeekly) {
+                Text("單次").tag(false)
+                Text("每週").tag(true)
+            }
+            .pickerStyle(.segmented).fixedSize()
+            if repeatWeekly {
+                weeklyFields(preview.weekly)
+            } else {
+                HStack(spacing: 14) {
+                    dayPicker("從", dayBinding(\.lowerBound, isStart: true), in: spec.earliest, spec.latest)
+                    dayPicker("到", dayBinding(\.upperBound, isStart: false), in: spec.earliest, spec.latest)
+                    Text(selection.map { "共 \($0.count) 天" } ?? "尚未選取日期").foregroundStyle(.secondary)
+                }
+                if let selection {
+                    Text(Self.summaryText(marks, of: selection, titles: titles)).font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             HStack(spacing: 10) {
                 Text("覆寫為")
@@ -184,18 +253,22 @@ struct DateMarksEditor: View {
             // 到上限後無法再輸入：超過就退回上一個值，不截斷貼上的文字。
             .onChange(of: note) { old, new in if new.unicodeScalars.count > limit { note = old } }
             HStack(spacing: 10) {
-                if let problem { Text(problem).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true) }
-                Spacer()
-                Button("清除這幾天的覆寫") {
-                    guard let selection else { return }
-                    var next = marks
-                    next.remove(selection)
-                    lines = next.lines
+                if let problem = preview.problem {
+                    Text(problem).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
                 }
-                .disabled(!marked)
-                Button(selection.map { "套用到 \($0.count) 天" } ?? "套用") { lines = preview.lines }
+                Spacer()
+                if !repeatWeekly {
+                    Button("清除這幾天的覆寫") {
+                        guard let selection else { return }
+                        var next = marks
+                        next.remove(selection)
+                        lines = next.lines
+                    }
+                    .disabled(!marked)
+                }
+                Button(count.map { "套用到 \($0) 天" } ?? "套用") { lines = preview.next.lines }
                     .buttonStyle(.borderedProminent)
-                    .disabled(selection == nil || problem != nil)
+                    .disabled(count == nil || preview.problem != nil)
             }
         }
     }
@@ -208,14 +281,14 @@ struct DateMarksEditor: View {
         return VStack(alignment: .leading, spacing: 8) {
             Text("即將生效").font(.headline)
             if upcoming.isEmpty { Text("沒有即將生效的覆寫").foregroundStyle(.secondary) }
-            ForEach(upcoming, id: \.days.lowerBound) { run in runRow(run, marks) }
+            ForEach(upcoming, id: \.days) { run in runRow(run, marks) }
             if !expired.isEmpty {
                 DisclosureGroup("已過期（\(expiredDays) 筆）", isExpanded: $showExpired) {
                     VStack(alignment: .leading, spacing: 8) {
                         if let help = spec.expiredHelp, !help.isEmpty {
                             Text(P.displayText(help)).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         }
-                        ForEach(expired, id: \.days.lowerBound) { run in runRow(run, marks) }
+                        ForEach(expired, id: \.days) { run in runRow(run, marks) }
                         Button("清除全部已過期（\(expiredDays) 筆）") {
                             var next = marks
                             next.removeExpired()
@@ -236,16 +309,16 @@ struct DateMarksEditor: View {
     }
 
     private func runRow(_ run: DateMarks.Run, _ marks: DateMarks) -> some View {
-        let open = expanded.contains(run.days.lowerBound)
+        let open = expanded.contains(run.days[0])
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                Text(rangeLabel(run.days)).monospacedDigit()
+                Text(runLabel(run)).monospacedDigit()
                 Text(title(run.option) + (run.note.isEmpty ? "" : " · \(run.note)")).fontWeight(.medium)
                 if let base = baseText(run.base) { Text(base).font(.caption).foregroundStyle(.secondary) }
                 Spacer()
                 if run.days.count > 1 {
                     Button(open ? "收合" : "展開") {
-                        if open { expanded.remove(run.days.lowerBound) } else { expanded.insert(run.days.lowerBound) }
+                        if open { expanded.remove(run.days[0]) } else { expanded.insert(run.days[0]) }
                     }
                 }
                 Button("移除") {
@@ -256,7 +329,7 @@ struct DateMarksEditor: View {
                 .disabled(locked)
             }
             if open {
-                ForEach(Array(run.days), id: \.self) { day in
+                ForEach(run.days, id: \.self) { day in
                     HStack(spacing: 8) {
                         Text("└ " + dateLabel(day)).monospacedDigit().foregroundStyle(.secondary)
                         Button("移除") {
@@ -291,7 +364,7 @@ struct MarkSymbol: View {
 struct MonthGrid: View {
     let month: CalendarDay
     let marks: DateMarks
-    let selection: ClosedRange<CalendarDay>?
+    let highlighted: Set<CalendarDay>
     let optionIDs: [String]
     let describe: (CalendarDay) -> String
     let onTap: (CalendarDay, _ extend: Bool) -> Void
@@ -312,7 +385,7 @@ struct MonthGrid: View {
         let r = marks.resolve(day)
         let spec = marks.spec
         let selectable = DateMarks.range(from: day, to: day, spec: spec) != nil
-        let selected = selection?.contains(day) == true
+        let selected = highlighted.contains(day)
         let isToday = day == spec.today
         let dimmed = r.base.map { $0.option != optionIDs.first } ?? false
         return Button { onTap(day, NSEvent.modifierFlags.contains(.shift)) } label: {

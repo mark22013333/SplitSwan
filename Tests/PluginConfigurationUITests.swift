@@ -491,6 +491,45 @@ func runConfigurationTests() async throws -> Int {
     check("按「儲存」送出正規行，草稿換成外掛回傳的值", datesSaves == [applied] && datesModel.snapshot?.revision == "d2"
           && datesModel.draft["overrides"]?.list == applied && !datesModel.dirty)
     capture(datesWindow, "date-marks-editor")
+    func ids(_ list: [NSButton]) -> Set<ObjectIdentifier> { Set(list.map(ObjectIdentifier.init)) }
+    func added(since before: Set<ObjectIdentifier>) -> [NSButton] { buttons(datesWindow).filter { !before.contains(ObjectIdentifier($0)) } }
+    let singleModeButtons = ids(buttons(datesWindow))
+    let repeatControl = views(datesWindow).compactMap { $0 as? NSSegmentedControl }.first { $0.segmentCount == 2 && $0.label(forSegment: 1) == "每週" }
+    repeatControl?.selectedSegment = 1
+    if let repeatControl { repeatControl.sendAction(repeatControl.action, to: repeatControl.target) }
+    await settleWindow(datesWindow) { added(since: singleModeButtons).count >= 7 }
+    // 星期按鈕是切到每週後新出現、排在同一列的 7 顆，由左到右是日到六。
+    let weekdayRow = Dictionary(grouping: added(since: singleModeButtons)) { Int(windowY($0)) }.values.first { $0.count == 7 }?
+        .sorted { $0.convert($0.bounds, to: nil).minX < $1.convert($1.bounds, to: nil).minX } ?? []
+    check("切到「每週」後出現一列 7 顆星期按鈕", weekdayRow.count == 7 && datePickers(datesWindow).count == 2)
+    if weekdayRow.count == 7 { weekdayRow[1].performClick(nil) }
+    let weeklyPickers = datePickers(datesWindow)
+    if weeklyPickers.count == 2 {
+        pick(weeklyPickers[0], "2026-11-13")
+        pick(weeklyPickers[1], "2026-11-30")
+    }
+    // 「套用」是備註欄正下方最近的那顆按鈕。
+    let weeklyNote = views(datesWindow).compactMap { $0 as? NSTextField }.first(where: \.isEditable)
+    func weeklyApplyButton() -> NSButton? {
+        guard let weeklyNote else { return nil }
+        return buttons(datesWindow).filter { windowY($0) < windowY(weeklyNote) }.max { windowY($0) < windowY($1) }
+    }
+    await settleWindow(datesWindow) { weeklyApplyButton()?.isEnabled == true }
+    let weeklyApply = weeklyApplyButton()
+    capture(datesWindow, "date-marks-weekly-preview")
+    let beforeWeeklyApply = ids(buttons(datesWindow))
+    weeklyApply?.performClick(nil)
+    let weeklyApplied = (applied + ["2026-11-16 off 員工旅遊", "2026-11-23 off 員工旅遊"]).sorted()
+    await settleWindow(datesWindow) { datesModel.draft["overrides"]?.list == weeklyApplied }
+    check("每週一、11/13 起、結束日期 11/30：只寫入 11/16、11/23（11/30 當天不套用）",
+          datesModel.draft["overrides"]?.list == weeklyApplied && datesModel.dirty)
+    capture(datesWindow, "date-marks-weekly-applied")
+    // 清單多出的每週列有「展開」與「移除」兩顆，移除在最右邊。
+    let seriesButtons = added(since: beforeWeeklyApply).sorted { $0.convert($0.bounds, to: nil).minX < $1.convert($1.bounds, to: nil).minX }
+    check("清單把 11/16、11/23 合成一列每週覆寫（新增按鈕 \(seriesButtons.count) 顆）", seriesButtons.count == 2)
+    seriesButtons.last?.performClick(nil)
+    await settleWindow(datesWindow) { datesModel.draft["overrides"]?.list == applied }
+    check("按每週那列的「移除」一次刪掉整串，其他覆寫保留", datesModel.draft["overrides"]?.list == applied && !datesModel.dirty)
     closeWindow(datesWindow, datesModel)
 
     let legacyDates = PluginConfigurationModel(pluginID: "dates-legacy", command: { _, _ in try datesForm("x1", initialLines, dates: false) })
