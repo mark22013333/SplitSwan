@@ -20,6 +20,7 @@ struct DateMarksEditor: View {
     @State private var weekdays: Set<Int> = []
     @State private var weeklyFrom: CalendarDay
     @State private var weeklyUntil: CalendarDay
+    @State private var weeklyNoEnd = false
 
     init(field: P.Field, spec: PluginDateSpec, lines: Binding<[String]>, locked: Bool) {
         self.field = field
@@ -38,6 +39,9 @@ struct DateMarksEditor: View {
     private func title(_ id: String) -> String { titles[id] ?? id }
     private static let utc = TimeZone(identifier: "UTC")!
     private static let weekdays = ["日", "一", "二", "三", "四", "五", "六"]
+    /// 「不限」展開到可設定的最後一天；外掛沒宣告 latest 時以兩年為限，避免一次寫入過多筆。
+    private var lastAllowed: CalendarDay { spec.latest ?? spec.today.adding(days: 730) }
+    private var effectiveUntil: CalendarDay { weeklyNoEnd ? lastAllowed.adding(days: 1) : weeklyUntil }
 
     var body: some View {
         if let marks = try? DateMarks(lines: lines, optionIDs: options.map(\.id), spec: spec) {
@@ -52,7 +56,7 @@ struct DateMarksEditor: View {
         var next = marks
         do {
             if repeatWeekly {
-                let result = try next.applyWeekly(option: option, note: note, weekdays: weekdays, from: weeklyFrom, until: weeklyUntil)
+                let result = try next.applyWeekly(option: option, note: note, weekdays: weekdays, from: weeklyFrom, until: effectiveUntil)
                 return Preview(next: next, weekly: result)
             }
             if let selection { try next.apply(option: option, note: note, to: selection) }
@@ -161,7 +165,7 @@ struct DateMarksEditor: View {
             month = picked.monthStart
         })
     }
-    @ViewBuilder private func dayPicker(_ label: String, _ binding: Binding<Date>, in lower: CalendarDay?, _ upper: CalendarDay?) -> some View {
+    @ViewBuilder private func dayPicker(_ label: String, _ binding: Binding<Date>, in lower: CalendarDay?, _ upper: CalendarDay?, showsLabel: Bool = true) -> some View {
         let picker: some View = Group {
             switch (lower, upper) {
             case let (e?, l?): DatePicker(label, selection: binding, in: e.date...l.date, displayedComponents: .date)
@@ -171,7 +175,7 @@ struct DateMarksEditor: View {
             }
         }
         HStack(spacing: 6) {
-            Text(label)
+            if showsLabel { Text(label) }
             picker.datePickerStyle(.field).labelsHidden().fixedSize()
                 .environment(\.timeZone, Self.utc)
                 .environment(\.calendar, { var c = Calendar(identifier: .gregorian); c.timeZone = Self.utc; return c }())
@@ -203,10 +207,17 @@ struct DateMarksEditor: View {
         }
         HStack(spacing: 14) {
             dayPicker("從", weeklyBinding($weeklyFrom, isStart: true), in: spec.earliest, spec.latest)
-            dayPicker("結束日期", weeklyBinding($weeklyUntil, isStart: false),
-                      in: weeklyFrom.adding(days: 1), spec.latest.map { $0.adding(days: 1) })
-            Text("結束日期當天起不套用").font(.caption).foregroundStyle(.secondary)
+            Picker("結束", selection: $weeklyNoEnd) {
+                Text("指定日期").tag(false)
+                Text("不限").tag(true)
+            }
+            .pickerStyle(.segmented).fixedSize()
+            if !weeklyNoEnd {
+                dayPicker("結束日期", weeklyBinding($weeklyUntil, isStart: false),
+                          in: weeklyFrom.adding(days: 1), spec.latest.map { $0.adding(days: 1) }, showsLabel: false)
+            }
         }
+        Text(endHelp).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         if let result, let last = result.applied.last {
             Text("會套用 \(result.applied.count) 天，最後一次是 \(dateLabel(last))").font(.callout).foregroundStyle(.secondary)
             if !result.skipped.isEmpty {
@@ -214,6 +225,14 @@ struct DateMarksEditor: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    private var endHelp: String {
+        if weeklyNoEnd {
+            let reason = spec.latest == nil ? "" : "，這是外掛可接受的最後一天"
+            return "一直套用到 \(dateLabel(lastAllowed))\(reason)。之後不會自動延長，需要時再設定一次。"
+        }
+        return "結束日期當天就停止：設 \(dateLabel(weeklyUntil))，會套用到 \(dateLabel(weeklyUntil.adding(days: -1))) 為止，\(dateLabel(weeklyUntil)) 當天起不套用。"
     }
 
     private func selectionPanel(_ marks: DateMarks, _ preview: Preview) -> some View {

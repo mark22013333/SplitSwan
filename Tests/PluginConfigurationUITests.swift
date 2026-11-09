@@ -530,6 +530,18 @@ func runConfigurationTests() async throws -> Int {
     seriesButtons.last?.performClick(nil)
     await settleWindow(datesWindow) { datesModel.draft["overrides"]?.list == applied }
     check("按每週那列的「移除」一次刪掉整串，其他覆寫保留", datesModel.draft["overrides"]?.list == applied && !datesModel.dirty)
+    let endControl = views(datesWindow).compactMap { $0 as? NSSegmentedControl }.first { $0.segmentCount == 2 && $0.label(forSegment: 1) == "不限" }
+    endControl?.selectedSegment = 1
+    if let endControl { endControl.sendAction(endControl.action, to: endControl.target) }
+    await settleWindow(datesWindow) { datePickers(datesWindow).count == 1 }
+    check("結束改成「不限」後只剩開始日期", endControl != nil && datePickers(datesWindow).count == 1)
+    await settleWindow(datesWindow) { weeklyApplyButton()?.isEnabled == true }
+    capture(datesWindow, "date-marks-weekly-no-end")
+    weeklyApplyButton()?.performClick(nil)
+    await settleWindow(datesWindow) { (datesModel.draft["overrides"]?.list.count ?? 0) > applied.count }
+    let noEndAdded = (datesModel.draft["overrides"]?.list ?? []).filter { !applied.contains($0) }
+    check("不限：每週一從 11/16 寫到 2028/11/6 共 104 天（實際 \(noEndAdded.count) 天）",
+          noEndAdded.count == 104 && noEndAdded.first == "2026-11-16 off 員工旅遊" && noEndAdded.last == "2028-11-06 off 員工旅遊")
     closeWindow(datesWindow, datesModel)
 
     let legacyDates = PluginConfigurationModel(pluginID: "dates-legacy", command: { _, _ in try datesForm("x1", initialLines, dates: false) })
