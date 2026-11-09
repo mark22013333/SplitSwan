@@ -874,7 +874,11 @@ final class PluginRunner: ObservableObject {
             rerunAfter.remove(key)
             timers[key]?.invalidate(); timers[key] = nil
         }
-        defer { updatingPackages.subtract(ids); scan(); syncTimers() }
+        defer {
+            updatingPackages.subtract(ids); scan(); syncTimers()
+            // 新版沒有輸出前，選單只能顯示「執行中…」也沒有設定入口，不等下一個排程間隔
+            if isActive, canSchedule(id) { Task { await run(id) } }
+        }
         for key in ids { await waitUntilIdle(key) }
         try Task.checkCancellation()
         let previous = plugins.first(where: { $0.id == id })?.package?.record.manifest

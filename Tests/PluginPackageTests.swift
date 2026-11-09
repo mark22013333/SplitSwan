@@ -135,6 +135,16 @@ check("更新保留私人設定及啟用狀態", (try? String(contentsOf: state.
 await runner.run(id)
 check("下一次執行使用新版本", runner.plugins[0].output?.items.contains(where: { $0.text == "version=1.1.0" }) == true)
 check("管理操作未啟用全域排程", !runner.isActive && runner.resources.timers == 0 && !runner.resources.watching)
+// 外掛區塊開啟時，更新後立刻執行新版；否則要等一個排程間隔，期間選單只有「執行中…」、沒有「開啟設定…」。
+let activePrefs = UserDefaults(suiteName: "SplitSwan.PackageTests.active." + UUID().uuidString)!
+let activeRunner = PluginRunner(directory: root.appendingPathComponent("missing-legacy"), stateRoot: root.appendingPathComponent("active-state"), preferences: activePrefs, packageRoot: root.appendingPathComponent("active-packages"), appVersion: "1.8.6")
+try await activeRunner.installPackage(first)
+activeRunner.setPluginEnabled(id, true)
+activeRunner.setEnabled(true)
+check("啟用中先取得舊版輸出", await until { activeRunner.plugins.first { $0.id == id }?.output?.title == "Package Fixture" })
+try await activeRunner.installPackage(second)
+check("更新後不等排程間隔就取得新版輸出", await until { activeRunner.plugins.first { $0.id == id }?.output?.items.contains(where: { $0.text == "version=1.1.0" }) == true })
+activeRunner.setEnabled(false)
 // 移除等待實際程序結束，不交付舊結果；測試垃圾桶使用暫存目錄，避免碰使用者垃圾桶。
 let trashRoot = root.appendingPathComponent("test-trash")
 try fm.createDirectory(at: trashRoot, withIntermediateDirectories: true)
