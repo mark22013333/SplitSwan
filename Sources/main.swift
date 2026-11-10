@@ -40,6 +40,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ExternalVPNController.shared.willStop = { [weak self] in self?.vpn.cancelConnectionIntent() }
         buildMainMenu()
         buildMenu()
+        GlobalHotKey.shared.onPress = {
+            let ids = PluginSettingsView.settingsCandidates(PluginRunner.shared).map(\.id)
+            guard let id = PluginShortcuts.target(stored: UserDefaults.standard.string(forKey: PluginShortcuts.hotKeyTargetKey), candidates: ids) else { NSSound.beep(); return }
+            PluginConfigurationWindows.shared.open(pluginID: id)
+        }
+        PluginRunner.shared.$isActive.removeDuplicates().receive(on: RunLoop.main)
+            .sink { _ in GlobalHotKey.shared.sync() }
+            .store(in: &bag)
         vpn.$state.combineLatest(vpn.$busy, vpn.$settings, vpn.$retryNote)
             .receive(on: RunLoop.main)
             .sink { [weak self] _, _, _, _ in self?.renderMenu() }

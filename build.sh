@@ -6,8 +6,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 source ./app.env
 
-VERSION="1.9.16"
-BUILD_NUM="43"
+VERSION="1.9.17"
+BUILD_NUM="44"
 APP="build/${APP_NAME}.app"
 C="$APP/Contents"
 

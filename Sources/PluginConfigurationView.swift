@@ -345,6 +345,7 @@ struct PluginConfigurationView: View {
                 Spacer()
             }
         }
+        .background { if let s = model.snapshot { shortcutButtons(s) } }
         .padding(24).frame(minWidth: 640, minHeight: 500)
         .task {
             await model.load()
@@ -362,6 +363,7 @@ struct PluginConfigurationView: View {
                 if let action = confirming { perform(action) }
                 confirming = nil
             }
+            .keyboardShortcut(.defaultAction)
         } message: { Text(label(confirming?.title ?? "")) }
     }
 
@@ -666,14 +668,27 @@ struct PluginConfigurationView: View {
         if action.destructive == true, !inline { Divider() }
         HStack(spacing: 6) {
             if action.signsIn == true { badge("會登入", .error) }
-            let button = Button(label(action.title), role: action.destructive == true ? .destructive : nil) {
-                if action.destructive == true { confirming = action }
-                else { perform(action) }
-            }
-            // 切換到隱藏頁籤本身不呼叫外掛，草稿與執行中的工作都不影響按鈕。
-            .disabled(action.opensTab == nil && (model.busy || model.dirty || model.snapshot?.job?.state == "running"))
+            let button = Button(label(action.title), role: action.destructive == true ? .destructive : nil) { trigger(action) }
+                .disabled(!enabled(action))
             if primary { button.buttonStyle(.borderedProminent) }
             else { button }
+            if let key = action.shortcut { Text("⌘" + key.uppercased()).font(.caption.monospaced()).foregroundStyle(.secondary) }
+        }
+    }
+    // 切換到隱藏頁籤本身不呼叫外掛，草稿與執行中的工作都不影響按鈕。
+    private func enabled(_ action: P.Action) -> Bool {
+        action.opensTab != nil || !(model.busy || model.dirty || model.snapshot?.job?.state == "running")
+    }
+    private func trigger(_ action: P.Action) {
+        if action.destructive == true { confirming = action }
+        else { perform(action) }
+    }
+    /// 按鈕所在頁籤沒有顯示時快捷鍵也要有效，所以另外放一組看不見的按鈕承接。
+    @ViewBuilder private func shortcutButtons(_ s: P.Snapshot) -> some View {
+        ForEach(s.actions.filter { $0.shortcut != nil }) { action in
+            Button("") { if enabled(action), confirming == nil { trigger(action) } }
+                .keyboardShortcut(KeyEquivalent(Character(action.shortcut!)), modifiers: .command)
+                .frame(width: 0, height: 0).opacity(0).accessibilityHidden(true)
         }
     }
     private static func clockTime(_ text: String) -> Date? {

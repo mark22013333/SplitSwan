@@ -124,6 +124,8 @@ enum PluginSettingsProtocol {
         var signsIn: Bool? = nil
         /// 只在 App 內切換到指定的隱藏頁籤；切換本身不呼叫外掛，但目標頁籤有精靈時會照規則自動檢查。
         var opensTab: String? = nil
+        /// 單一小寫字母或數字；設定視窗在任何頁籤按 ⌘ 加此鍵就等同按下按鈕（需確認的動作仍會先確認）。
+        var shortcut: String? = nil
     }
     struct Job: Codable, Equatable { let id: String; let state: String; let message: String }
     struct Snapshot: Codable, Equatable {
@@ -247,6 +249,10 @@ enum PluginSettingsProtocol {
         func optional(_ value: String?, _ limit: Int) -> Bool { value.map { text($0, limit) } ?? true }
         let hiddenTabs = Set(s.tabs.filter { $0.hidden == true }.map(\.id))
         guard !s.visibleTabs.isEmpty else { throw fail }
+        let shortcuts = s.actions.compactMap(\.shortcut)
+        guard shortcuts.allSatisfy(PluginShortcuts.validActionKey), Set(shortcuts).count == shortcuts.count else {
+            throw Problem(message: "外掛設定動作的快捷鍵不正確")
+        }
         for action in s.actions {
             guard let target = action.opensTab else { continue }
             guard hiddenTabs.contains(target), action.input == nil, action.destructive != true,
