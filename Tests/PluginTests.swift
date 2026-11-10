@@ -1307,6 +1307,29 @@ for (name, change) in layoutRejections {
     check("分組協定：拒絕\(name)", (try? PluginSettingsProtocol.decode(layoutForm(change))) == nil)
 }
 
+// MARK: 動作快捷鍵與全域熱鍵
+let shortcutForm = { (keys: [String]) in layoutForm { form in
+    form["actions"] = (form["actions"] as! [[String: Any]]) + keys.enumerated().map { ["id": "a\($0.offset)", "tab": "status", "title": "動作\($0.offset)", "shortcut": $0.element] } } }
+check("快捷鍵：接受單一小寫字母或數字", (try? PluginSettingsProtocol.decode(shortcutForm(["k", "7"])))?.actions.compactMap(\.shortcut) == ["k", "7"])
+for (name, keys) in [("大寫", ["K"]), ("兩個字", ["kk"]), ("符號", ["/"]), ("覆蓋儲存 ⌘S", ["s"]), ("覆蓋關閉視窗 ⌘W", ["w"]), ("重複", ["k", "k"]), ("空字串", [""])] {
+    check("快捷鍵：拒絕\(name)", (try? PluginSettingsProtocol.decode(shortcutForm(keys))) == nil)
+}
+check("快捷鍵：舊外掛沒有 shortcut 照常解析", (try? PluginSettingsProtocol.decode(layoutForm { _ in }))?.actions.allSatisfy { $0.shortcut == nil } == true)
+do {
+    let d = UserDefaults(suiteName: "hotkey-test-\(getpid())")!
+    check("全域熱鍵：未設定時預設 ⌃⌥⌘K", PluginShortcuts.hotKey(d) == .default && PluginShortcuts.HotKey.default.display == "⌃⌥⌘K")
+    PluginShortcuts.setHotKey(nil, d)
+    check("全域熱鍵：清除後不再回到預設", PluginShortcuts.hotKey(d) == nil)
+    let custom = PluginShortcuts.HotKey(keyCode: 35, modifiers: PluginShortcuts.HotKey.option | PluginShortcuts.HotKey.shift, key: "P")
+    PluginShortcuts.setHotKey(custom, d)
+    check("全域熱鍵：自訂組合存回讀出一致", PluginShortcuts.hotKey(d) == custom && custom.display == "⌥⇧P")
+    check("全域熱鍵：只有 ⇧ 不可用", !PluginShortcuts.HotKey(keyCode: 40, modifiers: PluginShortcuts.HotKey.shift, key: "K").isUsable)
+    check("全域熱鍵：目標沿用選過且仍存在的外掛，否則第一個",
+          PluginShortcuts.target(stored: "b", candidates: ["a", "b"]) == "b" && PluginShortcuts.target(stored: "gone", candidates: ["a", "b"]) == "a"
+          && PluginShortcuts.target(stored: nil, candidates: []) == nil)
+    d.removePersistentDomain(forName: "hotkey-test-\(getpid())")
+}
+
 // MARK: 日期標記欄位（dates）
 func datesForm(_ edit: (inout [String: Any]) -> Void = { _ in }) throws -> Data {
     var field: [String: Any] = [
