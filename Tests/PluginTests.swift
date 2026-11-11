@@ -1316,18 +1316,43 @@ for (name, keys) in [("大寫", ["K"]), ("兩個字", ["kk"]), ("符號", ["/"])
 }
 check("快捷鍵：舊外掛沒有 shortcut 照常解析", (try? PluginSettingsProtocol.decode(layoutForm { _ in }))?.actions.allSatisfy { $0.shortcut == nil } == true)
 do {
-    let d = UserDefaults(suiteName: "hotkey-test-\(getpid())")!
-    check("全域熱鍵：未設定時預設 ⌃⌥⌘K", PluginShortcuts.hotKey(d) == .default && PluginShortcuts.HotKey.default.display == "⌃⌥⌘K")
-    PluginShortcuts.setHotKey(nil, d)
-    check("全域熱鍵：清除後不再回到預設", PluginShortcuts.hotKey(d) == nil)
-    let custom = PluginShortcuts.HotKey(keyCode: 35, modifiers: PluginShortcuts.HotKey.option | PluginShortcuts.HotKey.shift, key: "P")
-    PluginShortcuts.setHotKey(custom, d)
-    check("全域熱鍵：自訂組合存回讀出一致", PluginShortcuts.hotKey(d) == custom && custom.display == "⌥⇧P")
-    check("全域熱鍵：只有 ⇧ 不可用", !PluginShortcuts.HotKey(keyCode: 40, modifiers: PluginShortcuts.HotKey.shift, key: "K").isUsable)
-    check("全域熱鍵：目標沿用選過且仍存在的外掛，否則第一個",
-          PluginShortcuts.target(stored: "b", candidates: ["a", "b"]) == "b" && PluginShortcuts.target(stored: "gone", candidates: ["a", "b"]) == "a"
-          && PluginShortcuts.target(stored: nil, candidates: []) == nil)
-    d.removePersistentDomain(forName: "hotkey-test-\(getpid())")
+    let suite = "hotkey-test-\(getpid())"
+    let d = UserDefaults(suiteName: suite)!
+    typealias HK = PluginShortcuts.HotKey
+    let custom = HK(keyCode: 35, modifiers: HK.option | HK.shift, key: "P")
+    check("全域熱鍵：只有 ⇧ 不可用", !HK(keyCode: 40, modifiers: HK.shift, key: "K").isUsable && custom.display == "⌥⇧P")
+
+    PluginShortcuts.migrateLegacy(candidates: [], d)
+    check("全域熱鍵轉換：還沒有外掛提供設定時不轉換", PluginShortcuts.storedHotKeys(d) == nil)
+    PluginShortcuts.migrateLegacy(candidates: ["a", "b"], d)
+    check("全域熱鍵轉換：1.9.17 沒設定過，預設 ⌃⌥⌘K 給第一支", PluginShortcuts.hotKeys(d) == ["a": .default] && HK.default.display == "⌃⌥⌘K")
+    PluginShortcuts.migrateLegacy(candidates: ["b"], d)
+    check("全域熱鍵轉換：只做一次", PluginShortcuts.hotKeys(d) == ["a": .default])
+    d.removePersistentDomain(forName: suite)
+
+    d.set(try! JSONEncoder().encode(custom), forKey: PluginShortcuts.legacyHotKeyKey)
+    d.set("b", forKey: PluginShortcuts.legacyTargetKey)
+    PluginShortcuts.migrateLegacy(candidates: ["a", "b"], d)
+    check("全域熱鍵轉換：自訂組合給當時選的外掛，舊設定移除",
+          PluginShortcuts.hotKeys(d) == ["b": custom] && d.object(forKey: PluginShortcuts.legacyHotKeyKey) == nil && d.object(forKey: PluginShortcuts.legacyTargetKey) == nil)
+    d.removePersistentDomain(forName: suite)
+
+    d.set(Data(), forKey: PluginShortcuts.legacyHotKeyKey)
+    PluginShortcuts.migrateLegacy(candidates: ["a"], d)
+    check("全域熱鍵轉換：1.9.17 清除過就不綁任何外掛", PluginShortcuts.storedHotKeys(d) == [:])
+
+    PluginShortcuts.setHotKey(custom, for: "a", d)
+    PluginShortcuts.setHotKey(.default, for: "b", d)
+    check("全域熱鍵：每支外掛各存一組", PluginShortcuts.hotKeys(d) == ["a": custom, "b": .default])
+    check("全域熱鍵：撞到另一支還在的外掛時回報是誰",
+          PluginShortcuts.owner(of: custom, excluding: "b", candidates: ["a", "b"], d) == "a"
+          && PluginShortcuts.owner(of: custom, excluding: "a", candidates: ["a", "b"], d) == nil)
+    check("全域熱鍵：已移除的外掛不算撞鍵", PluginShortcuts.owner(of: custom, excluding: "b", candidates: ["b"], d) == nil)
+    PluginShortcuts.setHotKey(custom, for: "c", d)
+    check("全域熱鍵：同一組改給別支時，從舊外掛拿掉", PluginShortcuts.hotKeys(d) == ["b": .default, "c": custom])
+    PluginShortcuts.setHotKey(nil, for: "b", d)
+    check("全域熱鍵：清除只影響該外掛，且不再回到預設", PluginShortcuts.hotKeys(d) == ["c": custom])
+    d.removePersistentDomain(forName: suite)
 }
 
 // MARK: 日期標記欄位（dates）

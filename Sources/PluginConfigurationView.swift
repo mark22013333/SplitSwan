@@ -281,6 +281,79 @@ private struct RunWhenLockedToggle: View {
     }
 }
 
+/// 開啟這個視窗的全域熱鍵。屬於 App 的設定，每支外掛各一組，變更立即生效、不進入儲存／取消流程。
+private struct HotKeyControl: View {
+    @ObservedObject var runner: PluginRunner
+    @ObservedObject private var hotKeys = GlobalHotKey.shared
+    let pluginID: String
+    @State private var hotKey: PluginShortcuts.HotKey?
+    @State private var recorder: Any?
+    @State private var taken: String?
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 3) {
+            HStack(spacing: 6) {
+                Text("快捷鍵").foregroundStyle(.secondary)
+                Button(recorder != nil ? "請按組合鍵…（Esc 取消）" : hotKey?.display ?? "未設定") {
+                    recorder == nil ? startRecording() : stopRecording()
+                }
+                .font(.body.monospaced())
+                if hotKey != nil, recorder == nil { Button("清除") { save(nil) } }
+            }
+            .controlSize(.small)
+            .help("在任何 App 按下就開啟這個視窗。每支外掛可各設一組，變更立即生效，不需儲存。")
+            if let message {
+                Text(message).font(.caption).foregroundStyle(.orange)
+            }
+        }
+        .onAppear { hotKey = PluginShortcuts.hotKeys()[pluginID] }
+        .onDisappear { stopRecording() }
+    }
+
+    private var message: String? {
+        if let taken { return "這組已給「\(taken)」使用，請換一組。" }
+        if hotKeys.conflicts.contains(pluginID) { return "系統不接受這組按鍵，請換一組。" }
+        return nil
+    }
+
+    private func startRecording() {
+        taken = nil
+        hotKeys.suspended = true
+        recorder = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if event.keyCode == 53 { stopRecording(); return nil }
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            typealias HK = PluginShortcuts.HotKey
+            let modifiers = (flags.contains(.control) ? HK.control : 0) | (flags.contains(.option) ? HK.option : 0)
+                | (flags.contains(.shift) ? HK.shift : 0) | (flags.contains(.command) ? HK.command : 0)
+            let candidate = HK(keyCode: UInt32(event.keyCode), modifiers: modifiers,
+                               key: (event.charactersIgnoringModifiers ?? "").uppercased())
+            guard candidate.isUsable else { NSSound.beep(); return nil }
+            let ids = GlobalHotKey.candidates(runner.plugins).map(\.id)
+            if let owner = PluginShortcuts.owner(of: candidate, excluding: pluginID, candidates: ids) {
+                let name = runner.plugins.first { $0.id == owner }?.package?.record.manifest.name ?? owner
+                taken = PluginLogic.sanitize(name)
+                stopRecording()
+                NSSound.beep()
+                return nil
+            }
+            save(candidate)
+            return nil
+        }
+    }
+    private func stopRecording() {
+        if let recorder { NSEvent.removeMonitor(recorder) }
+        recorder = nil
+        if hotKeys.suspended { hotKeys.suspended = false }
+    }
+    private func save(_ value: PluginShortcuts.HotKey?) {
+        taken = nil
+        PluginShortcuts.setHotKey(value, for: pluginID)
+        hotKey = PluginShortcuts.hotKeys()[pluginID]
+        stopRecording()
+        hotKeys.sync()
+    }
+}
+
 struct PluginConfigurationView: View {
     typealias P = PluginSettingsProtocol
     @ObservedObject var model: PluginConfigurationModel
@@ -303,7 +376,12 @@ struct PluginConfigurationView: View {
                 }
                 Spacer()
                 if model.busy { ProgressView().controlSize(.small).accessibilityLabel("正在載入外掛設定") }
-                if let runner { RunWhenLockedToggle(runner: runner, pluginID: model.pluginID) }
+                if let runner {
+                    VStack(alignment: .trailing, spacing: 8) {
+                        RunWhenLockedToggle(runner: runner, pluginID: model.pluginID)
+                        HotKeyControl(runner: runner, pluginID: model.pluginID)
+                    }
+                }
             }
             if let message = model.error {
                 Text(P.displayText(message)).foregroundStyle(.red).textSelection(.enabled)
