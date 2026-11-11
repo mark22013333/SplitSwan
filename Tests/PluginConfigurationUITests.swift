@@ -577,6 +577,53 @@ func runConfigurationTests() async throws -> Int {
     check("選取區摘要濾掉外掛標題的控制與格式字元（實際 \(summary.unicodeScalars.map { String($0.value, radix: 16) }.joined(separator: " "))）",
           summary == "原本：上班 1 天（範例日曆）")
 
+    // MARK: 設定基準（欄位名稱均為虛構）
+    var baselineOn = true, baselineConfigured = ["password"]
+    func baselineForm() throws -> P.Snapshot {
+        try P.decode(JSONSerialization.data(withJSONObject: [
+            "version": 1, "title": "基準測試", "revision": "b1",
+            "tabs": [["id": "general", "title": "一般"], ["id": "account", "title": "帳號", "hidden": true]],
+            "fields": [["id": "enabled", "tab": "general", "title": "自動執行", "type": "toggle"],
+                       ["id": "at", "tab": "general", "title": "時間", "type": "time"],
+                       ["id": "password", "tab": "account", "title": "密碼", "type": "secret"]],
+            "values": ["enabled": baselineOn, "at": "08:30", "password": ""] as [String: Any],
+            "actions": [["id": "account-open", "tab": "general", "title": "帳號…", "opensTab": "account"]],
+            "configured": baselineConfigured] as [String: Any]))
+    }
+    var storedBaseline: PluginSettingsBaseline.Record?
+    var reported: [[PluginSettingsBaseline.Missing]] = []
+    let baselineModel = PluginConfigurationModel(pluginID: "baseline-fixture", command: { _, _ in try baselineForm() },
+        baselineStore: .init(load: { storedBaseline }, save: { storedBaseline = $0 }, report: { reported.append($0) }))
+    // SwiftUI 按鈕沒有可讀的標題，所以照按鈕呼叫的模型方法操作，畫面以截圖留證。
+    let baselineWindow = openWindow(baselineModel, height: 520)
+    await settleWindow(baselineWindow) { baselineModel.snapshot != nil && !baselineModel.busy }
+    check("沒有基準時不回報缺漏、也不寫檔", baselineModel.baseline == nil && storedBaseline == nil && baselineModel.baselineMissing.isEmpty)
+    capture(baselineWindow, "baseline-none")
+    await baselineModel.rememberBaseline()
+    check("記住目前設定只收已設定的欄位", storedBaseline?.fields == ["enabled", "at", "password"] && reported.last == [])
+    capture(baselineWindow, "baseline-remembered")
+    baselineOn = false; baselineConfigured = []
+    await baselineModel.load()
+    check("少了設定時依欄位順序列出缺漏並回報選單（實際 \(baselineModel.baselineMissing.map(\.id))）",
+          baselineModel.baselineMissing.map(\.id) == ["enabled", "password"] && reported.last?.map(\.id) == ["enabled", "password"]
+          && storedBaseline?.fields == ["enabled", "at", "password"])
+    capture(baselineWindow, "baseline-missing")
+    if let hidden = baselineModel.baselineMissing.last { baselineModel.showMissing(hidden) }
+    check("前往設定切到隱藏頁籤並可返回", baselineModel.selectedTabID == "account" && baselineModel.returnTabID == "general")
+    baselineModel.returnFromHiddenTab()
+    await baselineModel.acknowledgeMissing("enabled")
+    check("這是刻意的：從基準移除該項並立即重算", storedBaseline?.fields == ["at", "password"]
+          && baselineModel.baselineMissing.map(\.id) == ["password"] && reported.last?.map(\.id) == ["password"])
+    capture(baselineWindow, "baseline-acknowledged")
+    baselineOn = true; baselineConfigured = ["password"]
+    await baselineModel.load()
+    check("重新設定好後缺漏消失，且自動併回基準", baselineModel.baselineMissing.isEmpty && storedBaseline?.fields == ["enabled", "at", "password"])
+    await baselineModel.clearBaseline()
+    check("清除基準", storedBaseline == nil && baselineModel.baseline == nil && reported.last == [])
+    await baselineModel.load()
+    check("清除後重新載入不再回報、不再寫檔", storedBaseline == nil && baselineModel.baselineMissing.isEmpty)
+    closeWindow(baselineWindow, baselineModel)
+
     print("通過 \(passed)，失敗 \(failed)")
     return failed
 }

@@ -21,6 +21,23 @@ final class PluginConfigurationModel: ObservableObject {
     /// 有未儲存變更時詢問是否捨棄；回傳 true 表示捨棄。測試可替換。
     var confirmDiscard: () -> Bool = { PluginConfigurationWindows.confirmDiscard() }
     struct JobOrigin: Equatable { let jobID: String; let title: String; let at: Date }
+    /// 基準的讀寫與回報；預設接到 PluginRunner，讓選單與主動檢查看到同一份。測試可替換。
+    struct BaselineStore {
+        var load: @MainActor () async -> PluginSettingsBaseline.Record?
+        var save: @MainActor (PluginSettingsBaseline.Record?) async -> Void
+        var report: @MainActor ([PluginSettingsBaseline.Missing]) -> Void
+
+        @MainActor static func runner(_ runner: PluginRunner, pluginID: String) -> BaselineStore {
+            BaselineStore(load: { await runner.baseline(for: pluginID) },
+                          save: { await runner.setBaseline($0, for: pluginID) },
+                          report: { runner.reportBaselineMissing($0, for: pluginID) })
+        }
+        static let detached = BaselineStore(load: { nil }, save: { _ in }, report: { _ in })
+    }
+    @Published private(set) var baseline: PluginSettingsBaseline.Record?
+    @Published private(set) var baselineMissing: [PluginSettingsBaseline.Missing] = []
+    private var baselineLoaded = false
+    private let baselineStore: BaselineStore
     struct Notice: Equatable { let origin: JobOrigin?; let job: P.Job }
     private let command: @MainActor (String, P.Request?) async throws -> P.Snapshot
     private let now: () -> Date
@@ -35,10 +52,12 @@ final class PluginConfigurationModel: ObservableObject {
     private var enteredTabID: String?
 
     init(pluginID: String, command: (@MainActor (String, P.Request?) async throws -> P.Snapshot)? = nil,
-         now: @escaping () -> Date = Date.init, pollInterval: Duration = .seconds(2)) {
+         now: @escaping () -> Date = Date.init, pollInterval: Duration = .seconds(2), baselineStore: BaselineStore? = nil) {
         self.pluginID = pluginID
         self.now = now
         self.pollInterval = pollInterval
+        // 換掉命令的模型不連真正的外掛，基準也不讀寫真正的 plugin-state。
+        self.baselineStore = baselineStore ?? (command == nil ? .runner(PluginRunner.shared, pluginID: pluginID) : .detached)
         self.command = command ?? { operation, request in
             try await PluginRunner.shared.settingsCommand(pluginID: pluginID, operation: operation, request: request)
         }
@@ -127,6 +146,45 @@ final class PluginConfigurationModel: ObservableObject {
             }
         }
     }
+    /// 每次取得 snapshot 都評估一次，並把新設定好的欄位併入基準。
+    private func evaluateBaseline() async {
+        if !baselineLoaded {
+            baseline = await baselineStore.load()
+            baselineLoaded = true
+        }
+        guard visible, let s = snapshot else { return }
+        guard let record = baseline else { baselineMissing = []; return }
+        let evaluation = PluginSettingsBaseline.evaluate(record, s)
+        baselineMissing = evaluation.missing
+        baselineStore.report(evaluation.missing)
+        if evaluation.next != record {
+            baseline = evaluation.next
+            await baselineStore.save(evaluation.next)
+        }
+    }
+    func rememberBaseline() async {
+        guard let s = snapshot else { return }
+        await setBaseline(PluginSettingsBaseline.capture(s))
+    }
+    /// 「這是刻意的」：只移除這一項，之後再設定好會自動併回。
+    func acknowledgeMissing(_ id: String) async {
+        guard let record = baseline else { return }
+        await setBaseline(PluginSettingsBaseline.acknowledge([id], in: record))
+    }
+    func clearBaseline() async { await setBaseline(nil) }
+    private func setBaseline(_ record: PluginSettingsBaseline.Record?) async {
+        baseline = record
+        baselineLoaded = true
+        baselineMissing = record.flatMap { r in snapshot.map { PluginSettingsBaseline.evaluate(r, $0).missing } } ?? []
+        baselineStore.report(baselineMissing)
+        await baselineStore.save(record)
+    }
+    /// 「前往設定」：切到欄位所在頁籤；隱藏頁籤和 `opensTab` 一樣保留返回位置。
+    func showMissing(_ missing: PluginSettingsBaseline.Missing) {
+        guard let tab = snapshot?.tabs.first(where: { $0.id == missing.tab }) else { return }
+        if tab.hidden == true, returnTabID == nil { returnTabID = selectedTabID }
+        selectedTabID = tab.id
+    }
     private func drainCheck() async {
         checkDeferred = dirty && pendingChecks[selectedTabID] != nil
         guard visible, !dirty, !busy, snapshot?.job?.state != "running",
@@ -164,6 +222,7 @@ final class PluginConfigurationModel: ObservableObject {
         } catch is CancellationError { }
         catch { if visible { self.error = error.localizedDescription } }
         busy = false
+        if succeeded { await evaluateBaseline() }
         // 儲存由呼叫端合併「延後檢查」與欄位變更，避免同次儲存連續查詢兩次。
         if operation != "save" { await drainCheck() }
         return succeeded
@@ -364,6 +423,7 @@ struct PluginConfigurationView: View {
     @State private var openHelp: Set<String> = []
     /// 同一頁籤所有分組共用的標題欄寬度，取各標題自然寬度的最大值。
     @State private var labelColumn: CGFloat?
+    @State private var confirmingClearBaseline = false
 
     private func label(_ text: String) -> String { PluginLogic.sanitize(text) }
     private var locked: Bool { model.busy || model.snapshot?.job?.state == "running" }
@@ -388,6 +448,7 @@ struct PluginConfigurationView: View {
             }
             if let s = model.snapshot {
                 if let notice = model.notice { noticeView(notice) }
+                if model.baseline != nil, !model.baselineMissing.isEmpty { baselineBanner(s) }
                 navigation(s)
                 if let tab = s.tabs.first(where: { $0.id == model.selectedTabID }) {
                     ScrollViewReader { proxy in
@@ -405,6 +466,7 @@ struct PluginConfigurationView: View {
                 Divider()
                 HStack {
                     Button("重新載入") { Task { await model.load() } }.disabled(model.busy || model.dirty)
+                    baselineFooter
                     if model.dirty {
                         Text(model.checkDeferred ? "有未儲存變更；儲存或取消後會接續檢查。" : "請先儲存或取消變更，再執行測試與其他操作。")
                             .font(.caption).foregroundStyle(.secondary)
@@ -445,6 +507,51 @@ struct PluginConfigurationView: View {
         } message: { Text(label(confirming?.title ?? "")) }
     }
 
+    private func baselineBanner(_ s: P.Snapshot) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Text("有 \(model.baselineMissing.count) 項設定比基準少了").font(.callout.weight(.semibold))
+            }
+            ForEach(model.baselineMissing, id: \.id) { missing in
+                HStack(spacing: 8) {
+                    Text(label(missing.title))
+                    if s.visibleTabs.count > 1 || s.tabs.first(where: { $0.id == missing.tab })?.hidden == true,
+                       let tab = s.tabs.first(where: { $0.id == missing.tab }) {
+                        Text("（\(label(tab.title))）").foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 8)
+                    Button("前往設定") { model.showMissing(missing) }
+                    Button("這是刻意的") { Task { await model.acknowledgeMissing(missing.id) } }
+                        .help("從基準移除這一項，不再提醒；之後再設定好會自動記回來。")
+                }
+                .font(.callout)
+                .padding(.leading, 24)
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.1)))
+    }
+    /// 有缺漏時由上方橫幅處理；清除需在列內再按一次確認，不另開對話框。
+    @ViewBuilder private var baselineFooter: some View {
+        if model.baseline == nil {
+            Button("記住目前設定") { Task { await model.rememberBaseline() } }
+                .disabled(model.busy || model.dirty)
+                .help("之後這些已設定的項目若變成空的或被關掉，會提醒你")
+        } else if let baseline = model.baseline, model.baselineMissing.isEmpty {
+            if confirmingClearBaseline {
+                Text("清除後不再提醒少了哪些設定。").font(.caption).foregroundStyle(.secondary)
+                Button("確定清除", role: .destructive) {
+                    confirmingClearBaseline = false
+                    Task { await model.clearBaseline() }
+                }
+                Button("保留") { confirmingClearBaseline = false }
+            } else {
+                Text("已記住 \(baseline.fields.count) 項設定").font(.caption).foregroundStyle(.secondary)
+                Button("清除基準") { confirmingClearBaseline = true }.controlSize(.small)
+            }
+        }
+    }
     @ViewBuilder private func navigation(_ s: P.Snapshot) -> some View {
         if let current = s.tabs.first(where: { $0.id == model.selectedTabID }), current.hidden == true {
             HStack(spacing: 10) {
