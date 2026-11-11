@@ -12,7 +12,7 @@ trap 'command rm -r "$OUT"' EXIT
 
 bash tools/build-zipfoundation.sh "$OUT/zip" || exit 1
 
-ALL_GROUPS="reconnect export security settings diagnostic hostcheck update about external-vpn external-failure-log coexistence root-lifetime root-backend external-ui plugins date-marks plugin-ui plugin-card packages package-ui background plugin-log plugin-log-flow plugin-diag settings-ui"
+ALL_GROUPS="reconnect export security settings diagnostic hostcheck update about external-vpn external-failure-log coexistence root-lifetime root-backend external-ui plugins date-marks plugin-ui plugin-card packages package-ui background plugin-log plugin-log-flow plugin-diag settings-ui baseline"
 
 # 每組的測試檔與要一起編譯的原始檔（第一個是測試檔，會被複製成 main.swift）。
 # 新增 Sources 檔時，要加進用到它的每一組，否則該組會編譯失敗。
@@ -40,6 +40,7 @@ files() {
     plugins)    echo Tests/PluginTests.swift $S/PluginLogic.swift $S/PluginMenuCard.swift $S/PluginMenu.swift $S/PluginMenuCardView.swift $S/PluginSettingsProtocol.swift $S/PluginShortcuts.swift $S/PluginDateMarks.swift $S/PluginRunner.swift $S/PluginBackground.swift $S/PluginPackage.swift $S/PluginFailure.swift $S/PluginEventLog.swift $S/PluginPackageStore.swift $S/PluginLegacyReplacement.swift $S/ProcessRunner.swift $S/DiagnosticReport.swift \
                      $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
     date-marks) echo Tests/PluginDateMarksTests.swift $S/PluginDateMarks.swift ;;
+    baseline)   echo Tests/PluginSettingsBaselineTests.swift $S/PluginSettingsBaseline.swift $S/PluginSettingsProtocol.swift $S/PluginShortcuts.swift $S/PluginDateMarks.swift $S/PluginLogic.swift $S/PluginMenuCard.swift ;;
     plugin-card) echo Tests/PluginMenuCardTests.swift $S/PluginMenuCard.swift $S/PluginMenuCardView.swift $S/PluginMenu.swift $S/PluginLogic.swift ;;
     plugin-ui)  echo Tests/PluginConfigurationUITests.swift $S/PluginConfigurationView.swift $S/GlobalHotKey.swift $S/PluginDateMarksEditor.swift $S/PluginLogic.swift $S/PluginMenuCard.swift $S/PluginMenu.swift $S/PluginMenuCardView.swift $S/PluginSettingsProtocol.swift $S/PluginShortcuts.swift $S/PluginDateMarks.swift $S/PluginRunner.swift $S/PluginBackground.swift $S/PluginPackage.swift $S/PluginFailure.swift $S/PluginEventLog.swift $S/PluginPackageStore.swift $S/PluginLegacyReplacement.swift $S/ProcessRunner.swift $S/DiagnosticReport.swift \
                      $S/GatewayHistory.swift $S/ConfigStore.swift $S/CompanyPreset.swift $S/AppInfo.swift ;;
