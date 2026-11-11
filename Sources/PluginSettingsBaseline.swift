@@ -6,6 +6,9 @@ enum PluginSettingsBaseline {
     typealias Field = PluginSettingsProtocol.Field
     typealias Snapshot = PluginSettingsProtocol.Snapshot
 
+    /// 基準提醒不佔外掛自己的每日通知上限，另外限制：同一組缺漏每天 1 則，每支外掛每天最多 3 則。
+    static let maxRemindersPerDay = 3
+
     struct Record: Codable, Equatable, Sendable {
         var version = 1
         var fields: Set<String>
@@ -61,6 +64,14 @@ enum PluginSettingsBaseline {
 
     static func notificationKey(_ missing: [Missing]) -> String {
         missing.map(\.id).sorted().joined(separator: ",")
+    }
+
+    /// 回傳寫回的紀錄；nil 表示這組缺漏今天不再提醒。
+    static func planReminder(_ key: String, today: String, log: PluginLogic.NotifyLog) -> PluginLogic.NotifyLog? {
+        var l = log.day == today ? log : PluginLogic.NotifyLog(day: today, keys: [])
+        guard !l.keys.contains(key), l.keys.count < maxRemindersPerDay else { return nil }
+        l.keys.insert(key)
+        return l
     }
 
     /// 選單與通知共用的缺漏描述；標題來自外掛，先過濾控制字元。

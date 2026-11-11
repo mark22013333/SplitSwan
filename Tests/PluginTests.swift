@@ -1617,6 +1617,27 @@ triggerRunner.resume(.locked)
 let unlockChecked = await eventually { logLines(triggerCalls) >= 3 }
 try? await Task.sleep(nanoseconds: 500_000_000)
 check("設定基準觸發：解鎖後才補做喚醒的檢查（實際 \(logLines(triggerCalls))）", unlockChecked && logLines(triggerCalls) == 3)
+// 檢查進行中被鎖定：這次放棄，解鎖後要重做，不能等到下次喚醒
+fm.createFile(atPath: triggerFlags + "/slow", contents: Data())
+triggerRunner.pause(.sleep)
+triggerRunner.resume(.sleep)
+check("設定基準觸發：喚醒後的檢查已開始", await eventually { logLines(triggerCalls) >= 4 })
+triggerRunner.pause(.locked)
+try? await Task.sleep(nanoseconds: 1_500_000_000)
+try? fm.removeItem(atPath: triggerFlags + "/slow")
+triggerRunner.resume(.locked)
+let redone = await eventually { logLines(triggerCalls) >= 5 }
+check("設定基準觸發：被鎖定打斷的檢查在解鎖後重做（實際 \(logLines(triggerCalls))）", redone && logLines(triggerCalls) == 5)
+// 外掛自己的通知當天已用滿 20 鍵，基準提醒另外計算
+let fullLog = PluginLogic.NotifyLog(day: PluginLogic.dayString(Date()), keys: Set((0..<PluginLogic.maxNotifyKeysPerDay).map { "own-\($0)" }))
+PluginRunner.saveNotifyLog(fullLog, to: PluginRunner.notifyLogURL(root: triggerState, id: triggerID))
+fm.createFile(atPath: triggerFlags + "/off", contents: Data())
+await triggerRunner.checkBaselines()
+check("設定基準提醒：外掛自己的通知用滿當天上限，基準提醒仍會發出", triggerSent == ["設定比基準少了：自動執行，點此開啟設定"]
+      && triggerRunner.baselineMissing[triggerID]?.map(\.id) == ["on"])
+let reminderSaved = await eventually { PluginRunner.loadNotifyLog(PluginRunner.baselineReminderURL(root: triggerState, id: triggerID))?.keys == ["on"] }
+check("設定基準提醒：紀錄另存一份（背景寫入），不動外掛自己的通知紀錄",
+      reminderSaved && PluginRunner.loadNotifyLog(PluginRunner.notifyLogURL(root: triggerState, id: triggerID)) == fullLog)
 // 關閉時清掉快取：之後讀的是檔案現況
 triggerRunner.setEnabled(false)
 PluginRunner.saveBaseline(PluginSettingsBaseline.Record(fields: ["on", "other"]), to: PluginRunner.baselineURL(root: triggerState, id: triggerID))

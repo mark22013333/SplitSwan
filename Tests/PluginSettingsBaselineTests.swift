@@ -86,6 +86,15 @@ check("通知鍵與順序無關", B.notificationKey([a, c]) == B.notificationKey
 check("通知鍵隨缺漏組合改變", B.notificationKey([a]) != B.notificationKey([a, c]))
 check("缺漏描述過濾控制字元", B.summary([B.Missing(id: "x", title: "密碼\u{202E}\u{0007}", tab: "g"), c]) == "設定比基準少了：密碼、甲")
 
+// MARK: 基準提醒每日上限（與外掛自己的通知分開計算）
+var reminders = PluginLogic.NotifyLog()
+var reminded: [String] = []
+for key in ["a", "a", "b", "c", "d"] {
+    if let next = B.planReminder(key, today: "2026-11-12", log: reminders) { reminders = next; reminded.append(key) }
+}
+check("同一組缺漏每天提醒一次，每天最多 3 則（實際 \(reminded)）", reminded == ["a", "b", "c"])
+check("隔天重新計算", B.planReminder("a", today: "2026-11-13", log: reminders)?.keys == ["a"])
+
 // MARK: 存檔格式
 let encoded = try! JSONEncoder().encode(captured)
 check("基準檔可往返", (try? JSONDecoder().decode(B.Record.self, from: encoded)) == captured)

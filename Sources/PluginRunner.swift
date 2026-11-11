@@ -138,6 +138,7 @@ final class PluginRunner: ObservableObject {
     private var baselineCheckPending = false
     /// 設定視窗與主動檢查共用；外層 nil＝尚未讀檔，內層 nil＝沒有基準檔
     private var baselineCache: [String: PluginSettingsBaseline.Record?] = [:]
+    private var baselineReminders: [String: PluginLogic.NotifyLog] = [:]
     private var baselineWrites = 0
     private let baselineFiles = BaselineFiles()
 
@@ -187,6 +188,7 @@ final class PluginRunner: ObservableObject {
         baselineCheckPending = false
         if !baselineMissing.isEmpty { baselineMissing = [:] }
         baselineCache = [:]
+        baselineReminders = [:]
         removeObservers()
         stopWatcher()
         cancelTimers()
@@ -689,7 +691,7 @@ final class PluginRunner: ObservableObject {
         }
     }
 
-    /// 依每日去重紀錄挑出這次要發的項目並寫回紀錄；外掛自己的通知與設定基準提醒共用同一份紀錄與上限。
+    /// 依每日去重紀錄挑出這次要發的項目並寫回紀錄
     private func planNotifications(_ p: Plugin, items: [PluginLogic.Item], epoch myEpoch: Int, generation: Int) async -> [PluginLogic.Item] {
         guard !items.isEmpty else { return [] }
         let url = Self.notifyLogURL(root: stateRoot.path, id: p.id)
@@ -719,6 +721,11 @@ final class PluginRunner: ObservableObject {
     /// 每個外掛一份：plugin-state/.baseline/<外掛識別>.json（600）
     nonisolated static func baselineURL(root: String, id: String) -> URL {
         URL(fileURLWithPath: root + "/.baseline/" + id + ".json")
+    }
+
+    /// 基準提醒的每日紀錄與外掛自己的通知分開：plugin-state/.baseline-reminded/<外掛識別>.json（600）
+    nonisolated static func baselineReminderURL(root: String, id: String) -> URL {
+        URL(fileURLWithPath: root + "/.baseline-reminded/" + id + ".json")
     }
 
     nonisolated static func loadBaseline(_ url: URL) -> PluginSettingsBaseline.Record? {
@@ -783,25 +790,38 @@ final class PluginRunner: ObservableObject {
         if baselineMissing[id] != value { baselineMissing[id] = value }
     }
 
-    /// 只檢查有基準檔、且有設定介面的外掛；沒有基準檔就不呼叫外掛。關閉或暫停（世代變了）就放棄。
+    /// 只檢查有基準檔、且有設定介面的外掛；沒有基準檔就不呼叫外掛。
+    /// 每次 await 之後都確認仍是開始時的世代；被鎖定或螢幕保護程式打斷時留到暫停全部解除後重做。
     func checkBaselines(only ids: Set<String>? = nil) async {
         let myEpoch = epoch
         var alive: Bool { myEpoch == epoch && isActive && paused.isEmpty }
         for p in plugins where ids?.contains(p.id) ?? true {
-            guard alive else { return }
-            guard p.isEnabled, p.problem == nil, Self.hasSettings(p), await baseline(for: p.id) != nil, alive,
-                  let snapshot = try? await settingsCommand(pluginID: p.id, operation: "snapshot"), alive,
-                  let record = await baseline(for: p.id) else { continue }
-            let evaluation = PluginSettingsBaseline.evaluate(record, snapshot)
-            if evaluation.next != record { await setBaseline(evaluation.next, for: p.id) }
-            reportBaselineMissing(evaluation.missing, for: p.id)
-            guard !evaluation.missing.isEmpty else { continue }
-            let body = PluginSettingsBaseline.summary(evaluation.missing) + "，點此開啟設定"
-            let item = PluginLogic.Item(text: body, params: ["notify": "true",
-                                        "notify_id": "baseline:" + PluginSettingsBaseline.notificationKey(evaluation.missing)])
-            let send = await planNotifications(p, items: [item], epoch: scheduledEpoch(p.id), generation: pluginGenerations[p.id, default: 0])
-            if !send.isEmpty { baselineNotifier(p.id, "外掛：" + p.name, body) }
+            guard alive else { break }
+            guard p.isEnabled, p.problem == nil, Self.hasSettings(p), await baseline(for: p.id) != nil else { continue }
+            guard alive else { break }
+            let snapshot = try? await settingsCommand(pluginID: p.id, operation: "snapshot")
+            guard alive else { break }
+            guard let snapshot else { continue }
+            let record = await updateBaseline(for: p.id) { $0.map { PluginSettingsBaseline.evaluate($0, snapshot).next } }
+            guard alive else { break }
+            guard let record else { continue }
+            let missing = PluginSettingsBaseline.evaluate(record, snapshot).missing
+            reportBaselineMissing(missing, for: p.id)
+            guard !missing.isEmpty else { continue }
+            let url = Self.baselineReminderURL(root: stateRoot.path, id: p.id)
+            var log = baselineReminders[p.id]
+            if log == nil {
+                let loaded = await Task.detached(priority: .utility) { Self.loadNotifyLog(url) }.value
+                guard alive else { break }
+                log = baselineReminders[p.id] ?? loaded ?? PluginLogic.NotifyLog()
+            }
+            guard let log, let next = PluginSettingsBaseline.planReminder(PluginSettingsBaseline.notificationKey(missing),
+                                                                         today: PluginLogic.dayString(now()), log: log) else { continue }
+            baselineReminders[p.id] = next
+            Task.detached(priority: .utility) { Self.saveNotifyLog(next, to: url) }
+            baselineNotifier(p.id, "外掛：" + p.name, PluginSettingsBaseline.summary(missing) + "，點此開啟設定")
         }
+        if !alive, isActive { baselineCheckPending = true }
     }
 
     /// 正式路徑必須已啟用；只有建構時明確開啟的測試 runner 可在 inactive 狀態直接執行。
@@ -1106,6 +1126,7 @@ final class PluginRunner: ObservableObject {
         notifyLogs.removeValue(forKey: id)
         baselineMissing.removeValue(forKey: id)
         baselineCache.removeValue(forKey: id)
+        baselineReminders.removeValue(forKey: id)
         removed = true
         return result
     }
