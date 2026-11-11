@@ -1510,6 +1510,70 @@ do {
     } catch { check("設定命令重新驗證檔案權限", true) }
 } catch { check("設定命令完整往返：\(error)", false) }
 
+// MARK: 設定基準的主動檢查
+let baselineDir = mkPluginDir("baseline")
+let baselineState = root + "/baseline-state"
+let baselineCalls = root + "/baseline-calls.log"
+let baselineFlags = root + "/baseline-flags"
+try! fm.createDirectory(atPath: baselineFlags, withIntermediateDirectories: true)
+put("baseline.1m.sh", """
+#!/bin/bash
+if [ "$1" = --splitswan-settings ]; then
+  echo "$2" >> "\(baselineCalls)"
+  ON=true; [ -f "\(baselineFlags)/off" ] && ON=false
+  CONF='["pw"]'; [ -f "\(baselineFlags)/lost" ] && CONF='[]'
+  echo '{"version":1,"title":"基準","revision":"r1","tabs":[{"id":"general","title":"一般"}],"fields":[{"id":"on","tab":"general","title":"自動執行","type":"toggle"},{"id":"pw","tab":"general","title":"密碼","type":"secret"}],"values":{"on":'$ON',"pw":""},"actions":[],"configured":'$CONF'}'
+else
+  echo '基準外掛 | settings=true'
+  echo ---
+  echo 正常
+fi
+""", dir: baselineDir)
+let baselineRunner = PluginRunner(directory: URL(fileURLWithPath: baselineDir), stateRoot: URL(fileURLWithPath: baselineState))
+baselineRunner.timeout = roomyTimeout
+var baselineSent: [(String, String, String)] = []
+baselineRunner.baselineNotifier = { baselineSent.append(($0, $1, $2)) }
+baselineRunner.setEnabled(true)
+_ = await eventually { baselineRunner.plugins.first?.output != nil && baselineRunner.runningIDs.isEmpty }
+try? await Task.sleep(nanoseconds: 300_000_000)
+check("設定基準：沒有基準檔時主動檢查不呼叫外掛的設定命令", logLines(baselineCalls) == 0 && baselineRunner.baselineMissing.isEmpty
+      && !fm.fileExists(atPath: baselineState + "/.baseline"))
+let baselineID = "baseline.1m.sh"
+await baselineRunner.setBaseline(PluginSettingsBaseline.Record(fields: ["on"]), for: baselineID)
+let baselineFile = PluginRunner.baselineURL(root: baselineState, id: baselineID).path
+let baselineMode = (try? fm.attributesOfItem(atPath: baselineFile)[.posixPermissions] as? Int) ?? 0
+check("設定基準：基準檔權限 600、目錄 700", baselineMode == 0o600
+      && (try? fm.attributesOfItem(atPath: baselineState + "/.baseline")[.posixPermissions] as? Int) == 0o700)
+await baselineRunner.checkBaselines()
+check("設定基準：有基準檔才呼叫 snapshot，且新設定好的 secret 自動併入",
+      logLines(baselineCalls) == 1 && PluginRunner.loadBaseline(URL(fileURLWithPath: baselineFile))?.fields == ["on", "pw"]
+      && baselineRunner.baselineMissing.isEmpty && baselineSent.isEmpty)
+fm.createFile(atPath: baselineFlags + "/off", contents: Data())
+fm.createFile(atPath: baselineFlags + "/lost", contents: Data())
+await baselineRunner.checkBaselines()
+check("設定基準：少了設定就發布缺漏並通知一次", baselineRunner.baselineMissing[baselineID]?.map(\.id) == ["on", "pw"]
+      && baselineSent.count == 1 && baselineSent.first?.0 == baselineID && baselineSent.first?.1 == "外掛：baseline"
+      && baselineSent.first?.2 == "設定比基準少了：自動執行、密碼，點此開啟設定")
+await baselineRunner.checkBaselines()
+check("設定基準：同一組缺漏當天不重複通知", baselineSent.count == 1 && logLines(baselineCalls) == 3)
+let menuWithMissing = M.project(isActive: true, plugins: [.init(id: baselineID, title: "基準外掛", output: .init(items: [], settingsAvailable: true),
+                                                                 baselineMissing: PluginSettingsBaseline.summary(baselineRunner.baselineMissing[baselineID] ?? []))])
+let missingPlugin = menuWithMissing.root.children?.first
+check("設定基準：選單標題加 ⚠︎，子選單第一列可開啟設定", missingPlugin?.title == "基準外掛 ⚠︎"
+      && missingPlugin?.children?.first?.title == "設定比基準少了：自動執行、密碼"
+      && missingPlugin?.children?.first?.command == .pluginSettings(pluginID: baselineID))
+baselineRunner.pause(.sleep)
+let callsWhilePaused = logLines(baselineCalls)
+await baselineRunner.checkBaselines()
+check("設定基準：暫停中不檢查", logLines(baselineCalls) == callsWhilePaused)
+baselineRunner.setEnabled(false)
+await baselineRunner.checkBaselines()
+check("設定基準：關閉後清空缺漏、不檢查，也不留 timer／監看／訂閱", baselineRunner.baselineMissing.isEmpty
+      && logLines(baselineCalls) == callsWhilePaused && baselineRunner.resources.timers == 0
+      && !baselineRunner.resources.watching && baselineRunner.resources.observers == 0)
+await baselineRunner.setBaseline(nil, for: baselineID)
+check("設定基準：清除基準會移除檔案", !fm.fileExists(atPath: baselineFile))
+
 print("整合測試目錄：\(root)")
 
 print("通過 \(pass)，失敗 \(fail)")

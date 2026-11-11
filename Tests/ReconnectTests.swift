@@ -441,4 +441,8 @@ check("需重新準備是不可重試拒絕", CompanyAdmissionFailure.parse("adm
 check("接納拒絕含明確原因", CompanyAdmissionFailure.parse("admission requiresReprepare 需要重新準備")?.code == "requiresReprepare")
 check("忙碌拒絕不算閘道故障", !GatewayHistory.shouldRecord(gateway: 1, success: false, output: "admission busy 另一個操作執行中", interrupted: false))
 check("正常協商輸出不當成接納拒絕", CompanyAdmissionFailure.parse("reason vpn1 auth") == nil)
+check("設定基準通知：點擊取回外掛識別", DropNotifier.pluginSettingsID(["kind": "plugin", "settings": "package:example.demo"]) == "package:example.demo")
+check("設定基準通知：VPN 通知與一般外掛通知不開設定", DropNotifier.pluginSettingsID(["kind": "vpn", "settings": "x"]) == nil
+      && DropNotifier.pluginSettingsID(["kind": "plugin", "href": "https://example.com"]) == nil
+      && DropNotifier.pluginHref(["kind": "plugin", "settings": "x"]) == nil)
 print("\n通過 \(pass)，失敗 \(fail)")
