@@ -1574,6 +1574,51 @@ check("設定基準：關閉後清空缺漏、不檢查，也不留 timer／監�
 await baselineRunner.setBaseline(nil, for: baselineID)
 check("設定基準：清除基準會移除檔案", !fm.fileExists(atPath: baselineFile))
 
+// MARK: 設定基準的自動觸發點（先寫入基準檔再觸發，呼叫次數才能區分「觸發後略過」與「沒觸發」）
+let triggerDir = mkPluginDir("baseline-trigger")
+let triggerState = root + "/baseline-trigger-state"
+let triggerCalls = root + "/baseline-trigger-calls.log"
+let triggerFlags = root + "/baseline-trigger-flags"
+try! fm.createDirectory(atPath: triggerFlags, withIntermediateDirectories: true)
+put("trigger.1m.sh", """
+#!/bin/bash
+if [ "$1" = --splitswan-settings ]; then
+  echo "$2" >> "\(triggerCalls)"
+  [ -f "\(triggerFlags)/slow" ] && /bin/sleep 1
+  ON=true; [ -f "\(triggerFlags)/off" ] && ON=false
+  echo '{"version":1,"title":"觸發","revision":"r1","tabs":[{"id":"general","title":"一般"}],"fields":[{"id":"on","tab":"general","title":"自動執行","type":"toggle"}],"values":{"on":'$ON'},"actions":[]}'
+else
+  echo '觸發外掛 | settings=true'
+  echo ---
+  echo 正常
+fi
+""", dir: triggerDir)
+let triggerID = "trigger.1m.sh"
+let triggerRunner = PluginRunner(directory: URL(fileURLWithPath: triggerDir), stateRoot: URL(fileURLWithPath: triggerState))
+triggerRunner.timeout = roomyTimeout
+var triggerSent: [String] = []
+triggerRunner.baselineNotifier = { _, _, body in triggerSent.append(body) }
+await triggerRunner.setBaseline(PluginSettingsBaseline.Record(fields: ["on"]), for: triggerID)
+triggerRunner.setEnabled(true)
+let enableChecked = await eventually { logLines(triggerCalls) >= 1 }
+try? await Task.sleep(nanoseconds: 500_000_000)
+check("設定基準觸發：啟用後對有基準的外掛呼叫一次 snapshot（實際 \(logLines(triggerCalls))）", enableChecked && logLines(triggerCalls) == 1)
+triggerRunner.pause(.sleep)
+triggerRunner.resume(.sleep)
+let wakeChecked = await eventually { logLines(triggerCalls) >= 2 }
+try? await Task.sleep(nanoseconds: 500_000_000)
+check("設定基準觸發：睡眠喚醒後再檢查一次（實際 \(logLines(triggerCalls))）", wakeChecked && logLines(triggerCalls) == 2)
+triggerRunner.pause(.locked)
+triggerRunner.pause(.sleep)
+triggerRunner.resume(.sleep)
+try? await Task.sleep(nanoseconds: 800_000_000)
+check("設定基準觸發：喚醒但仍鎖定時不檢查", logLines(triggerCalls) == 2)
+triggerRunner.resume(.locked)
+let unlockChecked = await eventually { logLines(triggerCalls) >= 3 }
+try? await Task.sleep(nanoseconds: 500_000_000)
+check("設定基準觸發：解鎖後才補做喚醒的檢查（實際 \(logLines(triggerCalls))）", unlockChecked && logLines(triggerCalls) == 3)
+triggerRunner.setEnabled(false)
+
 print("整合測試目錄：\(root)")
 
 print("通過 \(pass)，失敗 \(fail)")
