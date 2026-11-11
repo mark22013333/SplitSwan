@@ -1448,6 +1448,22 @@ let secretForm = settingsRaw.replacingOccurrences(of: "\"type\":\"text\"", with:
 check("機密欄位：只接受空的 snapshot 值", (try? PluginSettingsProtocol.decode(Data(secretForm.utf8))) != nil)
 let leakingForm = secretForm.replacingOccurrences(of: "\"name\":\"\"", with: "\"name\":\"must-not-echo\"")
 check("機密欄位：拒絕回傳既有機密的 snapshot", (try? PluginSettingsProtocol.decode(Data(leakingForm.utf8))) == nil)
+func configuredForm(_ configured: String) -> Data {
+    let fields = "[{\"id\":\"name\",\"tab\":\"general\",\"title\":\"密碼\",\"type\":\"secret\"},{\"id\":\"user\",\"tab\":\"general\",\"title\":\"帳號\",\"type\":\"text\",\"baseline\":false}]"
+    return Data(secretForm.replacingOccurrences(of: "\"name\":\"\"", with: "\"name\":\"\",\"user\":\"範例\"")
+        .replacingOccurrences(of: "[{\"id\":\"name\",\"tab\":\"general\",\"title\":\"名稱\",\"type\":\"secret\"}]", with: fields)
+        .replacingOccurrences(of: "\"revision\":\"r1\"", with: "\"revision\":\"r1\"" + configured).utf8)
+}
+let legacySecret = try? PluginSettingsProtocol.decode(Data(secretForm.utf8))
+check("設定基準協定：舊外掛沒有 configured／baseline 照常通過", legacySecret?.configured == nil
+      && legacySecret?.fields.allSatisfy { $0.baseline == nil } == true)
+let configuredParsed = try? PluginSettingsProtocol.decode(configuredForm(",\"configured\":[\"name\"]"))
+check("設定基準協定：configured 與 baseline:false 可解析", configuredParsed?.configured == ["name"]
+      && configuredParsed?.fields.first { $0.id == "user" }?.baseline == false)
+check("設定基準協定：空的 configured 可解析", (try? PluginSettingsProtocol.decode(configuredForm(",\"configured\":[]")))?.configured == [])
+for (name, configured) in [("不存在的欄位", "[\"ghost\"]"), ("非 secret 欄位", "[\"user\"]"), ("重複 id", "[\"name\",\"name\"]")] {
+    check("設定基準協定：configured 拒絕\(name)", (try? PluginSettingsProtocol.decode(configuredForm(",\"configured\":" + configured))) == nil)
+}
 check("舊外掛不會自動啟用設定協定", !L.parseOutput("舊外掛\n---\n內容").settingsAvailable)
 let settingsTree = M.project(isActive: true, plugins: [.init(id: "test.sh", title: "測試", output: .init(items: supported.items, settingsAvailable: true))])
 let settingsChildren = settingsTree.root.children?.first?.children ?? []
