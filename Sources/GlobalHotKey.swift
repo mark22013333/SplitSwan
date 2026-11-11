@@ -1,47 +1,72 @@
 // 系統全域熱鍵：Carbon RegisterEventHotKey 不需要輔助使用權限，App 不在前景時也收得到。
+// 每支有設定視窗的外掛各自註冊一組，按下就開啟那支外掛的設定視窗。
 import Carbon.HIToolbox
 
 @MainActor
 final class GlobalHotKey: ObservableObject {
     static let shared = GlobalHotKey()
-    var onPress: () -> Void = {}
-    /// 錄製新熱鍵時暫停，否則按下目前那組會直接開視窗，錄製畫面收不到。
+    var onPress: (String) -> Void = { _ in }
+    /// 錄製新熱鍵時暫停，否則按下已註冊的組合會直接開視窗，錄製畫面收不到。
     var suspended = false { didSet { sync() } }
-    /// 想註冊卻失敗（通常是其他 App 已佔用同一組）。
-    @Published private(set) var conflict = false
+    /// 想註冊卻被系統拒絕的外掛。其他 App 用同一組不會失敗，按下時兩邊都會收到。
+    @Published private(set) var conflicts: Set<String> = []
 
-    /// 只在外掛啟用時註冊；關閉外掛時不留任何系統資源。
-    func sync() {
-        let wanted = PluginRunner.shared.isActive && !suspended ? PluginShortcuts.hotKey() : nil
-        let ok = update(wanted)
-        if conflict != !ok { conflict = !ok }
-    }
-    private var ref: EventHotKeyRef?
+    private struct Registration { let ref: EventHotKeyRef; let hotKey: PluginShortcuts.HotKey; let number: UInt32 }
+    private var registrations: [String: Registration] = [:]
+    private var pluginForNumber: [UInt32: String] = [:]
+    private var nextNumber: UInt32 = 1
     private var handler: EventHandlerRef?
-    private(set) var registered: PluginShortcuts.HotKey?
 
-    /// 傳 nil 取消註冊；同一組按鍵重複呼叫不會重新註冊。回傳是否註冊成功（被其他 App 佔用時失敗）。
-    @discardableResult
-    func update(_ hotKey: PluginShortcuts.HotKey?) -> Bool {
-        if hotKey == registered, (hotKey == nil) == (ref == nil) { return true }
-        if let ref { UnregisterEventHotKey(ref); self.ref = nil }
-        registered = nil
-        guard let hotKey else { return true }
-        installHandler()
-        var newRef: EventHotKeyRef?
-        let id = EventHotKeyID(signature: OSType(0x5357_484B), id: 1) // 'SWHK'
-        guard RegisterEventHotKey(hotKey.keyCode, hotKey.modifiers, id, GetApplicationEventTarget(), 0, &newRef) == noErr,
-              let newRef else { return false }
-        ref = newRef
-        registered = hotKey
-        return true
+    /// 有設定視窗且沒有載入問題的外掛。
+    static func candidates(_ plugins: [PluginRunner.Plugin]) -> [PluginRunner.Plugin] {
+        plugins.filter { p in
+            p.problem == nil && (p.package.map { $0.record.manifest.settings } ?? (p.output?.settingsAvailable == true))
+        }
+    }
+
+    /// 只在外掛啟用時註冊，且只註冊目前還在的外掛；關閉外掛時不留任何系統資源。
+    func sync() {
+        let runner = PluginRunner.shared
+        let ids = Self.candidates(runner.plugins).map(\.id)
+        PluginShortcuts.migrateLegacy(candidates: ids)
+        let wanted = runner.isActive && !suspended ? PluginShortcuts.hotKeys().filter { ids.contains($0.key) } : [:]
+        update(wanted)
+    }
+
+    func update(_ wanted: [String: PluginShortcuts.HotKey]) {
+        for (id, reg) in registrations where wanted[id] != reg.hotKey {
+            UnregisterEventHotKey(reg.ref)
+            pluginForNumber[reg.number] = nil
+            registrations[id] = nil
+        }
+        var failed: Set<String> = []
+        for (id, hotKey) in wanted.sorted(by: { $0.key < $1.key }) where registrations[id] == nil {
+            installHandler()
+            let number = nextNumber
+            nextNumber &+= 1
+            var ref: EventHotKeyRef?
+            let hotKeyID = EventHotKeyID(signature: OSType(0x5357_484B), id: number) // 'SWHK'
+            guard RegisterEventHotKey(hotKey.keyCode, hotKey.modifiers, hotKeyID, GetApplicationEventTarget(), 0, &ref) == noErr,
+                  let ref else { failed.insert(id); continue }
+            registrations[id] = Registration(ref: ref, hotKey: hotKey, number: number)
+            pluginForNumber[number] = id
+        }
+        if conflicts != failed { conflicts = failed }
+    }
+
+    private func pressed(_ number: UInt32) {
+        if let id = pluginForNumber[number] { onPress(id) }
     }
 
     private func installHandler() {
         guard handler == nil else { return }
         var type = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in
-            DispatchQueue.main.async { MainActor.assumeIsolated { GlobalHotKey.shared.onPress() } }
+        InstallEventHandler(GetApplicationEventTarget(), { _, event, _ in
+            var hotKeyID = EventHotKeyID()
+            guard GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
+                                    nil, MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID) == noErr else { return noErr }
+            let number = hotKeyID.id
+            DispatchQueue.main.async { MainActor.assumeIsolated { GlobalHotKey.shared.pressed(number) } }
             return noErr
         }, 1, &type, nil, &handler)
     }

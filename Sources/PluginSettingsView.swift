@@ -7,10 +7,6 @@ struct PluginSettingsView: View {
     @StateObject private var packages: PluginPackageModel
     @AppStorage(PluginRunner.enabledKey) private var enabled = false
     @State private var diagnosticsMessage: String?
-    @ObservedObject private var hotKeys = GlobalHotKey.shared
-    @State private var hotKey = PluginShortcuts.hotKey()
-    @AppStorage(PluginShortcuts.hotKeyTargetKey) private var hotKeyTarget = ""
-    @State private var recorder: Any?
 
     init(runner: PluginRunner? = nil) {
         let selected = runner ?? PluginRunner.shared
@@ -43,7 +39,6 @@ struct PluginSettingsView: View {
             if let diagnosticsMessage {
                 Text(diagnosticsMessage).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
             }
-            if enabled { hotKeyRow }
             Text(runner.directory.path.replacingOccurrences(of: PluginRunner.home, with: "~"))
                 .font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
             if enabled {
@@ -61,63 +56,6 @@ struct PluginSettingsView: View {
             ForEach(runner.packageErrors, id: \.self) { Text($0).font(.caption).foregroundStyle(.orange) }
             ForEach(runner.plugins) { p in row(p) }
         }.onAppear { runner.scan() }
-    }
-
-    private var hotKeyRow: some View {
-        let candidates = Self.settingsCandidates(runner)
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 10) {
-                Text("開啟外掛設定的快捷鍵")
-                Button(recorder != nil ? "請按下新的組合鍵…（Esc 取消）" : hotKey?.display ?? "未設定") { recorder == nil ? startRecording() : stopRecording() }
-                    .font(.body.monospaced())
-                if hotKey != nil { Button("清除") { saveHotKey(nil) } }
-                if hotKey != .default { Button("還原預設") { saveHotKey(.default) } }
-                if candidates.count > 1 {
-                    Picker("開啟", selection: Binding(
-                        get: { PluginShortcuts.target(stored: hotKeyTarget, candidates: candidates.map(\.id)) ?? "" },
-                        set: { hotKeyTarget = $0 })) {
-                        ForEach(candidates) { p in Text(p.package?.record.manifest.name ?? p.id).tag(p.id) }
-                    }.fixedSize()
-                }
-                Spacer()
-            }
-            Text(hotKeys.conflict ? "這組按鍵已被其他 App 使用，請換一組。" : "在任何 App 中按下就會開啟外掛設定；設定視窗內的按鈕若有快捷鍵，會標在按鈕旁。")
-                .font(.caption).foregroundStyle(hotKeys.conflict ? .orange : .secondary)
-        }
-        .onDisappear { stopRecording() }
-    }
-
-    private func startRecording() {
-        hotKeys.suspended = true
-        recorder = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            if event.keyCode == 53 { stopRecording(); return nil }
-            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            let modifiers = (flags.contains(.control) ? PluginShortcuts.HotKey.control : 0) | (flags.contains(.option) ? PluginShortcuts.HotKey.option : 0)
-                | (flags.contains(.shift) ? PluginShortcuts.HotKey.shift : 0) | (flags.contains(.command) ? PluginShortcuts.HotKey.command : 0)
-            let candidate = PluginShortcuts.HotKey(keyCode: UInt32(event.keyCode), modifiers: modifiers,
-                                                   key: (event.charactersIgnoringModifiers ?? "").uppercased())
-            guard candidate.isUsable else { NSSound.beep(); return nil }
-            saveHotKey(candidate)
-            return nil
-        }
-    }
-    private func stopRecording() {
-        if let recorder { NSEvent.removeMonitor(recorder) }
-        recorder = nil
-        if hotKeys.suspended { hotKeys.suspended = false }
-    }
-    private func saveHotKey(_ value: PluginShortcuts.HotKey?) {
-        PluginShortcuts.setHotKey(value)
-        hotKey = PluginShortcuts.hotKey()
-        stopRecording()
-        hotKeys.sync()
-    }
-
-    /// 全域熱鍵可開啟的外掛：有設定視窗且沒有載入問題。
-    static func settingsCandidates(_ runner: PluginRunner) -> [PluginRunner.Plugin] {
-        runner.plugins.filter { p in
-            p.problem == nil && (p.package.map { $0.record.manifest.settings } ?? (p.output?.settingsAvailable == true))
-        }
     }
 
     private func revealLog() {
