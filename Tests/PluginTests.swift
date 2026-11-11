@@ -1574,6 +1574,20 @@ check("設定基準：關閉後清空缺漏、不檢查，也不留 timer／監�
 await baselineRunner.setBaseline(nil, for: baselineID)
 check("設定基準：清除基準會移除檔案", !fm.fileExists(atPath: baselineFile))
 
+// 不認得的版本：當成沒有基準，不呼叫外掛、不覆寫檔案
+let futureBaseline = Data(#"{"version":2,"fields":["on"]}"#.utf8)
+try! futureBaseline.write(to: URL(fileURLWithPath: baselineFile))
+let futureRunner = PluginRunner(directory: URL(fileURLWithPath: baselineDir), stateRoot: URL(fileURLWithPath: baselineState))
+futureRunner.timeout = roomyTimeout
+let callsBeforeFuture = logLines(baselineCalls)
+futureRunner.setEnabled(true)
+_ = await eventually { futureRunner.plugins.first?.output != nil && futureRunner.runningIDs.isEmpty }
+try? await Task.sleep(nanoseconds: 500_000_000)
+let futureLoaded = await futureRunner.baseline(for: baselineID)
+check("設定基準：不認得版本的基準檔視為沒有基準，不呼叫外掛也不覆寫", futureLoaded == nil
+      && logLines(baselineCalls) == callsBeforeFuture && (try? Data(contentsOf: URL(fileURLWithPath: baselineFile))) == futureBaseline)
+futureRunner.setEnabled(false)
+
 // MARK: 設定基準的自動觸發點（先寫入基準檔再觸發，呼叫次數才能區分「觸發後略過」與「沒觸發」）
 let triggerDir = mkPluginDir("baseline-trigger")
 let triggerState = root + "/baseline-trigger-state"

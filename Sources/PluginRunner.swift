@@ -728,11 +728,14 @@ final class PluginRunner: ObservableObject {
         URL(fileURLWithPath: root + "/.baseline-reminded/" + id + ".json")
     }
 
+    /// 不認得的版本視為沒有基準；自動併入不會寫回，所以檔案留給認得它的版本。
     nonisolated static func loadBaseline(_ url: URL) -> PluginSettingsBaseline.Record? {
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
               let size = attrs[.size] as? Int, size <= 16 * 1024,
-              let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(PluginSettingsBaseline.Record.self, from: data)
+              let data = try? Data(contentsOf: url),
+              let record = try? JSONDecoder().decode(PluginSettingsBaseline.Record.self, from: data),
+              record.version == PluginSettingsBaseline.version else { return nil }
+        return record
     }
 
     /// nil 表示清除基準。先以 600 寫暫存檔再改名替換，不會留下半份檔案。

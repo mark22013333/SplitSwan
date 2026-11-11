@@ -6,11 +6,12 @@ enum PluginSettingsBaseline {
     typealias Field = PluginSettingsProtocol.Field
     typealias Snapshot = PluginSettingsProtocol.Snapshot
 
+    static let version = 1
     /// 基準提醒不佔外掛自己的每日通知上限，另外限制：同一組缺漏每天 1 則，每支外掛每天最多 3 則。
     static let maxRemindersPerDay = 3
 
     struct Record: Codable, Equatable, Sendable {
-        var version = 1
+        var version = PluginSettingsBaseline.version
         var fields: Set<String>
     }
     struct Missing: Equatable, Sendable {
