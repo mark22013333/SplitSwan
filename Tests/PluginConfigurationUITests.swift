@@ -578,7 +578,7 @@ func runConfigurationTests() async throws -> Int {
           summary == "原本：上班 1 天（範例日曆）")
 
     // MARK: 設定基準（欄位名稱均為虛構）
-    var baselineOn = true, baselineConfigured = ["password"]
+    var baselineOn = true, baselineConfigured = ["password"], baselineAt = "08:30"
     func baselineForm() throws -> P.Snapshot {
         try P.decode(JSONSerialization.data(withJSONObject: [
             "version": 1, "title": "基準測試", "revision": "b1",
@@ -586,19 +586,27 @@ func runConfigurationTests() async throws -> Int {
             "fields": [["id": "enabled", "tab": "general", "title": "自動執行", "type": "toggle"],
                        ["id": "at", "tab": "general", "title": "時間", "type": "time"],
                        ["id": "password", "tab": "account", "title": "密碼", "type": "secret"]],
-            "values": ["enabled": baselineOn, "at": "08:30", "password": ""] as [String: Any],
+            "values": ["enabled": baselineOn, "at": baselineAt, "password": ""] as [String: Any],
             "actions": [["id": "account-open", "tab": "general", "title": "帳號…", "opensTab": "account"]],
             "configured": baselineConfigured] as [String: Any]))
     }
     var storedBaseline: PluginSettingsBaseline.Record?
     var reported: [[PluginSettingsBaseline.Missing]] = []
     let baselineModel = PluginConfigurationModel(pluginID: "baseline-fixture", command: { _, _ in try baselineForm() },
-        baselineStore: .init(load: { storedBaseline }, save: { storedBaseline = $0 }, report: { reported.append($0) }))
+        baselineStore: .init(update: { storedBaseline = $0(storedBaseline); return storedBaseline }, report: { reported.append($0) }))
     // SwiftUI 按鈕沒有可讀的標題，所以照按鈕呼叫的模型方法操作，畫面以截圖留證。
     let baselineWindow = openWindow(baselineModel, height: 520)
     await settleWindow(baselineWindow) { baselineModel.snapshot != nil && !baselineModel.busy }
     check("沒有基準時不回報缺漏、也不寫檔", baselineModel.baseline == nil && storedBaseline == nil && baselineModel.baselineMissing.isEmpty)
     capture(baselineWindow, "baseline-none")
+    baselineOn = false; baselineConfigured = []; baselineAt = ""
+    await baselineModel.load()
+    await baselineModel.rememberBaseline()
+    check("沒有已設定的項目時不建立基準並提示", storedBaseline == nil && baselineModel.baseline == nil
+          && baselineModel.baselineHint == "目前沒有已設定的項目可以記住")
+    capture(baselineWindow, "baseline-nothing-to-remember")
+    baselineOn = true; baselineConfigured = ["password"]; baselineAt = "08:30"
+    await baselineModel.load()
     await baselineModel.rememberBaseline()
     check("記住目前設定只收已設定的欄位", storedBaseline?.fields == ["enabled", "at", "password"] && reported.last == [])
     capture(baselineWindow, "baseline-remembered")
@@ -623,6 +631,27 @@ func runConfigurationTests() async throws -> Int {
     await baselineModel.load()
     check("清除後重新載入不再回報、不再寫檔", storedBaseline == nil && baselineModel.baselineMissing.isEmpty)
     closeWindow(baselineWindow, baselineModel)
+
+    // 視窗開著時主動檢查併入新欄位，視窗之後的操作要以最新的基準計算，不能用開窗時的舊副本蓋掉。
+    let sharedRoot = fm.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("splitswan-baseline-" + UUID().uuidString)
+    defer { try? fm.removeItem(at: sharedRoot) }
+    let sharedRunner = PluginRunner(directory: sharedRoot.appendingPathComponent("plugins"), stateRoot: sharedRoot.appendingPathComponent("state"),
+                                    preferences: UserDefaults(suiteName: "SplitSwan.ConfigUITests." + UUID().uuidString)!)
+    await sharedRunner.setBaseline(PluginSettingsBaseline.Record(fields: ["at", "password"]), for: "baseline-shared")
+    baselineOn = false; baselineConfigured = []
+    let sharedModel = PluginConfigurationModel(pluginID: "baseline-shared", command: { _, _ in try baselineForm() },
+                                               baselineStore: .runner(sharedRunner, pluginID: "baseline-shared"))
+    let sharedWindow = openWindow(sharedModel, height: 520)
+    await settleWindow(sharedWindow) { sharedModel.snapshot != nil && !sharedModel.busy && !sharedModel.baselineMissing.isEmpty }
+    check("共用基準：開窗時讀到 runner 的基準", sharedModel.baselineMissing.map(\.id) == ["password"])
+    await sharedRunner.setBaseline(PluginSettingsBaseline.Record(fields: ["at", "password", "enabled"]), for: "baseline-shared")
+    await sharedModel.acknowledgeMissing("password")
+    let sharedFile = PluginRunner.baselineURL(root: sharedRoot.appendingPathComponent("state").path, id: "baseline-shared")
+    let sharedLatest = await sharedRunner.baseline(for: "baseline-shared")
+    check("共用基準：這是刻意的不會移除視窗開著期間併入的欄位（實際 \(sharedLatest?.fields.sorted() ?? [])）",
+          sharedLatest?.fields == ["at", "enabled"] && PluginRunner.loadBaseline(sharedFile)?.fields == ["at", "enabled"]
+          && sharedModel.baselineMissing.map(\.id) == ["enabled"])
+    closeWindow(sharedWindow, sharedModel)
 
     print("通過 \(passed)，失敗 \(failed)")
     return failed

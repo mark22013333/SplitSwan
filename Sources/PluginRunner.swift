@@ -186,6 +186,7 @@ final class PluginRunner: ObservableObject {
         paused = []
         baselineCheckPending = false
         if !baselineMissing.isEmpty { baselineMissing = [:] }
+        baselineCache = [:]
         removeObservers()
         stopWatcher()
         cancelTimers()
@@ -739,9 +740,10 @@ final class PluginRunner: ObservableObject {
         if rename(temp, url.path) != 0 { try? fm.removeItem(atPath: temp) }
     }
 
-    /// 讀寫都在背景；寫入依序號丟棄過期的寫入，避免設定視窗與主動檢查的寫入互相蓋掉。
+    /// 讀寫都在背景、依序執行；寫入依序號丟棄過期的寫入。讀取也排在同一序列，清掉快取後不會讀到還沒寫完的舊檔。
     private actor BaselineFiles {
         private var latest: [String: Int] = [:]
+        func read(_ url: URL) -> PluginSettingsBaseline.Record? { PluginRunner.loadBaseline(url) }
         func write(_ record: PluginSettingsBaseline.Record?, to url: URL, sequence: Int) {
             guard sequence > latest[url.path, default: 0] else { return }
             latest[url.path] = sequence
@@ -752,16 +754,26 @@ final class PluginRunner: ObservableObject {
     func baseline(for id: String) async -> PluginSettingsBaseline.Record? {
         if let cached = baselineCache[id] { return cached }
         let url = Self.baselineURL(root: stateRoot.path, id: id)
-        let loaded = await Task.detached(priority: .utility) { Self.loadBaseline(url) }.value
+        let loaded = await Task.detached(priority: .utility) { [baselineFiles] in await baselineFiles.read(url) }.value
         if let cached = baselineCache[id] { return cached }
         baselineCache[id] = .some(loaded)
         return loaded
     }
 
-    func setBaseline(_ record: PluginSettingsBaseline.Record?, for id: String) async {
-        baselineCache[id] = .some(record)
+    /// 基準唯一的修改入口：以快取中最新的基準計算並寫回，設定視窗與主動檢查不會拿各自的舊副本互相蓋掉。
+    @discardableResult
+    func updateBaseline(for id: String, _ change: (PluginSettingsBaseline.Record?) -> PluginSettingsBaseline.Record?) async -> PluginSettingsBaseline.Record? {
+        let current = await baseline(for: id)
+        let next = change(current)
+        guard next != current else { return current }
+        baselineCache[id] = .some(next)
         baselineWrites += 1
-        await baselineFiles.write(record, to: Self.baselineURL(root: stateRoot.path, id: id), sequence: baselineWrites)
+        await baselineFiles.write(next, to: Self.baselineURL(root: stateRoot.path, id: id), sequence: baselineWrites)
+        return next
+    }
+
+    func setBaseline(_ record: PluginSettingsBaseline.Record?, for id: String) async {
+        await updateBaseline(for: id) { _ in record }
     }
 
     /// 設定視窗與主動檢查回報評估結果；外掛區塊關閉時選單不顯示，所以不保留。
@@ -1093,6 +1105,7 @@ final class PluginRunner: ObservableObject {
         notifyCapped.remove(id)
         notifyLogs.removeValue(forKey: id)
         baselineMissing.removeValue(forKey: id)
+        baselineCache.removeValue(forKey: id)
         removed = true
         return result
     }

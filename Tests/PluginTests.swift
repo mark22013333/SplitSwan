@@ -1617,7 +1617,11 @@ triggerRunner.resume(.locked)
 let unlockChecked = await eventually { logLines(triggerCalls) >= 3 }
 try? await Task.sleep(nanoseconds: 500_000_000)
 check("設定基準觸發：解鎖後才補做喚醒的檢查（實際 \(logLines(triggerCalls))）", unlockChecked && logLines(triggerCalls) == 3)
+// 關閉時清掉快取：之後讀的是檔案現況
 triggerRunner.setEnabled(false)
+PluginRunner.saveBaseline(PluginSettingsBaseline.Record(fields: ["on", "other"]), to: PluginRunner.baselineURL(root: triggerState, id: triggerID))
+let afterStop = await triggerRunner.baseline(for: triggerID)
+check("設定基準：關閉後清掉快取，重新讀取檔案", afterStop?.fields == ["on", "other"])
 
 print("整合測試目錄：\(root)")
 

@@ -21,22 +21,23 @@ final class PluginConfigurationModel: ObservableObject {
     /// 有未儲存變更時詢問是否捨棄；回傳 true 表示捨棄。測試可替換。
     var confirmDiscard: () -> Bool = { PluginConfigurationWindows.confirmDiscard() }
     struct JobOrigin: Equatable { let jobID: String; let title: String; let at: Date }
-    /// 基準的讀寫與回報；預設接到 PluginRunner，讓選單與主動檢查看到同一份。測試可替換。
+    /// 基準的修改與回報；預設接到 PluginRunner，讓選單與主動檢查看到同一份。視窗不自留副本，
+    /// 每次都把「要怎麼改」交給 update 套在最新的基準上，回傳改完的基準。測試可替換。
     struct BaselineStore {
-        var load: @MainActor () async -> PluginSettingsBaseline.Record?
-        var save: @MainActor (PluginSettingsBaseline.Record?) async -> Void
+        typealias Record = PluginSettingsBaseline.Record
+        var update: @MainActor (_ change: (Record?) -> Record?) async -> Record?
         var report: @MainActor ([PluginSettingsBaseline.Missing]) -> Void
 
         @MainActor static func runner(_ runner: PluginRunner, pluginID: String) -> BaselineStore {
-            BaselineStore(load: { await runner.baseline(for: pluginID) },
-                          save: { await runner.setBaseline($0, for: pluginID) },
+            BaselineStore(update: { await runner.updateBaseline(for: pluginID, $0) },
                           report: { runner.reportBaselineMissing($0, for: pluginID) })
         }
-        static let detached = BaselineStore(load: { nil }, save: { _ in }, report: { _ in })
+        static let detached = BaselineStore(update: { _ in nil }, report: { _ in })
     }
+    /// 顯示用，最近一次 update 的結果
     @Published private(set) var baseline: PluginSettingsBaseline.Record?
     @Published private(set) var baselineMissing: [PluginSettingsBaseline.Missing] = []
-    private var baselineLoaded = false
+    @Published private(set) var baselineHint: String?
     private let baselineStore: BaselineStore
     struct Notice: Equatable { let origin: JobOrigin?; let job: P.Job }
     private let command: @MainActor (String, P.Request?) async throws -> P.Snapshot
@@ -148,36 +149,26 @@ final class PluginConfigurationModel: ObservableObject {
     }
     /// 每次取得 snapshot 都評估一次，並把新設定好的欄位併入基準。
     private func evaluateBaseline() async {
-        if !baselineLoaded {
-            baseline = await baselineStore.load()
-            baselineLoaded = true
-        }
         guard visible, let s = snapshot else { return }
-        guard let record = baseline else { baselineMissing = []; return }
-        let evaluation = PluginSettingsBaseline.evaluate(record, s)
-        baselineMissing = evaluation.missing
-        baselineStore.report(evaluation.missing)
-        if evaluation.next != record {
-            baseline = evaluation.next
-            await baselineStore.save(evaluation.next)
-        }
+        showBaseline(await baselineStore.update { $0.map { PluginSettingsBaseline.evaluate($0, s).next } })
     }
+    /// 沒有任何已設定的項目時不建立基準：空基準不會提醒任何事，卻會讓主動檢查一直呼叫外掛。
     func rememberBaseline() async {
         guard let s = snapshot else { return }
-        await setBaseline(PluginSettingsBaseline.capture(s))
+        let captured = PluginSettingsBaseline.capture(s)
+        guard !captured.fields.isEmpty else { baselineHint = "目前沒有已設定的項目可以記住"; return }
+        baselineHint = nil
+        showBaseline(await baselineStore.update { _ in captured })
     }
     /// 「這是刻意的」：只移除這一項，之後再設定好會自動併回。
     func acknowledgeMissing(_ id: String) async {
-        guard let record = baseline else { return }
-        await setBaseline(PluginSettingsBaseline.acknowledge([id], in: record))
+        showBaseline(await baselineStore.update { $0.map { PluginSettingsBaseline.acknowledge([id], in: $0) } })
     }
-    func clearBaseline() async { await setBaseline(nil) }
-    private func setBaseline(_ record: PluginSettingsBaseline.Record?) async {
+    func clearBaseline() async { showBaseline(await baselineStore.update { _ in nil }) }
+    private func showBaseline(_ record: PluginSettingsBaseline.Record?) {
         baseline = record
-        baselineLoaded = true
         baselineMissing = record.flatMap { r in snapshot.map { PluginSettingsBaseline.evaluate(r, $0).missing } } ?? []
         baselineStore.report(baselineMissing)
-        await baselineStore.save(record)
     }
     /// 「前往設定」：切到欄位所在頁籤；隱藏頁籤和 `opensTab` 一樣保留返回位置。
     func showMissing(_ missing: PluginSettingsBaseline.Missing) {
@@ -538,6 +529,7 @@ struct PluginConfigurationView: View {
             Button("記住目前設定") { Task { await model.rememberBaseline() } }
                 .disabled(model.busy || model.dirty)
                 .help("之後這些已設定的項目若變成空的或被關掉，會提醒你")
+            if let hint = model.baselineHint { Text(hint).font(.caption).foregroundStyle(.secondary) }
         } else if let baseline = model.baseline, model.baselineMissing.isEmpty {
             if confirmingClearBaseline {
                 Text("清除後不再提醒少了哪些設定。").font(.caption).foregroundStyle(.secondary)
