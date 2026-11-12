@@ -1448,6 +1448,22 @@ let secretForm = settingsRaw.replacingOccurrences(of: "\"type\":\"text\"", with:
 check("機密欄位：只接受空的 snapshot 值", (try? PluginSettingsProtocol.decode(Data(secretForm.utf8))) != nil)
 let leakingForm = secretForm.replacingOccurrences(of: "\"name\":\"\"", with: "\"name\":\"must-not-echo\"")
 check("機密欄位：拒絕回傳既有機密的 snapshot", (try? PluginSettingsProtocol.decode(Data(leakingForm.utf8))) == nil)
+func configuredForm(_ configured: String) -> Data {
+    let fields = "[{\"id\":\"name\",\"tab\":\"general\",\"title\":\"密碼\",\"type\":\"secret\"},{\"id\":\"user\",\"tab\":\"general\",\"title\":\"帳號\",\"type\":\"text\",\"baseline\":false}]"
+    return Data(secretForm.replacingOccurrences(of: "\"name\":\"\"", with: "\"name\":\"\",\"user\":\"範例\"")
+        .replacingOccurrences(of: "[{\"id\":\"name\",\"tab\":\"general\",\"title\":\"名稱\",\"type\":\"secret\"}]", with: fields)
+        .replacingOccurrences(of: "\"revision\":\"r1\"", with: "\"revision\":\"r1\"" + configured).utf8)
+}
+let legacySecret = try? PluginSettingsProtocol.decode(Data(secretForm.utf8))
+check("設定基準協定：舊外掛沒有 configured／baseline 照常通過", legacySecret?.configured == nil
+      && legacySecret?.fields.allSatisfy { $0.baseline == nil } == true)
+let configuredParsed = try? PluginSettingsProtocol.decode(configuredForm(",\"configured\":[\"name\"]"))
+check("設定基準協定：configured 與 baseline:false 可解析", configuredParsed?.configured == ["name"]
+      && configuredParsed?.fields.first { $0.id == "user" }?.baseline == false)
+check("設定基準協定：空的 configured 可解析", (try? PluginSettingsProtocol.decode(configuredForm(",\"configured\":[]")))?.configured == [])
+for (name, configured) in [("不存在的欄位", "[\"ghost\"]"), ("非 secret 欄位", "[\"user\"]"), ("重複 id", "[\"name\",\"name\"]")] {
+    check("設定基準協定：configured 拒絕\(name)", (try? PluginSettingsProtocol.decode(configuredForm(",\"configured\":" + configured))) == nil)
+}
 check("舊外掛不會自動啟用設定協定", !L.parseOutput("舊外掛\n---\n內容").settingsAvailable)
 let settingsTree = M.project(isActive: true, plugins: [.init(id: "test.sh", title: "測試", output: .init(items: supported.items, settingsAvailable: true))])
 let settingsChildren = settingsTree.root.children?.first?.children ?? []
@@ -1493,6 +1509,181 @@ do {
         check("設定命令重新驗證檔案權限", false)
     } catch { check("設定命令重新驗證檔案權限", true) }
 } catch { check("設定命令完整往返：\(error)", false) }
+
+// MARK: 設定基準的主動檢查
+let baselineDir = mkPluginDir("baseline")
+let baselineState = root + "/baseline-state"
+let baselineCalls = root + "/baseline-calls.log"
+let baselineFlags = root + "/baseline-flags"
+try! fm.createDirectory(atPath: baselineFlags, withIntermediateDirectories: true)
+put("baseline.1m.sh", """
+#!/bin/bash
+if [ "$1" = --splitswan-settings ]; then
+  echo "$2" >> "\(baselineCalls)"
+  ON=true; [ -f "\(baselineFlags)/off" ] && ON=false
+  CONF='["pw"]'; [ -f "\(baselineFlags)/lost" ] && CONF='[]'
+  echo '{"version":1,"title":"基準","revision":"r1","tabs":[{"id":"general","title":"一般"}],"fields":[{"id":"on","tab":"general","title":"自動執行","type":"toggle"},{"id":"pw","tab":"general","title":"密碼","type":"secret"}],"values":{"on":'$ON',"pw":""},"actions":[],"configured":'$CONF'}'
+else
+  echo '基準外掛 | settings=true'
+  echo ---
+  echo 正常
+fi
+""", dir: baselineDir)
+let baselineRunner = PluginRunner(directory: URL(fileURLWithPath: baselineDir), stateRoot: URL(fileURLWithPath: baselineState))
+baselineRunner.timeout = roomyTimeout
+var baselineSent: [(String, String, String)] = []
+baselineRunner.baselineNotifier = { baselineSent.append(($0, $1, $2)) }
+baselineRunner.setEnabled(true)
+_ = await eventually { baselineRunner.plugins.first?.output != nil && baselineRunner.runningIDs.isEmpty }
+try? await Task.sleep(nanoseconds: 300_000_000)
+check("設定基準：沒有基準檔時主動檢查不呼叫外掛的設定命令", logLines(baselineCalls) == 0 && baselineRunner.baselineMissing.isEmpty
+      && !fm.fileExists(atPath: baselineState + "/.baseline"))
+let baselineID = "baseline.1m.sh"
+await baselineRunner.setBaseline(PluginSettingsBaseline.Record(fields: ["on"]), for: baselineID)
+let baselineFile = PluginRunner.baselineURL(root: baselineState, id: baselineID).path
+let baselineMode = (try? fm.attributesOfItem(atPath: baselineFile)[.posixPermissions] as? Int) ?? 0
+check("設定基準：基準檔權限 600、目錄 700", baselineMode == 0o600
+      && (try? fm.attributesOfItem(atPath: baselineState + "/.baseline")[.posixPermissions] as? Int) == 0o700)
+await baselineRunner.checkBaselines()
+check("設定基準：有基準檔才呼叫 snapshot，且新設定好的 secret 自動併入",
+      logLines(baselineCalls) == 1 && PluginRunner.loadBaseline(URL(fileURLWithPath: baselineFile))?.fields == ["on", "pw"]
+      && baselineRunner.baselineMissing.isEmpty && baselineSent.isEmpty)
+fm.createFile(atPath: baselineFlags + "/off", contents: Data())
+fm.createFile(atPath: baselineFlags + "/lost", contents: Data())
+await baselineRunner.checkBaselines()
+check("設定基準：少了設定就發布缺漏並通知一次", baselineRunner.baselineMissing[baselineID]?.map(\.id) == ["on", "pw"]
+      && baselineSent.count == 1 && baselineSent.first?.0 == baselineID && baselineSent.first?.1 == "外掛：baseline"
+      && baselineSent.first?.2 == "設定比基準少了：自動執行、密碼，點此開啟設定")
+await baselineRunner.checkBaselines()
+check("設定基準：同一組缺漏當天不重複通知", baselineSent.count == 1 && logLines(baselineCalls) == 3)
+let menuWithMissing = M.project(isActive: true, plugins: [.init(id: baselineID, title: "基準外掛", output: .init(items: [], settingsAvailable: true),
+                                                                 baselineMissing: PluginSettingsBaseline.summary(baselineRunner.baselineMissing[baselineID] ?? []))])
+let missingPlugin = menuWithMissing.root.children?.first
+check("設定基準：選單標題加 ⚠︎，子選單第一列可開啟設定", missingPlugin?.title == "基準外掛 ⚠︎"
+      && missingPlugin?.children?.first?.title == "設定比基準少了：自動執行、密碼"
+      && missingPlugin?.children?.first?.command == .pluginSettings(pluginID: baselineID))
+baselineRunner.pause(.sleep)
+let callsWhilePaused = logLines(baselineCalls)
+await baselineRunner.checkBaselines()
+check("設定基準：暫停中不檢查", logLines(baselineCalls) == callsWhilePaused)
+baselineRunner.setEnabled(false)
+await baselineRunner.checkBaselines()
+check("設定基準：關閉後清空缺漏、不檢查，也不留 timer／監看／訂閱", baselineRunner.baselineMissing.isEmpty
+      && logLines(baselineCalls) == callsWhilePaused && baselineRunner.resources.timers == 0
+      && !baselineRunner.resources.watching && baselineRunner.resources.observers == 0)
+await baselineRunner.setBaseline(nil, for: baselineID)
+check("設定基準：清除基準會移除檔案", !fm.fileExists(atPath: baselineFile))
+
+// 不認得的版本：當成沒有基準，不呼叫外掛、不覆寫檔案
+let futureBaseline = Data(#"{"version":2,"fields":["on"]}"#.utf8)
+try! futureBaseline.write(to: URL(fileURLWithPath: baselineFile))
+let futureRunner = PluginRunner(directory: URL(fileURLWithPath: baselineDir), stateRoot: URL(fileURLWithPath: baselineState))
+futureRunner.timeout = roomyTimeout
+let callsBeforeFuture = logLines(baselineCalls)
+futureRunner.setEnabled(true)
+_ = await eventually { futureRunner.plugins.first?.output != nil && futureRunner.runningIDs.isEmpty }
+try? await Task.sleep(nanoseconds: 500_000_000)
+let futureLoaded = await futureRunner.baseline(for: baselineID)
+check("設定基準：不認得版本的基準檔視為沒有基準，不呼叫外掛也不覆寫", futureLoaded == nil
+      && logLines(baselineCalls) == callsBeforeFuture && (try? Data(contentsOf: URL(fileURLWithPath: baselineFile))) == futureBaseline)
+futureRunner.setEnabled(false)
+
+// MARK: 設定基準的自動觸發點（先寫入基準檔再觸發，呼叫次數才能區分「觸發後略過」與「沒觸發」）
+let triggerDir = mkPluginDir("baseline-trigger")
+let triggerState = root + "/baseline-trigger-state"
+let triggerCalls = root + "/baseline-trigger-calls.log"
+let triggerFlags = root + "/baseline-trigger-flags"
+try! fm.createDirectory(atPath: triggerFlags, withIntermediateDirectories: true)
+put("trigger.1m.sh", """
+#!/bin/bash
+if [ "$1" = --splitswan-settings ]; then
+  echo "$2" >> "\(triggerCalls)"
+  [ -f "\(triggerFlags)/slow" ] && /bin/sleep 1
+  ON=true; [ -f "\(triggerFlags)/off" ] && ON=false
+  echo '{"version":1,"title":"觸發","revision":"r1","tabs":[{"id":"general","title":"一般"}],"fields":[{"id":"on","tab":"general","title":"自動執行","type":"toggle"}],"values":{"on":'$ON'},"actions":[]}'
+else
+  echo '觸發外掛 | settings=true'
+  echo ---
+  echo 正常
+fi
+""", dir: triggerDir)
+let triggerID = "trigger.1m.sh"
+let triggerRunner = PluginRunner(directory: URL(fileURLWithPath: triggerDir), stateRoot: URL(fileURLWithPath: triggerState))
+triggerRunner.timeout = roomyTimeout
+var triggerSent: [String] = []
+triggerRunner.baselineNotifier = { _, _, body in triggerSent.append(body) }
+await triggerRunner.setBaseline(PluginSettingsBaseline.Record(fields: ["on"]), for: triggerID)
+triggerRunner.setEnabled(true)
+let enableChecked = await eventually { logLines(triggerCalls) >= 1 }
+try? await Task.sleep(nanoseconds: 500_000_000)
+check("設定基準觸發：啟用後對有基準的外掛呼叫一次 snapshot（實際 \(logLines(triggerCalls))）", enableChecked && logLines(triggerCalls) == 1)
+triggerRunner.pause(.sleep)
+triggerRunner.resume(.sleep)
+let wakeChecked = await eventually { logLines(triggerCalls) >= 2 }
+try? await Task.sleep(nanoseconds: 500_000_000)
+check("設定基準觸發：睡眠喚醒後再檢查一次（實際 \(logLines(triggerCalls))）", wakeChecked && logLines(triggerCalls) == 2)
+triggerRunner.pause(.locked)
+triggerRunner.pause(.sleep)
+triggerRunner.resume(.sleep)
+try? await Task.sleep(nanoseconds: 800_000_000)
+check("設定基準觸發：喚醒但仍鎖定時不檢查", logLines(triggerCalls) == 2)
+triggerRunner.resume(.locked)
+let unlockChecked = await eventually { logLines(triggerCalls) >= 3 }
+try? await Task.sleep(nanoseconds: 500_000_000)
+check("設定基準觸發：解鎖後才補做喚醒的檢查（實際 \(logLines(triggerCalls))）", unlockChecked && logLines(triggerCalls) == 3)
+// 檢查進行中被鎖定：這次放棄，解鎖後要重做，不能等到下次喚醒
+fm.createFile(atPath: triggerFlags + "/slow", contents: Data())
+triggerRunner.pause(.sleep)
+triggerRunner.resume(.sleep)
+check("設定基準觸發：喚醒後的檢查已開始", await eventually { logLines(triggerCalls) >= 4 })
+triggerRunner.pause(.locked)
+try? await Task.sleep(nanoseconds: 1_500_000_000)
+try? fm.removeItem(atPath: triggerFlags + "/slow")
+triggerRunner.resume(.locked)
+let redone = await eventually { logLines(triggerCalls) >= 5 }
+check("設定基準觸發：被鎖定打斷的檢查在解鎖後重做（實際 \(logLines(triggerCalls))）", redone && logLines(triggerCalls) == 5)
+// 外掛自己的通知當天已用滿 20 鍵，基準提醒另外計算
+let fullLog = PluginLogic.NotifyLog(day: PluginLogic.dayString(Date()), keys: Set((0..<PluginLogic.maxNotifyKeysPerDay).map { "own-\($0)" }))
+PluginRunner.saveNotifyLog(fullLog, to: PluginRunner.notifyLogURL(root: triggerState, id: triggerID))
+fm.createFile(atPath: triggerFlags + "/off", contents: Data())
+await triggerRunner.checkBaselines()
+check("設定基準提醒：外掛自己的通知用滿當天上限，基準提醒仍會發出", triggerSent == ["設定比基準少了：自動執行，點此開啟設定"]
+      && triggerRunner.baselineMissing[triggerID]?.map(\.id) == ["on"])
+let reminderSaved = await eventually { PluginRunner.loadNotifyLog(PluginRunner.baselineReminderURL(root: triggerState, id: triggerID))?.keys == ["on"] }
+check("設定基準提醒：紀錄另存一份（背景寫入），不動外掛自己的通知紀錄",
+      reminderSaved && PluginRunner.loadNotifyLog(PluginRunner.notifyLogURL(root: triggerState, id: triggerID)) == fullLog)
+// 「這是刻意的」移掉最後一項：等同清除基準，之後不再呼叫外掛
+let emptied = await triggerRunner.updateBaseline(for: triggerID) { $0.map { PluginSettingsBaseline.acknowledge(["on"], in: $0) } }
+let callsBeforeEmptied = logLines(triggerCalls)
+await triggerRunner.checkBaselines()
+let emptiedCached = await triggerRunner.baseline(for: triggerID)
+check("設定基準：移掉最後一項等同清除（刪檔、清快取與選單缺漏、不再呼叫外掛）", emptied == nil && emptiedCached == nil
+      && !fm.fileExists(atPath: PluginRunner.baselineURL(root: triggerState, id: triggerID).path)
+      && triggerRunner.baselineMissing[triggerID] == nil && logLines(triggerCalls) == callsBeforeEmptied)
+// 關閉時清掉快取：之後讀的是檔案現況
+triggerRunner.setEnabled(false)
+PluginRunner.saveBaseline(PluginSettingsBaseline.Record(fields: ["on", "other"]), to: PluginRunner.baselineURL(root: triggerState, id: triggerID))
+let afterStop = await triggerRunner.baseline(for: triggerID)
+check("設定基準：關閉後清掉快取，重新讀取檔案", afterStop?.fields == ["on", "other"])
+
+// 檢查途中外掛世代變了：放棄這次的提醒。發布缺漏時同步切換「鎖定時也執行」，讓世代在 snapshot 之後、發提醒之前改變。
+let generationState = root + "/baseline-generation-state"
+let generationRunner = PluginRunner(directory: URL(fileURLWithPath: triggerDir), stateRoot: URL(fileURLWithPath: generationState),
+                                    preferences: UserDefaults(suiteName: "SplitSwan.PluginTests.Generation." + UUID().uuidString)!)
+generationRunner.timeout = roomyTimeout
+var generationSent: [String] = []
+generationRunner.baselineNotifier = { _, _, body in generationSent.append(body) }
+let generationBump = generationRunner.$baselineMissing.sink { missing in
+    if missing[triggerID] != nil { generationRunner.setRunWhenLocked(triggerID, true) }
+}
+await generationRunner.setBaseline(PluginSettingsBaseline.Record(fields: ["on"]), for: triggerID)
+generationRunner.setEnabled(true)
+check("設定基準世代：檢查已發布缺漏", await eventually { generationRunner.baselineMissing[triggerID]?.map(\.id) == ["on"] })
+try? await Task.sleep(nanoseconds: 500_000_000)
+check("設定基準世代：外掛世代在檢查途中改變時不發提醒（實際 \(generationSent.count) 則）", generationSent.isEmpty
+      && generationRunner.plugins.first { $0.id == triggerID }?.runWhenLocked == true)
+generationBump.cancel()
+generationRunner.setEnabled(false)
 
 print("整合測試目錄：\(root)")
 

@@ -91,12 +91,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         PluginRunner.shared.notifier = { title, subtitle, body, href in
             DropNotifier.shared.sendPlugin(plugin: title, title: title, subtitle: subtitle, body: body, href: href)
         }
-        PluginRunner.shared.$plugins.combineLatest(PluginRunner.shared.$isActive)
+        PluginRunner.shared.baselineNotifier = { pluginID, title, body in
+            DropNotifier.shared.sendPluginSettings(pluginID: pluginID, title: title, body: body)
+        }
+        DropNotifier.shared.openPluginSettings = { PluginConfigurationWindows.shared.open(pluginID: $0) }
+        Publishers.CombineLatest3(PluginRunner.shared.$plugins, PluginRunner.shared.$isActive, PluginRunner.shared.$baselineMissing)
             .removeDuplicates { previous, current in
-                previous.0 == current.0 && previous.1 == current.1
+                previous.0 == current.0 && previous.1 == current.1 && previous.2 == current.2
             }
             .receive(on: RunLoop.main)
-            .sink { [weak self] _, _ in self?.renderPlugins() }
+            .sink { [weak self] _, _, _ in self?.renderPlugins() }
             .store(in: &bag)
         PluginRunner.shared.start()
 
@@ -313,7 +317,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 output: plugin.output.map {
                     PluginMenu.PluginSnapshot.Output(items: $0.items, truncated: $0.truncated,
                                                      settingsAvailable: $0.settingsAvailable, card: $0.card)
-                }
+                },
+                baselineMissing: runner.baselineMissing[plugin.id].map(PluginSettingsBaseline.summary)
             )
         }
         let tree = PluginMenu.project(isActive: runner.isActive, plugins: snapshots)

@@ -29,19 +29,23 @@ enum PluginMenu {
         let blockingError: String?
         let actionError: String?
         let output: Output?
+        /// 設定比基準少了的說明；有值時標題加 ⚠︎，子選單多一列可開啟設定
+        let baselineMissing: String?
 
         init(
             id: String,
             title: String,
             blockingError: String? = nil,
             actionError: String? = nil,
-            output: Output? = nil
+            output: Output? = nil,
+            baselineMissing: String? = nil
         ) {
             self.id = id
             self.title = title
             self.blockingError = blockingError
             self.actionError = actionError
             self.output = output
+            self.baselineMissing = baselineMissing
         }
     }
 
@@ -109,7 +113,7 @@ enum PluginMenu {
     }
 
     private static func pluginItem(_ plugin: PluginSnapshot) -> Tree.Item {
-        let hasFailure = plugin.blockingError != nil || plugin.actionError != nil
+        let hasFailure = plugin.blockingError != nil || plugin.actionError != nil || plugin.baselineMissing != nil
         let title = plugin.title + (hasFailure ? " ⚠︎" : "")
 
         if let reason = plugin.blockingError {
@@ -117,22 +121,26 @@ enum PluginMenu {
         }
 
         var children: [Tree.Item] = []
+        if let missing = plugin.baselineMissing {
+            children.append(Tree.Item(title: missing, isEnabled: true, style: .text(color: "orange"),
+                                      command: .pluginSettings(pluginID: plugin.id)))
+        }
         if let reason = plugin.actionError {
             children.append(disabled(reason))
         }
 
         if let output = plugin.output {
-            if plugin.actionError != nil, !output.items.isEmpty || output.truncated {
+            if !children.isEmpty, !output.items.isEmpty || output.truncated {
                 children.append(.separator)
             }
             children.append(contentsOf: output.items.filter { $0.params["menu"] != "false" }.map { outputItem($0, pluginID: plugin.id) })
             if output.truncated {
                 children.append(disabled("（輸出過長，只顯示前面部分）"))
-            } else if output.items.isEmpty, plugin.actionError == nil, output.card == nil {
+            } else if output.items.isEmpty, children.isEmpty, output.card == nil {
                 children.append(disabled("沒有可顯示的輸出"))
             }
         } else {
-            if plugin.actionError != nil { children.append(.separator) }
+            if !children.isEmpty { children.append(.separator) }
             children.append(disabled("執行中…"))
         }
 

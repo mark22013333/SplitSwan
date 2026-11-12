@@ -83,6 +83,8 @@ final class PluginRunner: ObservableObject {
     @Published private(set) var lastRuns: [String: Date] = [:]
     @Published private(set) var runningIDs: Set<String> = []
     @Published private(set) var notifyCapped: Set<String> = []   // 今天通知已達上限的外掛
+    /// 設定比基準少了的欄位（只列有缺漏的外掛），選單據此加 ⚠︎
+    @Published private(set) var baselineMissing: [String: [PluginSettingsBaseline.Missing]] = [:]
 
     let directory: URL
     let stateRoot: URL
@@ -94,6 +96,8 @@ final class PluginRunner: ObservableObject {
     var background = PluginBackground()
     /// 通知發送端（App 內接到 DropNotifier；測試時換成記錄用的閉包）。title 固定為「外掛：<名稱>」，subtitle 是外掛輸出的標題
     var notifier: (_ title: String, _ subtitle: String?, _ body: String, _ href: URL?) -> Void = { _, _, _, _ in }
+    /// 設定基準缺漏的通知；點擊開啟該外掛的設定視窗。title 固定為「外掛：<名稱>」
+    var baselineNotifier: (_ pluginID: String, _ title: String, _ body: String) -> Void = { _, _, _ in }
     /// 網址開啟端（測試時可改為記錄用閉包）。
     var urlOpener: (URL) -> Void = { _ = NSWorkspace.shared.open($0) }
     var now: () -> Date = Date.init
@@ -130,6 +134,13 @@ final class PluginRunner: ObservableObject {
     private var inFlight: Set<String> = []
     private var slotsInUse = 0
     private var slotWaiters: [CheckedContinuation<Void, Never>] = []
+    /// 啟用與睡眠喚醒後要檢查一次設定基準；等暫停全部解除後的重新整理才做，因為喚醒時常仍在鎖定畫面
+    private var baselineCheckPending = false
+    /// 設定視窗與主動檢查共用；外層 nil＝尚未讀檔，內層 nil＝沒有基準檔
+    private var baselineCache: [String: PluginSettingsBaseline.Record?] = [:]
+    private var baselineReminders: [String: PluginLogic.NotifyLog] = [:]
+    private var baselineWrites = 0
+    private let baselineFiles = BaselineFiles()
 
     init(directory: URL, stateRoot: URL, allowInactiveExecution: Bool = false,
          preferences: UserDefaults = .standard, packageRoot: URL? = nil, appVersion: String = AppInfo.version,
@@ -161,6 +172,7 @@ final class PluginRunner: ObservableObject {
         if on {
             if !isActive {
                 isActive = true
+                baselineCheckPending = true
                 addObservers()
                 logLifecycle("start")
             }
@@ -173,6 +185,10 @@ final class PluginRunner: ObservableObject {
         backgroundEpoch += 1
         rerunAfter = []
         paused = []
+        baselineCheckPending = false
+        if !baselineMissing.isEmpty { baselineMissing = [:] }
+        baselineCache = [:]
+        baselineReminders = [:]
         removeObservers()
         stopWatcher()
         cancelTimers()
@@ -211,6 +227,11 @@ final class PluginRunner: ObservableObject {
         await withTaskGroup(of: Void.self) { group in
             for p in plugins { group.addTask { await self.run(p.id, refresh: generation) } }
         }
+        // 單檔外掛要執行過才知道有沒有設定介面，所以排在執行之後
+        if baselineCheckPending, isActive, paused.isEmpty, generation.foreground == epoch {
+            baselineCheckPending = false
+            await checkBaselines()
+        }
     }
 
     // MARK: 暫停／恢復（睡眠、螢幕關閉、鎖定、螢幕保護程式）
@@ -227,6 +248,7 @@ final class PluginRunner: ObservableObject {
     /// 喚醒時即使仍鎖定，也恢復已授權的背景排程。
     func resume(_ reason: PauseReason) {
         guard isActive, paused.remove(reason) != nil else { return }
+        if reason == .sleep { baselineCheckPending = true }
         logLifecycle("resume")
         requestRefresh()
     }
@@ -662,25 +684,152 @@ final class PluginRunner: ObservableObject {
     /// 讀寫紀錄檔在背景；關閉或暫停後不發、不寫
     private func sendNotifications(plugin p: Plugin, output: PluginLogic.Output, epoch myEpoch: Int, generation: Int) async {
         let items = output.items.flatMap { [$0] + $0.children }.filter { $0.notify && !$0.isSeparator }
-        guard !items.isEmpty else { return }
+        let title = "外掛：" + p.name
+        let subtitle = output.title.isEmpty || output.title == p.name ? nil : output.title
+        for item in await planNotifications(p, items: items, epoch: myEpoch, generation: generation) {
+            notifier(title, subtitle, item.text, item.href)
+        }
+    }
+
+    /// 依每日去重紀錄挑出這次要發的項目並寫回紀錄
+    private func planNotifications(_ p: Plugin, items: [PluginLogic.Item], epoch myEpoch: Int, generation: Int) async -> [PluginLogic.Item] {
+        guard !items.isEmpty else { return [] }
         let url = Self.notifyLogURL(root: stateRoot.path, id: p.id)
         var log = notifyLogs[p.id]
         if log == nil {
             log = await Task.detached(priority: .utility) { Self.loadNotifyLog(url) }.value ?? PluginLogic.NotifyLog()
         }
-        guard myEpoch == scheduledEpoch(p.id), generation == pluginGenerations[p.id, default: 0], canSchedule(p.id) else { return }
+        guard myEpoch == scheduledEpoch(p.id), generation == pluginGenerations[p.id, default: 0], canSchedule(p.id) else { return [] }
         let plan = PluginLogic.planNotifications(items, today: PluginLogic.dayString(now()), log: log ?? PluginLogic.NotifyLog())
         let wasCapped = notifyCapped.contains(p.id)
         if plan.capped != wasCapped {
             if plan.capped { notifyCapped.insert(p.id) } else { notifyCapped.remove(p.id) }
         }
-        guard plan.log != log else { return }
+        guard plan.log != log else { return [] }
         notifyLogs[p.id] = plan.log
-        let title = "外掛：" + p.name
-        let subtitle = output.title.isEmpty || output.title == p.name ? nil : output.title
-        for item in plan.send { notifier(title, subtitle, item.text, item.href) }
         let toSave = plan.log
         Task.detached(priority: .utility) { Self.saveNotifyLog(toSave, to: url) }
+        return plan.send
+    }
+
+    // MARK: 設定基準
+
+    nonisolated static func hasSettings(_ p: Plugin) -> Bool {
+        p.package?.record.manifest.settings ?? (p.output?.settingsAvailable == true)
+    }
+
+    /// 每個外掛一份：plugin-state/.baseline/<外掛識別>.json（600）
+    nonisolated static func baselineURL(root: String, id: String) -> URL {
+        URL(fileURLWithPath: root + "/.baseline/" + id + ".json")
+    }
+
+    /// 基準提醒的每日紀錄與外掛自己的通知分開：plugin-state/.baseline-reminded/<外掛識別>.json（600）
+    nonisolated static func baselineReminderURL(root: String, id: String) -> URL {
+        URL(fileURLWithPath: root + "/.baseline-reminded/" + id + ".json")
+    }
+
+    /// 不認得的版本視為沒有基準；自動併入不會寫回，所以檔案留給認得它的版本。
+    nonisolated static func loadBaseline(_ url: URL) -> PluginSettingsBaseline.Record? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attrs[.size] as? Int, size <= 16 * 1024,
+              let data = try? Data(contentsOf: url),
+              let record = try? JSONDecoder().decode(PluginSettingsBaseline.Record.self, from: data),
+              record.version == PluginSettingsBaseline.version else { return nil }
+        return record
+    }
+
+    /// nil 表示清除基準。先以 600 寫暫存檔再改名替換，不會留下半份檔案。
+    nonisolated static func saveBaseline(_ record: PluginSettingsBaseline.Record?, to url: URL) {
+        let fm = FileManager.default
+        guard let record else { try? fm.removeItem(at: url); return }
+        let dir = url.deletingLastPathComponent().path
+        try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        guard let data = try? JSONEncoder().encode(record) else { return }
+        let temp = dir + "/." + UUID().uuidString + ".tmp"
+        guard fm.createFile(atPath: temp, contents: data, attributes: [.posixPermissions: 0o600]) else { return }
+        if rename(temp, url.path) != 0 { try? fm.removeItem(atPath: temp) }
+    }
+
+    /// 讀寫都在背景、依序執行；寫入依序號丟棄過期的寫入。讀取也排在同一序列，清掉快取後不會讀到還沒寫完的舊檔。
+    private actor BaselineFiles {
+        private var latest: [String: Int] = [:]
+        func read(_ url: URL) -> PluginSettingsBaseline.Record? { PluginRunner.loadBaseline(url) }
+        func write(_ record: PluginSettingsBaseline.Record?, to url: URL, sequence: Int) {
+            guard sequence > latest[url.path, default: 0] else { return }
+            latest[url.path] = sequence
+            PluginRunner.saveBaseline(record, to: url)
+        }
+    }
+
+    func baseline(for id: String) async -> PluginSettingsBaseline.Record? {
+        if let cached = baselineCache[id] { return cached }
+        let url = Self.baselineURL(root: stateRoot.path, id: id)
+        let loaded = await Task.detached(priority: .utility) { [baselineFiles] in await baselineFiles.read(url) }.value
+        if let cached = baselineCache[id] { return cached }
+        baselineCache[id] = .some(loaded)
+        return loaded
+    }
+
+    /// 基準唯一的修改入口：以快取中最新的基準計算並寫回，設定視窗與主動檢查不會拿各自的舊副本互相蓋掉。
+    /// 0 項的基準等同清除：它不會提醒任何事，留著只會讓主動檢查一直呼叫外掛。
+    @discardableResult
+    func updateBaseline(for id: String, _ change: (PluginSettingsBaseline.Record?) -> PluginSettingsBaseline.Record?) async -> PluginSettingsBaseline.Record? {
+        let current = await baseline(for: id)
+        let next = change(current).flatMap { $0.fields.isEmpty ? nil : $0 }
+        guard next != current else { return current }
+        baselineCache[id] = .some(next)
+        if next == nil, baselineMissing[id] != nil { baselineMissing[id] = nil }
+        baselineWrites += 1
+        await baselineFiles.write(next, to: Self.baselineURL(root: stateRoot.path, id: id), sequence: baselineWrites)
+        return next
+    }
+
+    func setBaseline(_ record: PluginSettingsBaseline.Record?, for id: String) async {
+        await updateBaseline(for: id) { _ in record }
+    }
+
+    /// 設定視窗與主動檢查回報評估結果；外掛區塊關閉時選單不顯示，所以不保留。
+    func reportBaselineMissing(_ missing: [PluginSettingsBaseline.Missing], for id: String) {
+        guard isActive else { return }
+        let value = missing.isEmpty ? nil : missing
+        if baselineMissing[id] != value { baselineMissing[id] = value }
+    }
+
+    /// 只檢查有基準檔、且有設定介面的外掛；沒有基準檔就不呼叫外掛。
+    /// 每次 await 之後都確認仍是開始時的世代；被鎖定或螢幕保護程式打斷時留到暫停全部解除後重做。
+    /// 外掛本身的世代變了（更新、移除、停用）就放棄這支的結果，和排程結果的處理一致；套件更新完成後會自己再檢查。
+    func checkBaselines(only ids: Set<String>? = nil) async {
+        let myEpoch = epoch
+        var alive: Bool { myEpoch == epoch && isActive && paused.isEmpty }
+        for p in plugins where ids?.contains(p.id) ?? true {
+            guard alive else { break }
+            let generation = pluginGenerations[p.id, default: 0]
+            var current: Bool { generation == pluginGenerations[p.id, default: 0] && canSchedule(p.id) }
+            guard p.isEnabled, p.problem == nil, Self.hasSettings(p), await baseline(for: p.id) != nil else { continue }
+            guard alive else { break }
+            let snapshot = try? await settingsCommand(pluginID: p.id, operation: "snapshot")
+            guard alive else { break }
+            guard let snapshot, current else { continue }
+            let record = await updateBaseline(for: p.id) { $0.map { PluginSettingsBaseline.evaluate($0, snapshot).next } }
+            guard alive else { break }
+            guard let record, current else { continue }
+            let missing = PluginSettingsBaseline.evaluate(record, snapshot).missing
+            reportBaselineMissing(missing, for: p.id)
+            guard !missing.isEmpty else { continue }
+            let url = Self.baselineReminderURL(root: stateRoot.path, id: p.id)
+            var log = baselineReminders[p.id]
+            if log == nil {
+                let loaded = await Task.detached(priority: .utility) { Self.loadNotifyLog(url) }.value
+                guard alive else { break }
+                log = baselineReminders[p.id] ?? loaded ?? PluginLogic.NotifyLog()
+            }
+            guard current, let log, let next = PluginSettingsBaseline.planReminder(PluginSettingsBaseline.notificationKey(missing),
+                                                                         today: PluginLogic.dayString(now()), log: log) else { continue }
+            baselineReminders[p.id] = next
+            Task.detached(priority: .utility) { Self.saveNotifyLog(next, to: url) }
+            baselineNotifier(p.id, "外掛：" + p.name, PluginSettingsBaseline.summary(missing) + "，點此開啟設定")
+        }
+        if !alive, isActive { baselineCheckPending = true }
     }
 
     /// 正式路徑必須已啟用；只有建構時明確開啟的測試 runner 可在 inactive 狀態直接執行。
@@ -878,6 +1027,7 @@ final class PluginRunner: ObservableObject {
             updatingPackages.subtract(ids); scan(); syncTimers()
             // 新版沒有輸出前，選單只能顯示「執行中…」也沒有設定入口，不等下一個排程間隔
             if isActive, canSchedule(id) { Task { await run(id) } }
+            if isActive, paused.isEmpty { Task { await checkBaselines(only: [id]) } }
         }
         for key in ids { await waitUntilIdle(key) }
         try Task.checkCancellation()
@@ -982,6 +1132,9 @@ final class PluginRunner: ObservableObject {
         lastRuns.removeValue(forKey: id)
         notifyCapped.remove(id)
         notifyLogs.removeValue(forKey: id)
+        baselineMissing.removeValue(forKey: id)
+        baselineCache.removeValue(forKey: id)
+        baselineReminders.removeValue(forKey: id)
         removed = true
         return result
     }

@@ -30,6 +30,22 @@ final class DropNotifier: NSObject, UNUserNotificationCenterDelegate {
         deliver(title: title, subtitle: subtitle, body: body, userInfo: info, thread: "plugin-" + plugin)
     }
 
+    nonisolated static let settingsKey = "settings"
+    /// 點擊「設定比基準少了」通知時開啟該外掛的設定視窗；由 AppDelegate 接上，這裡不依賴外掛模組
+    var openPluginSettings: (String) -> Void = { _ in }
+
+    /// 設定基準缺漏的通知：點擊開啟設定視窗，不開網址
+    func sendPluginSettings(pluginID: String, title: String, body: String) {
+        deliver(title: title, subtitle: nil, body: body,
+                userInfo: [Self.kindKey: "plugin", Self.settingsKey: pluginID], thread: "plugin-" + title)
+    }
+
+    /// 點擊後要開啟設定視窗的外掛；不是外掛設定通知回 nil
+    nonisolated static func pluginSettingsID(_ userInfo: [AnyHashable: Any]) -> String? {
+        guard userInfo[kindKey] as? String == "plugin", let id = userInfo[settingsKey] as? String, !id.isEmpty else { return nil }
+        return id
+    }
+
     /// 點擊外掛通知要開的網址；不是外掛通知或不是 http／https 回 nil
     nonisolated static func pluginHref(_ userInfo: [AnyHashable: Any]) -> URL? {
         guard userInfo[kindKey] as? String == "plugin", let s = userInfo[hrefKey] as? String,
@@ -82,9 +98,13 @@ final class DropNotifier: NSObject, UNUserNotificationCenterDelegate {
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
                                             didReceive response: UNNotificationResponse,
                                             withCompletionHandler completionHandler: @escaping () -> Void) {
-        if response.actionIdentifier == UNNotificationDefaultActionIdentifier,
-           let url = Self.pluginHref(response.notification.request.content.userInfo) {
-            DispatchQueue.main.async { NSWorkspace.shared.open(url) }
+        let info = response.notification.request.content.userInfo
+        if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
+            if let id = Self.pluginSettingsID(info) {
+                DispatchQueue.main.async { MainActor.assumeIsolated { DropNotifier.shared.openPluginSettings(id) } }
+            } else if let url = Self.pluginHref(info) {
+                DispatchQueue.main.async { NSWorkspace.shared.open(url) }
+            }
         }
         completionHandler()
     }

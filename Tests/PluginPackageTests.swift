@@ -173,6 +173,27 @@ try await runner.installPackage(first)
 check("移除後重新匯入視為新安裝且停用", !runner.plugins.first { $0.id == id }!.isEnabled && (try? String(contentsOf: state.appendingPathComponent("settings.json"), encoding: .utf8)) == "private-state")
 rejected("舊版本移除描述不能移除重新安裝的不同版本") { try runner.packageStore.remove(selected.package!, trash: trash) }
 rejected("移除識別碼不能路徑穿越") { _ = try store.read("../outside") }
+// 套件更新完成後檢查設定基準：先寫入基準檔再更新，呼叫次數才能區分「觸發後略過」與「沒觸發」。
+let settingsFirst = try PluginPackage.prepare(fixtures.appendingPathComponent("settings.splitswan-plugin"), appVersion: "1.8.6")
+let settingsNext = try PluginPackage.prepare(fixtures.appendingPathComponent("settings-update.splitswan-plugin"), appVersion: "1.8.6")
+defer { settingsFirst.discard(); settingsNext.discard() }
+let baselineRunner = PluginRunner(directory: root.appendingPathComponent("missing-legacy"), stateRoot: root.appendingPathComponent("baseline-state"),
+                                  preferences: UserDefaults(suiteName: "SplitSwan.PackageTests.Baseline." + UUID().uuidString)!,
+                                  packageRoot: root.appendingPathComponent("baseline-packages"), appVersion: "1.8.6")
+try await baselineRunner.installPackage(settingsFirst)
+baselineRunner.setPluginEnabled(id, true)
+baselineRunner.setEnabled(true)
+let settingsCalls = root.appendingPathComponent("baseline-state/packages/" + first.manifest.id + "/settings-calls")
+func settingsCallCount() -> Int { ((try? String(contentsOf: settingsCalls, encoding: .utf8)) ?? "").split(separator: "\n").count }
+check("有設定的套件啟用後取得輸出", await until { baselineRunner.plugins.first { $0.id == id }?.output?.title == "Settings Fixture" })
+try? await Task.sleep(for: .milliseconds(500))
+check("沒有基準時啟用不呼叫設定命令", settingsCallCount() == 0)
+await baselineRunner.setBaseline(PluginSettingsBaseline.Record(fields: ["on"]), for: id)
+try await baselineRunner.installPackage(settingsNext)
+let updateChecked = await until { settingsCallCount() >= 1 }
+try? await Task.sleep(for: .milliseconds(500))
+check("套件更新完成後對有基準的外掛檢查一次（實際 \(settingsCallCount())）", updateChecked && settingsCallCount() == 1)
+baselineRunner.setEnabled(false)
 let locked = try PluginPackage.prepare(fixtures.appendingPathComponent("run-when-locked.splitswan-plugin"), appVersion: "1.8.6")
 let lockedNext = try PluginPackage.prepare(fixtures.appendingPathComponent("run-when-locked-next.splitswan-plugin"), appVersion: "1.8.6")
 defer { locked.discard(); lockedNext.discard() }

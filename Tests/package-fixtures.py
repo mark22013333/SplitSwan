@@ -86,6 +86,19 @@ for label,value in [('null',None),('path',{'fileName':'../legacy.sh','sha256s':[
 archive('stored',valid=True,compression=zipfile.ZIP_STORED)
 archive('with-directory',extra=[('resources/',b'',stat.S_IFDIR|0o700)],valid=True)
 new=copy.deepcopy(base);new['version']='1.1.0';new['name']='Updated Fixture';archive('update',new,valid=True)
+# 有設定介面的套件：記錄每次設定命令，用於觀察套件更新後的設定基準檢查。
+settings_script=b'''#!/bin/sh
+if [ "$1" = --splitswan-settings ]; then
+  printf '%s\\n' "$2" >> "$SPLITSWAN_PLUGIN_STATE/settings-calls"
+  printf '%s' '{"version":1,"title":"Settings Fixture","revision":"r1","tabs":[{"id":"general","title":"General"}],"fields":[{"id":"on","tab":"general","title":"On","type":"toggle"}],"values":{"on":true},"actions":[]}'
+  exit 0
+fi
+printf 'Settings Fixture\\n---\\nversion=%s\\n' "$SPLITSWAN_PLUGIN_VERSION"
+'''
+withSettings=copy.deepcopy(base);withSettings['settings']=True;withSettings['files'][0]['sha256']=p.digest(settings_script)
+settingsMain=[('main.sh',settings_script,stat.S_IFREG|0o700)]
+archive('settings',withSettings,extra=settingsMain,remove=['main.sh'],valid=True)
+settingsNext=copy.deepcopy(withSettings);settingsNext['version']='1.1.0';archive('settings-update',settingsNext,extra=settingsMain,remove=['main.sh'],valid=True)
 locked=copy.deepcopy(base);locked['version']='1.4.0';locked['runWhenLocked']=True;archive('run-when-locked',locked,valid=True)
 lockedNext=copy.deepcopy(locked);lockedNext['version']='1.5.0';archive('run-when-locked-next',lockedNext,valid=True)
 for label,value in [('number',1),('string','true'),('null',None)]:

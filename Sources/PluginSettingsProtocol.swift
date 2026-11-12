@@ -109,6 +109,8 @@ enum PluginSettingsProtocol {
         let options: [Option]?
         /// 只用於 stringList：新版 App 畫成月曆編輯器，舊版 App 忽略此鍵、照常畫成多行文字框。
         var dates: PluginDateSpec? = nil
+        /// `false` 表示不納入設定基準（例：每天會變的欄位）；舊版 App 忽略此鍵。
+        var baseline: Bool? = nil
     }
     struct Action: Codable, Equatable, Identifiable {
         let id: String
@@ -137,6 +139,8 @@ enum PluginSettingsProtocol {
         let values: [String: Value]
         let actions: [Action]
         let job: Job?
+        /// 已有儲存值的 secret 欄位；省略表示外掛不回報，secret 欄位就不納入設定基準。
+        var configured: [String]? = nil
 
         var visibleTabs: [Tab] { tabs.filter { $0.hidden != true } }
         func layout(of tab: Tab) -> TabLayout {
@@ -234,6 +238,12 @@ enum PluginSettingsProtocol {
                   }) else { throw Problem(message: "外掛設定精靈的步驟或參照不正確") }
         }
         try validateLayout(s, validID: validID)
+        if let configured = s.configured {
+            let secrets = Set(s.fields.filter { $0.type == "secret" }.map(\.id))
+            guard unique(configured), Set(configured).isSubset(of: secrets) else {
+                throw Problem(message: "外掛設定的 configured 只能列出不重複的 secret 欄位")
+            }
+        }
         if let job = s.job {
             guard validID(job.id), ["running", "succeeded", "failed"].contains(job.state) else {
                 throw Problem(message: "外掛設定工作格式不正確")
