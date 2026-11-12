@@ -771,12 +771,14 @@ final class PluginRunner: ObservableObject {
     }
 
     /// 基準唯一的修改入口：以快取中最新的基準計算並寫回，設定視窗與主動檢查不會拿各自的舊副本互相蓋掉。
+    /// 0 項的基準等同清除：它不會提醒任何事，留著只會讓主動檢查一直呼叫外掛。
     @discardableResult
     func updateBaseline(for id: String, _ change: (PluginSettingsBaseline.Record?) -> PluginSettingsBaseline.Record?) async -> PluginSettingsBaseline.Record? {
         let current = await baseline(for: id)
-        let next = change(current)
+        let next = change(current).flatMap { $0.fields.isEmpty ? nil : $0 }
         guard next != current else { return current }
         baselineCache[id] = .some(next)
+        if next == nil, baselineMissing[id] != nil { baselineMissing[id] = nil }
         baselineWrites += 1
         await baselineFiles.write(next, to: Self.baselineURL(root: stateRoot.path, id: id), sequence: baselineWrites)
         return next
@@ -795,19 +797,22 @@ final class PluginRunner: ObservableObject {
 
     /// 只檢查有基準檔、且有設定介面的外掛；沒有基準檔就不呼叫外掛。
     /// 每次 await 之後都確認仍是開始時的世代；被鎖定或螢幕保護程式打斷時留到暫停全部解除後重做。
+    /// 外掛本身的世代變了（更新、移除、停用）就放棄這支的結果，和排程結果的處理一致；套件更新完成後會自己再檢查。
     func checkBaselines(only ids: Set<String>? = nil) async {
         let myEpoch = epoch
         var alive: Bool { myEpoch == epoch && isActive && paused.isEmpty }
         for p in plugins where ids?.contains(p.id) ?? true {
             guard alive else { break }
+            let generation = pluginGenerations[p.id, default: 0]
+            var current: Bool { generation == pluginGenerations[p.id, default: 0] && canSchedule(p.id) }
             guard p.isEnabled, p.problem == nil, Self.hasSettings(p), await baseline(for: p.id) != nil else { continue }
             guard alive else { break }
             let snapshot = try? await settingsCommand(pluginID: p.id, operation: "snapshot")
             guard alive else { break }
-            guard let snapshot else { continue }
+            guard let snapshot, current else { continue }
             let record = await updateBaseline(for: p.id) { $0.map { PluginSettingsBaseline.evaluate($0, snapshot).next } }
             guard alive else { break }
-            guard let record else { continue }
+            guard let record, current else { continue }
             let missing = PluginSettingsBaseline.evaluate(record, snapshot).missing
             reportBaselineMissing(missing, for: p.id)
             guard !missing.isEmpty else { continue }
@@ -818,7 +823,7 @@ final class PluginRunner: ObservableObject {
                 guard alive else { break }
                 log = baselineReminders[p.id] ?? loaded ?? PluginLogic.NotifyLog()
             }
-            guard let log, let next = PluginSettingsBaseline.planReminder(PluginSettingsBaseline.notificationKey(missing),
+            guard current, let log, let next = PluginSettingsBaseline.planReminder(PluginSettingsBaseline.notificationKey(missing),
                                                                          today: PluginLogic.dayString(now()), log: log) else { continue }
             baselineReminders[p.id] = next
             Task.detached(priority: .utility) { Self.saveNotifyLog(next, to: url) }

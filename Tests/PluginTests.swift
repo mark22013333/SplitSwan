@@ -1652,11 +1652,38 @@ check("設定基準提醒：外掛自己的通知用滿當天上限，基準提�
 let reminderSaved = await eventually { PluginRunner.loadNotifyLog(PluginRunner.baselineReminderURL(root: triggerState, id: triggerID))?.keys == ["on"] }
 check("設定基準提醒：紀錄另存一份（背景寫入），不動外掛自己的通知紀錄",
       reminderSaved && PluginRunner.loadNotifyLog(PluginRunner.notifyLogURL(root: triggerState, id: triggerID)) == fullLog)
+// 「這是刻意的」移掉最後一項：等同清除基準，之後不再呼叫外掛
+let emptied = await triggerRunner.updateBaseline(for: triggerID) { $0.map { PluginSettingsBaseline.acknowledge(["on"], in: $0) } }
+let callsBeforeEmptied = logLines(triggerCalls)
+await triggerRunner.checkBaselines()
+let emptiedCached = await triggerRunner.baseline(for: triggerID)
+check("設定基準：移掉最後一項等同清除（刪檔、清快取與選單缺漏、不再呼叫外掛）", emptied == nil && emptiedCached == nil
+      && !fm.fileExists(atPath: PluginRunner.baselineURL(root: triggerState, id: triggerID).path)
+      && triggerRunner.baselineMissing[triggerID] == nil && logLines(triggerCalls) == callsBeforeEmptied)
 // 關閉時清掉快取：之後讀的是檔案現況
 triggerRunner.setEnabled(false)
 PluginRunner.saveBaseline(PluginSettingsBaseline.Record(fields: ["on", "other"]), to: PluginRunner.baselineURL(root: triggerState, id: triggerID))
 let afterStop = await triggerRunner.baseline(for: triggerID)
 check("設定基準：關閉後清掉快取，重新讀取檔案", afterStop?.fields == ["on", "other"])
+
+// 檢查途中外掛世代變了：放棄這次的提醒。發布缺漏時同步切換「鎖定時也執行」，讓世代在 snapshot 之後、發提醒之前改變。
+let generationState = root + "/baseline-generation-state"
+let generationRunner = PluginRunner(directory: URL(fileURLWithPath: triggerDir), stateRoot: URL(fileURLWithPath: generationState),
+                                    preferences: UserDefaults(suiteName: "SplitSwan.PluginTests.Generation." + UUID().uuidString)!)
+generationRunner.timeout = roomyTimeout
+var generationSent: [String] = []
+generationRunner.baselineNotifier = { _, _, body in generationSent.append(body) }
+let generationBump = generationRunner.$baselineMissing.sink { missing in
+    if missing[triggerID] != nil { generationRunner.setRunWhenLocked(triggerID, true) }
+}
+await generationRunner.setBaseline(PluginSettingsBaseline.Record(fields: ["on"]), for: triggerID)
+generationRunner.setEnabled(true)
+check("設定基準世代：檢查已發布缺漏", await eventually { generationRunner.baselineMissing[triggerID]?.map(\.id) == ["on"] })
+try? await Task.sleep(nanoseconds: 500_000_000)
+check("設定基準世代：外掛世代在檢查途中改變時不發提醒（實際 \(generationSent.count) 則）", generationSent.isEmpty
+      && generationRunner.plugins.first { $0.id == triggerID }?.runWhenLocked == true)
+generationBump.cancel()
+generationRunner.setEnabled(false)
 
 print("整合測試目錄：\(root)")
 

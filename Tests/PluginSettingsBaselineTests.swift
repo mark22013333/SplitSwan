@@ -61,6 +61,10 @@ var changedValues = full
 changedValues["at"] = .text("08:40")
 check("只改值不算缺漏", B.evaluate(captured, snapshot(all, changedValues, configured: ["password"])).missing.isEmpty)
 check("舊外掛不回報 configured 時 secret 不誤報", B.evaluate(captured, legacy).missing.isEmpty)
+// 鑰匙圈鎖住時外掛省略 configured：基準內的 secret 不算缺漏，也不能被移出基準
+let lockedKeychain = B.evaluate(captured, snapshot(all, empty, configured: nil))
+check("沒有 configured 時基準內的 secret 不算缺漏、也留在基準",
+      !lockedKeychain.missing.contains { $0.id == "password" } && lockedKeychain.next.fields.contains("password"))
 
 // MARK: 欄位消失＝不適用
 let reduced = snapshot(all.filter { $0.id != "days" }, full, configured: ["password"])

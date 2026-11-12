@@ -651,6 +651,10 @@ func runConfigurationTests() async throws -> Int {
     check("共用基準：這是刻意的不會移除視窗開著期間併入的欄位（實際 \(sharedLatest?.fields.sorted() ?? [])）",
           sharedLatest?.fields == ["at", "enabled"] && PluginRunner.loadBaseline(sharedFile)?.fields == ["at", "enabled"]
           && sharedModel.baselineMissing.map(\.id) == ["enabled"])
+    await sharedModel.acknowledgeMissing("at")
+    await sharedModel.acknowledgeMissing("enabled")
+    check("共用基準：移掉最後一項回到「記住目前設定」，基準檔刪除", sharedModel.baseline == nil
+          && sharedModel.baselineMissing.isEmpty && !fm.fileExists(atPath: sharedFile.path))
     closeWindow(sharedWindow, sharedModel)
 
     print("通過 \(passed)，失敗 \(failed)")
