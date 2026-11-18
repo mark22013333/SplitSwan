@@ -18,7 +18,9 @@ public sealed record DiagnosticSection(string Title, string Command, IReadOnlyLi
 /// </summary>
 public sealed class DiagnosticMasker
 {
-    private static readonly Regex IPv4 = new(@"(?<![\d.])\d{1,3}(?:\.\d{1,3}){3}(?![\d.])", RegexOptions.CultureInvariant);
+    // 前後只排除「數字」與「數字＋點」（避免切進更長的版本號）；單獨的點要放行：
+    // strongSwan 記錄寫成 a[a]...b[b]，句尾也常有句點
+    private static readonly Regex IPv4 = new(@"(?<!\d)(?<!\d\.)\d{1,3}(?:\.\d{1,3}){3}(?!\d)(?!\.\d)", RegexOptions.CultureInvariant);
 
     private readonly string[] _secrets;
     private readonly List<(string Value, string Label)> _literals = [];

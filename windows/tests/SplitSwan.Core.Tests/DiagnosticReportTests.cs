@@ -54,6 +54,23 @@ public class DiagnosticReportTests
         Assert.Equal("again <內網#2>", m.Mask("again 198.51.100.7"));
     }
 
+    [Theory]
+    [InlineData("IKE_SA vpn1[1] established between 172.24.80.2[172.24.80.2]...203.0.113.10[203.0.113.10]",
+        "IKE_SA vpn1[1] established between 172.24.80.2[172.24.80.2]...<閘道1>[<閘道1>]")]
+    [InlineData("連到 203.0.113.10.", "連到 <閘道1>.")]
+    [InlineData("route 198.51.100.7...", "route <內網#1>...")]
+    public void AddressesNextToDots_AreStillMasked(string line, string expected)
+    {
+        Assert.Equal(expected, Masker().Mask(line));
+    }
+
+    [Fact]
+    public void LongerDottedNumbers_AreNotSplitIntoAddresses()
+    {
+        Assert.Equal("核心版本： 6.18.58.1.2", Masker().Mask("核心版本： 6.18.58.1.2"));
+        Assert.Equal("x 1.198.51.100.7", Masker().Mask("x 1.198.51.100.7"));
+    }
+
     [Fact]
     public void HomeNetworkWslAndVersions_StayReadable()
     {
