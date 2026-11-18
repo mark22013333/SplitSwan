@@ -5,7 +5,8 @@ using SplitSwan.Core;
 namespace SplitSwan.Tray;
 
 /// <summary>
-/// 桌面／開始選單捷徑（SplitSwan.lnk）的讀寫。判斷規則在 Core 的 ShortcutRules；這裡只負責檔案系統與 COM。
+/// 桌面／開始選單捷徑（SplitSwan.lnk）與登入時自動啟動（工作排程器工作，見 LogonTask）的讀寫。
+/// 判斷規則在 Core 的 ShortcutRules；這裡只負責檔案系統、COM 與 schtasks。
 /// 捷徑狀態不寫進 settings.json，每次都從檔案系統重新讀。
 /// 刪除一律先重新讀取並經 ShortcutRules.CanRemove 判斷，只刪「指向本程式」或「指向舊位置」的捷徑。
 /// </summary>
@@ -30,6 +31,11 @@ internal static class Shortcuts
     /// <exception cref="InvalidOperationException">找不到資料夾。</exception>
     public static (ShortcutState State, string? Target) Inspect(ShortcutLocation l)
     {
+        if (l == ShortcutLocation.Logon)
+        {
+            var task = LogonTask.Read();
+            return (ShortcutRules.Classify(task.Exists, task.Command, task.Description, CurrentExe), task.Command);
+        }
         var path = PathOf(l);
         // 同名的資料夾也算「已存在、不是我們的」（不可建立，也不可刪除）
         var exists = File.Exists(path) || Directory.Exists(path);
@@ -56,20 +62,20 @@ internal static class Shortcuts
     /// <exception cref="COMException">Shell 建立捷徑失敗。</exception>
     public static ShortcutAction Apply(ShortcutLocation l, bool wantOn)
     {
-        var path = PathOf(l);
+        var path = l == ShortcutLocation.Logon ? LogonTaskXml.TaskName : PathOf(l);
         var (state, _) = Inspect(l);
         var action = ShortcutRules.OnToggle(state, wantOn);
         switch (action)
         {
             case ShortcutAction.Create:
             case ShortcutAction.Update:
-                Write(path);
+                if (l == ShortcutLocation.Logon) LogonTask.Write(RequireExe()); else Write(path);
                 AppLog.Info($"{ShortcutRules.Title(l)}：{(action == ShortcutAction.Create ? "已建立" : "已更新為目前位置")}（{path}）");
                 break;
             case ShortcutAction.Remove:
                 // 守門：OnToggle 只會對可刪除的狀態回 Remove；這裡再擋一次，任何改動都不能讓「不是我們的」被刪
                 if (!ShortcutRules.CanRemove(state)) return ShortcutAction.Refuse;
-                File.Delete(path);
+                if (l == ShortcutLocation.Logon) LogonTask.Delete(); else File.Delete(path);
                 AppLog.Info($"{ShortcutRules.Title(l)}：已移除（{path}）");
                 break;
             case ShortcutAction.Refuse:
@@ -87,10 +93,16 @@ internal static class Shortcuts
         return Apply(l, wantOn: true);
     }
 
-    private static void Write(string path)
+    private static string RequireExe()
     {
         var exe = CurrentExe;
         if (string.IsNullOrEmpty(exe) || !File.Exists(exe)) throw new InvalidOperationException("找不到目前程式的路徑，無法建立捷徑");
+        return exe;
+    }
+
+    private static void Write(string path)
+    {
+        var exe = RequireExe();
         var dir = Path.GetDirectoryName(path);
         if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) throw new DirectoryNotFoundException($"資料夾不存在：{dir}");
         ShellLink.Save(path, exe, Path.GetDirectoryName(exe) ?? "", ShortcutRules.Description);
