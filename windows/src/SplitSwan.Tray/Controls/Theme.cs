@@ -41,10 +41,11 @@ internal static class Theme
     public static Color AccentInk => C(Palette.AccentInk);
     public static Color AccentSoft => C(Palette.AccentSoft);
 
+    /// <summary>色調的顏色：進行中（Working）與提醒同為橘色（同 Mac 版），中性為次要文字色。</summary>
     public static Color Tone(StatusTone t) => t switch
     {
         StatusTone.Ok => C(Palette.Ok),
-        StatusTone.Warn => C(Palette.Warn),
+        StatusTone.Warn or StatusTone.Working => C(Palette.Warn),
         StatusTone.Bad => C(Palette.Bad),
         _ => Muted,
     };
@@ -107,6 +108,9 @@ internal static class Theme
 
     /// <summary>等寬字型。共用快取，不可 Dispose。</summary>
     public static Font Mono(float points = 9f, FontStyle style = FontStyle.Regular) => Get(MonoFamily, points, style);
+
+    /// <summary>系統圖示字型（Segoe Fluent Icons → Segoe MDL2 Assets，見 TrayIcons.IconFontName）；兩套都沒有回 null。共用快取，不可 Dispose。</summary>
+    public static Font? Icons(float points = 10f) => TrayIcons.IconFontName is { } n ? Get(n, points, FontStyle.Regular) : null;
 
     private static Font Get(string family, float points, FontStyle style)
     {

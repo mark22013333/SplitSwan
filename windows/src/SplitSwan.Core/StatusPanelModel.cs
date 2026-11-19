@@ -2,8 +2,12 @@ using System.Globalization;
 
 namespace SplitSwan.Core;
 
-/// <summary>狀態點、chip、成功率條的色調。</summary>
-public enum StatusTone { Ok, Warn, Bad, Idle }
+/// <summary>
+/// 狀態點、chip、成功率條、狀態卡與狀態徽章的語意色調（同 Mac 版 DesignSystem 的五種）：
+/// Ok＝成功（綠、打勾圓）、Warn＝提醒（橘、三角驚嘆號）、Bad＝錯誤（紅、八角叉）、Idle＝中性（灰、虛線圓）、
+/// Working＝進行中（橘、時鐘）。Working 放最後，既有值的數字不變。
+/// </summary>
+public enum StatusTone { Ok, Warn, Bad, Idle, Working }
 
 /// <summary>狀態面板的主要按鈕。</summary>
 public enum PanelPrimary { Connect, Reconnect, Disconnect }
