@@ -32,6 +32,9 @@ final class EnvChecker: ObservableObject {
     static let brewPath = "/opt/homebrew/bin/brew"
 
     var allOK: Bool { !items.isEmpty && items.allSatisfy { $0.level == .ok || $0.level == .warn } }
+    // 檢查中（例：sudo 權限在背景確認）不算失敗，避免剛開視窗就出現「尚未完成環境設定」
+    var hasFailure: Bool { items.contains { $0.level == .fail } }
+    var isChecking: Bool { items.isEmpty || items.contains { $0.level == .checking } }
 
     private var bundledHelper: String? { Bundle.main.path(forResource: "splitswan-helper", ofType: nil) }
     private var bundledInstaller: String? { Bundle.main.path(forResource: "install-root", ofType: "sh") }

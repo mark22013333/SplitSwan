@@ -88,16 +88,6 @@ struct ConnectionTab: View {
                     primaryButton
                 }
 
-                if vpn.state == .helperMissing || !env.allOK {
-                    HStack(spacing: 8) {
-                        Image(systemName: "wrench.and.screwdriver.fill").foregroundStyle(.orange)
-                        Button("尚未完成環境設定，前往環境檢查") { window.tab = .environment }
-                            .buttonStyle(.link)
-                        Spacer(minLength: 0)
-                    }
-                    .font(.callout)
-                }
-
                 if let err = vpn.lastError {
                     ErrorBanner(message: err, nextStep: "展開下方「連線紀錄」查看協商過程；仍無法連線時，到「環境檢查」產生診斷報告。")
                         .transition(DSMotion.transition(reduceMotion))
@@ -107,6 +97,15 @@ struct ConnectionTab: View {
                     DSCard("指定閘道", systemImage: "server.rack", subtitle: "自動輪替會先試最近連得上、連得快的閘道；也可以直接指定一台。") {
                         gatewayButtons
                     }
+                }
+
+                DSCard("其他功能", systemImage: "square.grid.2x2") {
+                    overviewRow("環境檢查", systemImage: "checklist", tab: .environment,
+                                tone: env.isChecking ? .working : env.hasFailure ? .error : .ok,
+                                badge: env.isChecking ? "檢查中" : env.hasFailure ? "需要處理" : "已就緒")
+                    Divider()
+                    overviewRow("自動分流", systemImage: "arrow.triangle.branch", tab: .externalVPN,
+                                tone: externalVPN.status.phase.tone, badge: externalVPN.status.phase.badge)
                 }
 
                 DSCard {
@@ -132,6 +131,23 @@ struct ConnectionTab: View {
                 .controlSize(.large)
                 .disabled(cannotConnect)
         }
+    }
+
+    /// 整列可點，切到對應分頁；狀態用和該頁頂端相同的標籤，兩處說法一致
+    private func overviewRow(_ title: String, systemImage: String, tab: MainTab, tone: StatusTone, badge: String) -> some View {
+        Button { window.tab = tab } label: {
+            HStack(spacing: 10) {
+                Image(systemName: systemImage).foregroundStyle(.secondary).frame(width: 22)
+                Text(title)
+                Spacer(minLength: 8)
+                StatusBadge(text: badge, tone: tone)
+                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+            }
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("切換到「\(title)」分頁")
     }
 
     private var gatewayButtons: some View {
