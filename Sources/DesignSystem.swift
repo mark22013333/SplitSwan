@@ -313,7 +313,7 @@ private struct ToastHost: ViewModifier {
 }
 
 extension View {
-    @MainActor func toastHost(_ center: ToastCenter = .shared) -> some View { modifier(ToastHost(center: center)) }
+    @MainActor func toastHost() -> some View { modifier(ToastHost(center: .shared)) }
 }
 
 // MARK: - 搖晃
