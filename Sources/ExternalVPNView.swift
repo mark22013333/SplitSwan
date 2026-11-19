@@ -88,7 +88,7 @@ struct ExternalVPNTab: View {
     }
 
     private var statusCard: some View {
-        StatusCard(title: statusMessage, tone: tone, badge: badge) {
+        StatusCard(title: statusMessage, tone: phase.tone, badge: phase.badge) {
             Image(systemName: statusIcon).font(.system(size: 26, weight: .medium))
                 .symbolEffect(.pulse, isActive: !reduceMotion && (phase == .waiting || model.busy))
         } detail: {
@@ -155,9 +155,11 @@ struct ExternalVPNTab: View {
         default: return "network"
         }
     }
+}
 
-    private var tone: StatusTone {
-        switch phase {
+extension ExternalVPNPhase {
+    var tone: StatusTone {
+        switch self {
         case .idle: return .neutral
         case .waiting, .applying, .restoring: return .working
         case .active: return .ok
@@ -165,8 +167,8 @@ struct ExternalVPNTab: View {
         }
     }
 
-    private var badge: String {
-        switch phase {
+    var badge: String {
+        switch self {
         case .idle: return "未啟用"
         case .waiting: return "等待 VPN"
         case .applying: return "套用中"
