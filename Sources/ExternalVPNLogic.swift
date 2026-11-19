@@ -6,6 +6,12 @@ enum ExternalVPNError: LocalizedError {
     var errorDescription: String? { switch self { case .invalid(let text): return text; case .busy: return "另一個 VPN 操作正在執行" } }
 }
 
+struct ExternalVPNDetailedError: LocalizedError {
+    let message: String
+    let dnsDifferences: [String]
+    var errorDescription: String? { message }
+}
+
 enum ExternalVPNRouteError: LocalizedError {
     case notAdded(String)
     var errorDescription: String? { switch self { case .notAdded(let text): return text } }
@@ -133,13 +139,39 @@ struct ExternalDNSEntry: Codable, Equatable {
     let key: String
     let interface: String?
     let value: Data
-    var dictionary: [String: Any] { (try? PropertyListSerialization.propertyList(from: value, format: nil)) as? [String: Any] ?? [:] }
+    var dictionary: [String: Any] { Self.dictionary(value) }
     var servers: [String] { dictionary["ServerAddresses"] as? [String] ?? [] }
+    var label: String { "\(key)（\(interface ?? "未知介面")）" }
+    var summary: String {
+        let fields = dictionary.keys.sorted().map { "\($0)=\(Self.describe(dictionary[$0]))" }
+        return fields.isEmpty ? "（無內容）" : fields.joined(separator: "；")
+    }
+    static func dictionary(_ data: Data) -> [String: Any] { (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] ?? [:] }
     static func equalValues(_ lhs: Data?, _ rhs: Data?) -> Bool {
         guard let lhs, let rhs else { return lhs == nil && rhs == nil }
         guard let left = try? PropertyListSerialization.propertyList(from: lhs, format: nil) as? NSDictionary,
               let right = try? PropertyListSerialization.propertyList(from: rhs, format: nil) as? NSDictionary else { return false }
         return left.isEqual(right)
+    }
+    static func describe(_ value: Any?) -> String {
+        switch value {
+        case nil: return "（無）"
+        case let list as [Any]: return "[" + list.map { describe($0) }.joined(separator: ", ") + "]"
+        case let text as String: return text
+        case let number as NSNumber: return number.stringValue
+        case let data as Data: return "<\(data.count) bytes>"
+        case let some?: return "\(some)"
+        }
+    }
+    // 只在語意不同時回傳；無法逐欄比對（例如 plist 解不開）時至少回一行，讓「有差異」不會被吞掉。
+    static func fieldDifferences(from recorded: Data, to current: Data) -> [String] {
+        guard !equalValues(recorded, current) else { return [] }
+        let old = dictionary(recorded), new = dictionary(current)
+        let lines = Set(old.keys).union(new.keys).sorted().compactMap { field -> String? in
+            if let a = old[field] as? NSObject, let b = new[field] as? NSObject, a.isEqual(b) { return nil }
+            return "\(field)：記錄時 \(describe(old[field])) → 目前 \(describe(new[field]))"
+        }
+        return lines.isEmpty ? ["內容：無法逐欄比對"] : lines
     }
 }
 
@@ -179,12 +211,51 @@ struct ExternalDNSState: Codable {
         defaultDomains = snapshot.defaultDNSDomains
     }
 
-    func matches(_ snapshot: ExternalNetworkSnapshot) -> Bool {
-        entries.count == snapshot.dns.count && defaultServers == snapshot.defaultDNSServers
-            && defaultDomains == snapshot.defaultDNSDomains && entries.allSatisfy { entry in
-                snapshot.dns.contains { $0.key == entry.key && $0.interface == entry.interface && ExternalDNSEntry.equalValues($0.value, entry.value) }
+    func matches(_ snapshot: ExternalNetworkSnapshot) -> Bool { Self(snapshot).differences(from: self).isEmpty }
+
+    func differences(from recorded: Self) -> [String] {
+        var lines = recorded.entries.filter { old in !entries.contains { $0.key == old.key } }.map { "消失 \($0.label)：\($0.summary)" }
+        for entry in entries {
+            guard let old = recorded.entries.first(where: { $0.key == entry.key }) else {
+                lines.append("新增 \(entry.label)：\(entry.summary)")
+                continue
             }
+            if old.interface != entry.interface {
+                lines.append("改變 \(entry.key) 的介面：記錄時 \(old.interface ?? "未知介面") → 目前 \(entry.interface ?? "未知介面")")
+            }
+            lines += ExternalDNSEntry.fieldDifferences(from: old.value, to: entry.value).map { "改變 \(entry.label) 的 \($0)" }
+        }
+        if defaultServers != recorded.defaultServers {
+            lines.append("預設 DNS 伺服器：記錄時 \(ExternalDNSEntry.describe(recorded.defaultServers)) → 目前 \(ExternalDNSEntry.describe(defaultServers))")
+        }
+        if defaultDomains != recorded.defaultDomains {
+            lines.append("預設 DNS 比對網域：記錄時 \(ExternalDNSEntry.describe(recorded.defaultDomains)) → 目前 \(ExternalDNSEntry.describe(defaultDomains))")
+        }
+        return lines
     }
+}
+
+// W（複製）路由隨連線出現與消失，不代表 VPN 設定在變，不列入。
+struct ExternalTunnelFingerprint: Codable {
+    let tunnel: String
+    let routes: [ExternalRoute]
+    let dns: ExternalDNSState
+
+    init(tunnel: String, snapshot: ExternalNetworkSnapshot) {
+        self.tunnel = tunnel
+        routes = snapshot.routes.filter { $0.interface == tunnel && !$0.flags.contains("W") }.sorted {
+            ($0.network.address, $0.network.prefix, $0.gateway, $0.flags) < ($1.network.address, $1.network.prefix, $1.gateway, $1.flags)
+        }
+        dns = ExternalDNSState(snapshot)
+    }
+
+    func same(as other: Self) -> Bool { tunnel == other.tunnel && routes == other.routes && dns.differences(from: other.dns).isEmpty }
+}
+
+struct ExternalSettlingObservation: Codable {
+    static let required = 3
+    let fingerprint: ExternalTunnelFingerprint
+    let count: Int
 }
 
 struct ExternalDNSPlan {
@@ -197,6 +268,7 @@ struct ExternalVPNFailure: Codable, Equatable {
     enum Stage: String, Codable { case preparing, observing, planning, applyingRoutes, applyingDNS, verifying, restoring }
     let stage: Stage
     let message: String
+    var dnsDifferences: [String]? = nil
 }
 
 struct ExternalVPNSession: Codable {
@@ -214,6 +286,8 @@ struct ExternalVPNSession: Codable {
     var journalVersion: Int?
     var company: CompanyLease?
     var routingEvidence: ExternalVPNRoutingEvidence?
+    var settling: ExternalSettlingObservation?
+    var autoRetried: Bool?
 
     var hasPendingMutations: Bool { !addedRoutes.isEmpty || !dnsChanges.isEmpty || company != nil }
     var canRetry: Bool {
@@ -235,12 +309,15 @@ struct ExternalVPNStatus: Codable {
     var companyCapability: Int?
     var companyState: CompanyLeaseState?
     var busy: Bool?
+    var latestFailure: ExternalVPNFailure?
+    var autoRetried: Bool?
     static var idle: Self { Self(phase: .idle, message: "尚未開始分流", interface: nil, tunnel: nil, routeCount: 0) }
     init(session: ExternalVPNSession) {
         phase = session.phase; message = session.message; interface = session.baseline.interface
         tunnel = session.tunnel; routeCount = session.addedRoutes.count
         canRetry = session.canRetry; dnsMode = session.profile.dnsMode
         companyCapability = session.journalVersion == 3 && session.routingEvidence != nil ? 1 : nil; companyState = session.company?.state
+        latestFailure = session.latestFailure; autoRetried = session.autoRetried
     }
     init(phase: ExternalVPNPhase, message: String, interface: String?, tunnel: String?, routeCount: Int, canRetry: Bool? = nil, dnsMode: ExternalVPNDNSMode? = nil) {
         self.phase = phase; self.message = message; self.interface = interface; self.tunnel = tunnel; self.routeCount = routeCount
@@ -581,17 +658,7 @@ final class ExternalVPNEngine {
             guard previous.owner == owner, previous.canRetry else {
                 throw ExternalVPNError.invalid("已有待復原的分流設定，請先停止並復原")
             }
-            let current = try runtime.snapshot(baseline: previous.baseline)
-            let baseline = previous.baseline
-            guard ExternalVPNPlanner.sameBoot(baseline, current), current.interface == baseline.interface,
-                  current.address == baseline.address, current.gateway == baseline.gateway,
-                  current.localNetwork == baseline.localNetwork else {
-                throw ExternalVPNError.invalid("原本的網路已變更，請停止後重新開始等待")
-            }
-            var session = ExternalVPNSession(owner: owner, baseline: baseline, profile: profile)
-            session.journalVersion = 3
-            session.firstFailure = previous.firstFailure
-            session.latestFailure = previous.latestFailure
+            var session = try resume(previous, profile: profile)
             session.message = "沿用原本上網快照，等待重新嘗試分流"
             try runtime.save(session)
             return session
@@ -606,9 +673,36 @@ final class ExternalVPNEngine {
         return session
     }
 
+    // VPN 仍連線時 snapshot(baseline:) 依 baseline 的介面名稱讀位址與 Router，與 waiting 每次 tick 的比對相同。
+    private func resume(_ previous: ExternalVPNSession, profile: ExternalVPNProfile) throws -> ExternalVPNSession {
+        let current = try runtime.snapshot(baseline: previous.baseline)
+        let baseline = previous.baseline
+        guard ExternalVPNPlanner.sameBoot(baseline, current), current.interface == baseline.interface,
+              current.address == baseline.address, current.gateway == baseline.gateway,
+              current.localNetwork == baseline.localNetwork else {
+            throw ExternalVPNError.invalid("原本的網路已變更，請停止後重新開始等待")
+        }
+        var session = ExternalVPNSession(owner: previous.owner, baseline: baseline, profile: profile)
+        session.journalVersion = 3
+        session.firstFailure = previous.firstFailure
+        session.latestFailure = previous.latestFailure
+        return session
+    }
+
+    private func retryOnce(_ failed: ExternalVPNSession) -> ExternalVPNSession {
+        guard failed.autoRetried != true, failed.canRetry, let reason = failed.latestFailure?.message else { return failed }
+        do {
+            var session = try resume(failed, profile: failed.profile)
+            session.autoRetried = true
+            session.message = "第一次分流失敗：\(reason)；已自動復原並重新等待 VPN 設定穩定"
+            try runtime.save(session)
+            return session
+        } catch { return failed }
+    }
+
     func failed(_ input: ExternalVPNSession, error: Error, stage: ExternalVPNFailure.Stage) throws -> ExternalVPNSession {
         var session = input
-        let failure = ExternalVPNFailure(stage: stage, message: error.localizedDescription)
+        let failure = ExternalVPNFailure(stage: stage, message: error.localizedDescription, dnsDifferences: (error as? ExternalVPNDetailedError)?.dnsDifferences)
         if session.firstFailure == nil { session.firstFailure = failure }
         session.latestFailure = failure
         session.phase = session.hasPendingMutations ? .recoveryRequired : .failed
@@ -634,13 +728,17 @@ final class ExternalVPNEngine {
                 }
                 try evidence.validate(session, current: current)
                 if session.profile.dnsMode == .preserveVPN {
-                    guard let preserved = session.preservedDNS, preserved.matches(current), let tunnel = session.tunnel else {
-                        throw ExternalVPNError.invalid("保留的 VPN DNS 已改變或缺少觀察紀錄，已停止分流並復原")
-                    }
+                    let reason = "保留的 VPN DNS 已改變或缺少觀察紀錄，已停止分流並復原"
+                    guard let preserved = session.preservedDNS, let tunnel = session.tunnel else { throw ExternalVPNError.invalid(reason) }
+                    let differences = ExternalDNSState(current).differences(from: preserved)
+                    guard differences.isEmpty else { throw ExternalVPNDetailedError(message: reason, dnsDifferences: differences) }
                     _ = try ExternalVPNPlanner.dnsPlan(session, current: current, tunnel: tunnel)
                 }
-                for change in session.dnsChanges where try !ExternalDNSEntry.equalValues(runtime.dnsValue(change.key), change.after) {
-                    throw ExternalVPNError.invalid("VPN 重新設定 DNS，已停止分流並復原")
+                for change in session.dnsChanges {
+                    let value = try runtime.dnsValue(change.key)
+                    guard !ExternalDNSEntry.equalValues(value, change.after) else { continue }
+                    let differences = value.map { ExternalDNSEntry.fieldDifferences(from: change.after, to: $0).map { "改變 \(change.key) 的 \($0)" } } ?? ["消失 \(change.key)"]
+                    throw ExternalVPNDetailedError(message: "VPN 重新設定 DNS，已停止分流並復原", dnsDifferences: differences)
                 }
                 if let physicalDNS = session.dnsChanges.first(where: { change in
                     session.baseline.dns.contains { $0.key == change.key && $0.interface == session.baseline.interface }
@@ -654,7 +752,24 @@ final class ExternalVPNEngine {
             }
             guard ExternalVPNPlanner.sameBoot(session.baseline, current), current.address == session.baseline.address,
                   current.gateway == session.baseline.gateway else { throw ExternalVPNError.invalid("原本的網路已變更，請停止後重新開始等待") }
-            guard let tunnel = try ExternalVPNPlanner.tunnel(in: current) else { return session }
+            guard let tunnel = try ExternalVPNPlanner.tunnel(in: current) else {
+                guard session.settling != nil else { return session }
+                session.settling = nil
+                session.message = "已記住原本網路，等待外部 VPN 連線"
+                try runtime.save(session)
+                return session
+            }
+            // VPN 可能先建通道與路由、幾秒後才設定 DNS；連續觀察到相同設定才規劃，避免記下半成品。
+            let fingerprint = ExternalTunnelFingerprint(tunnel: tunnel, snapshot: current)
+            let count = session.settling.map { $0.fingerprint.same(as: fingerprint) ? $0.count + 1 : 1 } ?? 1
+            guard count >= ExternalSettlingObservation.required else {
+                session.settling = ExternalSettlingObservation(fingerprint: fingerprint, count: count)
+                session.message = "偵測到 VPN，等待設定穩定（\(count)/\(ExternalSettlingObservation.required)）"
+                    + (session.autoRetried == true ? "；這是第一次分流失敗後的自動重試" : "")
+                try runtime.save(session)
+                return session
+            }
+            session.settling = nil
             stage = .planning
             let plan = try ExternalVPNPlanner.plan(session, current: current, tunnel: tunnel)
             let dns = try ExternalVPNPlanner.dnsPlan(session, current: current, tunnel: tunnel)
@@ -693,13 +808,15 @@ final class ExternalVPNEngine {
             return session
         } catch {
             session = try failed(session, error: error, stage: stage)
-            guard session.hasPendingMutations else { return session }
-            do {
-                session = try restore(session)
-                return try failed(session, error: error, stage: stage)
-            } catch {
-                return try failed(session, error: error, stage: .restoring)
+            if session.hasPendingMutations {
+                do {
+                    session = try restore(session)
+                    session = try failed(session, error: error, stage: stage)
+                } catch {
+                    return try failed(session, error: error, stage: .restoring)
+                }
             }
+            return retryOnce(session)
         }
     }
 

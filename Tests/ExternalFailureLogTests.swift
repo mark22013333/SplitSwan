@@ -13,6 +13,8 @@ check("active 轉 failed 的 tick 要記錄", ExternalFailureLog.shouldRecord(op
 check("已是 failed 再收到 failed 不重複記錄", !ExternalFailureLog.shouldRecord(operation: "tick", previous: .failed, next: .failed))
 check("啟動時讀到舊的 failed 狀態不記錄", !ExternalFailureLog.shouldRecord(operation: "status", previous: .idle, next: .failed))
 check("轉為待復原不屬於分流失敗紀錄", !ExternalFailureLog.shouldRecord(operation: "tick", previous: .active, next: .recoveryRequired))
+check("第一次失敗後自動重試也要記錄", ExternalFailureLog.shouldRecord(operation: "tick", previous: .active, next: .waiting, autoRetried: true))
+check("一般等待中的 tick 不記錄", !ExternalFailureLog.shouldRecord(operation: "tick", previous: .waiting, next: .waiting))
 
 let suite = "SplitSwan.ExternalFailureLog." + UUID().uuidString
 let preferences = UserDefaults(suiteName: suite)!
@@ -54,6 +56,15 @@ check("紀錄含狀態 JSON、路由與 DNS", content.contains(statusJSON) && co
 check("紀錄的家目錄換成 ~、ifconfig 不含 MAC 與 IPv6", content.contains("log ~/Library") && !content.contains("/Users/example") && !content.contains("ether") && !content.contains("inet6"))
 check("紀錄檔權限 600", first.map { mode($0.path) & 0o777 } == 0o600)
 check("紀錄資料夾權限 700", mode(logs.path) & 0o777 == 0o700)
+
+check("沒有 DNS 差異時不寫差異段", !content.contains("== DNS 差異 =="))
+var dnsStatus = ExternalVPNStatus(phase: .waiting, message: "第一次分流失敗：保留的 VPN DNS 已改變或缺少觀察紀錄，已停止分流並復原；已自動復原並重新等待 VPN 設定穩定", interface: "en0", tunnel: nil, routeCount: 0)
+dnsStatus.autoRetried = true
+dnsStatus.latestFailure = ExternalVPNFailure(stage: .verifying, message: "保留的 VPN DNS 已改變或缺少觀察紀錄，已停止分流並復原", dnsDifferences: ["改變 State:/Network/Service/external/DNS（ppp0）的 ServerAddresses：記錄時 [198.51.100.53] → 目前 [198.51.100.54]", "預設 DNS 伺服器：記錄時 [198.51.100.53] → 目前 [198.51.100.54]"])
+let dnsJSON = String(data: try! JSONEncoder().encode(dnsStatus), encoding: .utf8)!
+let dnsLog = await ExternalFailureLog.record(statusJSON: dnsJSON, directory: root.appendingPathComponent("dns-logs"), home: "/Users/example", now: now, run: fakeRun)
+let dnsContent = dnsLog.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+check("DNS 不符的失敗寫出 DNS 差異段，每項一行", dnsContent.contains("== DNS 差異 ==\n改變 State:/Network/Service/external/DNS（ppp0）的 ServerAddresses：記錄時 [198.51.100.53] → 目前 [198.51.100.54]\n預設 DNS 伺服器：記錄時 [198.51.100.53] → 目前 [198.51.100.54]\n"))
 
 let outside = root.appendingPathComponent("outside.txt")
 try! "原本內容".write(to: outside, atomically: true, encoding: .utf8)
