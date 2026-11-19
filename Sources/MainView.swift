@@ -224,7 +224,16 @@ struct SettingsTab: View {
     @State private var saved = VPNSettings()          // 上次載入的設定，判斷哪些分類有未儲存修改
     @State private var password = ""
     @State private var psk = ""
-    @State private var message: (String, Bool)?     // 訊息、是否為錯誤
+    @State private var shownMessage: (String, Bool)?     // 訊息、是否為錯誤
+    @State private var messageSerial = 0
+    // 每次設定訊息都遞增序號：同一則錯誤或成功訊息再出現時，仍要搖晃或跳吐司
+    private var message: (String, Bool)? {
+        get { shownMessage }
+        nonmutating set {
+            shownMessage = newValue
+            if newValue != nil { messageSerial += 1 }
+        }
+    }
     @State private var secretState = (psk: false, password: false)
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var preset: CompanyPreset? = CompanyPresetStore.load()
@@ -244,8 +253,8 @@ struct SettingsTab: View {
     }
 
     var body: some View {
-        // 成功訊息留在底部列並補一則吐司；錯誤改在面板頂端用紅色說明並搖晃一次
-        SettingsSplitView(selection: category, dirty: dirtyCategories, message: successText.map { (text: $0, isError: false) },
+        // 訊息都留在底部列（按儲存的位置看得到）；成功另補一則吐司，錯誤另在面板頂端說明下一步並搖晃一次
+        SettingsSplitView(selection: category, dirty: dirtyCategories, message: message.map { (text: $0.0, isError: $0.1) },
                           revert: { loadDraft() }, save: { save() }) {
             if let errorText {
                 ErrorBanner(message: errorText, nextStep: "修正後再試一次；不確定原因時，可到「環境檢查」產生診斷報告。")
@@ -304,12 +313,13 @@ struct SettingsTab: View {
         }
         .onChange(of: window.pluginSettingsRequest) { _, request in focusPluginSettings(request: request) }
         .onChange(of: categoryRaw) { _, _ in message = nil }
-        .onChange(of: successText) { _, text in if let text { ToastCenter.shared.show(text) } }
-        .onChange(of: errorText) { _, text in if text != nil { errorShake += 1 } }
+        .onChange(of: messageSerial) { _, _ in
+            guard let message else { return }
+            if message.1 { errorShake += 1 } else { ToastCenter.shared.show(message.0) }
+        }
         .animation(DSMotion.standard(reduceMotion), value: errorText)
     }
 
-    private var successText: String? { message.flatMap { $0.1 ? nil : $0.0 } }
     private var errorText: String? { message.flatMap { $0.1 ? $0.0 : nil } }
 
     private func focusPluginSettings(request: Int) {
@@ -650,11 +660,8 @@ struct EnvironmentTab: View {
                 }
 
                 if env.running {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ProgressView().progressViewStyle(.linear)
-                        Text(env.runningText).font(.callout).foregroundStyle(.secondary)
-                    }
-                    .transition(DSMotion.transition(reduceMotion))
+                    BusyIndicator(text: env.runningText)
+                        .transition(DSMotion.transition(reduceMotion))
                 }
 
                 DSCard("檢查項目", systemImage: "checklist") {
@@ -696,7 +703,7 @@ struct EnvironmentTab: View {
     private func itemRow(_ item: CheckItem) -> some View {
         HStack(alignment: .top, spacing: 10) {
             if item.level == .checking {
-                ProgressView().controlSize(.small).frame(width: 22)
+                BusyIndicator(.spinner).frame(width: 22)
             } else {
                 Image(systemName: symbol(item.level))
                     .foregroundStyle(color(item.level))
@@ -853,10 +860,7 @@ struct AboutTab: View {
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     case .working(let text):
-                        VStack(alignment: .leading, spacing: 6) {
-                            ProgressView().progressViewStyle(.linear)
-                            Text(text).font(.callout).foregroundStyle(.secondary)
-                        }
+                        BusyIndicator(text: text)
                     case .failed(let reason):
                         ErrorBanner(message: reason, nextStep: "可再按一次「下載並安裝」，或按「前往下載」手動安裝。")
                     }

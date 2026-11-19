@@ -201,6 +201,39 @@ struct ErrorBanner: View {
 
 // MARK: - 載入按鈕
 
+/// 不定長度的進度：開啟「減少動態效果」時改成靜態沙漏，不轉動也不跑條。
+/// spinner 用在列或按鈕裡（旁邊已有文字）；bar 沒給說明時，靜態版補「處理中…」免得只剩一個圖示。
+struct BusyIndicator: View {
+    enum Style { case bar, spinner }
+    let style: Style
+    let text: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(_ style: Style = .bar, text: String? = nil) { self.style = style; self.text = text }
+
+    var body: some View {
+        if reduceMotion {
+            let label = text ?? (style == .bar ? "處理中…" : nil)
+            HStack(spacing: 6) {
+                Image(systemName: "hourglass").foregroundStyle(.secondary)
+                if let label { Text(label).font(.callout).foregroundStyle(style == .bar ? .secondary : .primary) }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(label ?? "處理中")
+        } else if style == .bar {
+            VStack(alignment: .leading, spacing: 6) {
+                ProgressView().progressViewStyle(.linear)
+                if let text { Text(text).font(.callout).foregroundStyle(.secondary) }
+            }
+        } else {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                if let text { Text(text).font(.callout) }
+            }
+        }
+    }
+}
+
 /// 按下後在按鈕內轉圈；isLoading 由 true 變回 false 且 succeeded() 為真時短暫顯示打勾
 struct LoadingButton: View {
     let title: String
@@ -226,7 +259,7 @@ struct LoadingButton: View {
             HStack(spacing: 6) {
                 ZStack {
                     if isLoading {
-                        ProgressView().controlSize(.small).scaleEffect(0.8)
+                        BusyIndicator(.spinner).scaleEffect(0.8)
                             .transition(.opacity)
                     } else if showDone {
                         Image(systemName: "checkmark").fontWeight(.bold)

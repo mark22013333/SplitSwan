@@ -76,7 +76,7 @@ struct HostCheckPanel: View {
         case .idle:
             EmptyView()
         case .working(let text):
-            HStack(spacing: 8) { ProgressView().controlSize(.small); Text(text).font(.callout) }
+            BusyIndicator(.spinner, text: text)
         case .failed(let text):
             Label(text, systemImage: "exclamationmark.octagon.fill")
                 .foregroundStyle(.red).font(.callout)
