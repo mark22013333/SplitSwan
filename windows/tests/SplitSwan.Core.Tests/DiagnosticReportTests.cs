@@ -7,8 +7,8 @@ public class DiagnosticReportTests
 {
     private static readonly StoredSettings Settings = new(
         Username: "alice.wang",
-        Password: "S3cret-pass!",
-        Psk: "group-psk-value",
+        Password: "fake-password",
+        Psk: "fake-psk",
         Gateways: ["203.0.113.10", "vpn2.corp.example", ""],
         RemoteSubnets: ["198.51.100.0/24", "192.0.2.15/32"],
         Domain: "corp.example",
@@ -22,10 +22,10 @@ public class DiagnosticReportTests
     {
         var text = DiagnosticReport.Build(
             ["帳號 alice.wang"],
-            [new("引擎", "x", ["secret = \"S3cret-pass!\"", "psk group-psk-value", "eap_id = alice.wang"])],
+            [new("引擎", "x", ["secret = \"fake-password\"", "psk fake-psk", "eap_id = alice.wang"])],
             Masker());
-        Assert.DoesNotContain("S3cret-pass!", text);
-        Assert.DoesNotContain("group-psk-value", text);
+        Assert.DoesNotContain("fake-password", text);
+        Assert.DoesNotContain("fake-psk", text);
         Assert.DoesNotContain("alice.wang", text);
         Assert.Contains("<帳號>", text);
     }
