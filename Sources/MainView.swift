@@ -1,4 +1,4 @@
-// 主視窗：連線、設定、環境檢查、關於四個分頁
+// 主視窗：連線、自動分流、設定、環境檢查、關於五個分頁；共用元件在 DesignSystem.swift
 import SwiftUI
 import ServiceManagement
 
@@ -44,6 +44,7 @@ struct MainView: View {
         }
         .padding(16)
         .controlSize(.large)
+        .toastHost()
         .frame(minWidth: 560, idealWidth: 600, minHeight: 620, idealHeight: 720)
     }
 }
@@ -57,76 +58,132 @@ struct ConnectionTab: View {
     @ObservedObject var window: WindowModel
     @AppStorage(MenuBarIcon.styleKey) private var styleRaw = MenuBarIconStyle.shield.rawValue
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// 有連線意圖（含自動重連中、等待重試）或通道還在，就顯示斷線；斷線可以搶先執行中的連線
+    private var showsDisconnect: Bool { vpn.wantConnected || vpn.state.isConnected || vpn.state.isConnecting }
+    private var cannotConnect: Bool { vpn.busy || vpn.state == .helperMissing || !externalVPN.canConnectCompany }
+
     var body: some View {
-        VStack(spacing: 18) {
-            Spacer(minLength: 4)
-            bigIcon
-                .foregroundStyle(color)
-                .symbolEffect(.pulse, isActive: vpn.busy || vpn.state.isConnecting)
-            VStack(spacing: 6) {
-                Text(title).font(.title2.weight(.semibold))
-                if case .connected(_, let ip) = vpn.state {
-                    Text("虛擬 IP：\(ip)").font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
-                    if let since = vpn.connectedSince {
-                        TimelineView(.periodic(from: .now, by: 1)) { ctx in
-                            Text("已連線 \(duration(since, ctx.date))").font(.callout.monospacedDigit()).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                if vpn.busy { Text(vpn.busyText).font(.callout).foregroundStyle(.secondary) }
-                else if let note = vpn.retryNote { Text(note).font(.callout).foregroundStyle(.orange) }
-            }
-
-            if vpn.state == .helperMissing || !env.allOK {
-                Button("尚未完成環境設定，前往環境檢查") { window.tab = .environment }
-                    .buttonStyle(.link)
-            }
-
-            VStack(spacing: 10) {
-                // 有連線意圖（含自動重連中、等待重試）或通道還在，就顯示斷線；斷線可以搶先執行中的連線
-                if vpn.wantConnected || vpn.state.isConnected || vpn.state.isConnecting {
-                    Button(role: .destructive) { vpn.disconnect() } label: {
-                        Label(vpn.state.isConnected ? "斷線" : "停止連線", systemImage: "xmark.circle").frame(maxWidth: .infinity)
-                    }
-                    .controlSize(.large)
-                    .disabled(vpn.busyText == "斷線中…")
-                } else {
-                    Button { vpn.connect("auto") } label: {
-                        Label("連線（自動輪替）", systemImage: "bolt.horizontal.circle").frame(maxWidth: .infinity)
-                    }
-                    .controlSize(.large)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(vpn.busy || vpn.state == .helperMissing || !externalVPN.canConnectCompany)
-                    HStack(alignment: .top, spacing: 8) {
-                        ForEach(0..<3, id: \.self) { i in
-                            VStack(spacing: 4) {
-                                Button("VPN\(i + 1)") { vpn.connect("\(i + 1)") }
-                                    .frame(maxWidth: .infinity)
-                                    .help(vpn.gatewayTitle(i))
-                                    .disabled(vpn.busy || vpn.state == .helperMissing || !externalVPN.canConnectCompany || vpn.settings.gateways[i].isEmpty)
-                                // 最近狀態（F4），例：「上次 3.2 秒連上」；沒有紀錄就不顯示
-                                if let d = vpn.history.detail(i + 1) {
-                                    Text(d).font(.caption).foregroundStyle(.secondary)
-                                        .lineLimit(1).minimumScaleFactor(0.8)
-                                        .help(vpn.history.statusText(i + 1))
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                StatusCard(title: title, tone: tone, badge: badge) {
+                    bigIcon
+                        .symbolEffect(.pulse, isActive: !reduceMotion && (vpn.busy || vpn.state.isConnecting))
+                } detail: {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(summary)
+                        if case .connected(_, let ip) = vpn.state {
+                            Text("虛擬 IP：\(ip)").textSelection(.enabled)
+                            if let since = vpn.connectedSince {
+                                TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                                    Text("已連線 \(duration(since, ctx.date))").monospacedDigit()
                                 }
                             }
-                            .frame(maxWidth: .infinity)
                         }
+                        if vpn.busy { Text(vpn.busyText) }
+                        else if let note = vpn.retryNote { Text(note).foregroundStyle(.orange) }
+                    }
+                } actions: {
+                    primaryButton
+                }
+
+                if vpn.state == .helperMissing || !env.allOK {
+                    HStack(spacing: 8) {
+                        Image(systemName: "wrench.and.screwdriver.fill").foregroundStyle(.orange)
+                        Button("尚未完成環境設定，前往環境檢查") { window.tab = .environment }
+                            .buttonStyle(.link)
+                        Spacer(minLength: 0)
+                    }
+                    .font(.callout)
+                }
+
+                if let err = vpn.lastError {
+                    ErrorBanner(message: err, nextStep: "展開下方「連線紀錄」查看協商過程；仍無法連線時，到「環境檢查」產生診斷報告。")
+                        .transition(DSMotion.transition(reduceMotion))
+                }
+
+                if !showsDisconnect {
+                    DSCard("指定閘道", systemImage: "server.rack", subtitle: "自動輪替會先試最近連得上、連得快的閘道；也可以直接指定一台。") {
+                        gatewayButtons
                     }
                 }
-            }
-            .frame(maxWidth: 320)
 
-            if let err = vpn.lastError {
-                Label(err, systemImage: "exclamationmark.triangle.fill")
-                    .font(.callout).foregroundStyle(.orange)
-                    .multilineTextAlignment(.center)
+                DSCard {
+                    LogPanel(expanded: $window.showLog)
+                }
             }
-            Spacer(minLength: 8)
-            LogPanel(expanded: $window.showLog)
+            .padding(4)
+            .animation(DSMotion.standard(reduceMotion), value: vpn.lastError)
+            .animation(DSMotion.standard(reduceMotion), value: showsDisconnect)
         }
-        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder private var primaryButton: some View {
+        if showsDisconnect {
+            LoadingButton(vpn.state.isConnected ? "斷線" : "停止連線", systemImage: "xmark.circle",
+                          isLoading: vpn.busyText == "斷線中…", role: .destructive, fillWidth: true) { vpn.disconnect() }
+                .controlSize(.large)
+                .disabled(vpn.busyText == "斷線中…")
+        } else {
+            LoadingButton("連線（自動輪替）", systemImage: "bolt.horizontal.circle",
+                          isLoading: vpn.busy, prominent: true, fillWidth: true,
+                          succeeded: { vpn.state.isConnected }) { vpn.connect("auto") }
+                .controlSize(.large)
+                .disabled(cannotConnect)
+        }
+    }
+
+    private var gatewayButtons: some View {
+        HStack(alignment: .top, spacing: 8) {
+            ForEach(0..<3, id: \.self) { i in
+                VStack(spacing: 4) {
+                    Button { vpn.connect("\(i + 1)") } label: { Text("VPN\(i + 1)").frame(maxWidth: .infinity) }
+                        .help(vpn.gatewayTitle(i))
+                        .disabled(cannotConnect || vpn.settings.gateways[i].isEmpty)
+                    // 最近狀態（F4），例：「上次 3.2 秒連上」；沒有紀錄就不顯示
+                    if let d = vpn.history.detail(i + 1) {
+                        Text(d).font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(1).minimumScaleFactor(0.8)
+                            .help(vpn.history.statusText(i + 1))
+                    } else if vpn.settings.gateways[i].isEmpty {
+                        Text("未設定").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    /// 狀態卡大字下的一句話：告訴使用者現在該按哪裡
+    private var summary: String {
+        switch vpn.state {
+        case .connected: return "公司網段走 VPN，其他流量走原本網路。"
+        case .connecting: return "正在與閘道協商，通常數秒內完成。"
+        case .helperMissing: return "需要先安裝系統元件，才能連線。"
+        case .disconnected:
+            if vpn.busy { return "請稍候。" }
+            if !externalVPN.canConnectCompany { return "自動分流正在處理，暫時無法連線；請到「自動分流」頁查看。" }
+            return "按下方按鈕連線；連不上時會自動換下一台閘道。"
+        }
+    }
+
+    private var badge: String {
+        switch vpn.state {
+        case .connected: return "已連線"
+        case .connecting: return "連線中"
+        case .disconnected: return vpn.busy ? "處理中" : "未連線"
+        case .helperMissing: return "需要設定"
+        }
+    }
+
+    private var tone: StatusTone {
+        switch vpn.state {
+        case .connected: return .ok
+        case .connecting: return .working
+        case .disconnected: return vpn.busy ? .working : .neutral
+        case .helperMissing: return .error
+        }
     }
 
     private var title: String {
@@ -142,18 +199,12 @@ struct ConnectionTab: View {
         let style = MenuBarIconStyle(rawValue: styleRaw) ?? .shield
         let st = MenuBarIcon.state(for: vpn.state, busy: vpn.busy)
         if let name = style.symbol(st) {
-            Image(systemName: name).font(.system(size: 64, weight: .regular))
+            Image(systemName: name).font(.system(size: 26, weight: .medium))
         } else {
-            Image(nsImage: MenuBarIcon.textImage(state: st, height: 60, tint: nil))
+            Image(nsImage: MenuBarIcon.textImage(state: st, height: 40, tint: nil))
                 .renderingMode(.template)
-        }
-    }
-    private var color: Color {
-        switch vpn.state {
-        case .connected: return .green
-        case .connecting: return .orange
-        case .disconnected: return vpn.busy ? .orange : .secondary
-        case .helperMissing: return .red
+                .resizable().scaledToFit()
+                .frame(maxWidth: 40, maxHeight: 22)
         }
     }
     private func duration(_ from: Date, _ now: Date) -> String {
@@ -185,14 +236,22 @@ struct SettingsTab: View {
     @State private var handledPluginSettingsRequest = 0
     @AppStorage(SettingsCategory.storageKey) private var categoryRaw = SettingsCategory.connection.rawValue
     @MainActor private static var launchCategoryApplied = false
+    @State private var errorShake = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var category: Binding<SettingsCategory> {
         Binding(get: { SettingsCategory(rawValue: categoryRaw) ?? .connection }, set: { categoryRaw = $0.rawValue })
     }
 
     var body: some View {
-        SettingsSplitView(selection: category, dirty: dirtyCategories, message: message.map { (text: $0.0, isError: $0.1) },
+        // 成功訊息留在底部列並補一則吐司；錯誤改在面板頂端用紅色說明並搖晃一次
+        SettingsSplitView(selection: category, dirty: dirtyCategories, message: successText.map { (text: $0, isError: false) },
                           revert: { loadDraft() }, save: { save() }) {
+            if let errorText {
+                ErrorBanner(message: errorText, nextStep: "修正後再試一次；不確定原因時，可到「環境檢查」產生診斷報告。")
+                    .shake(trigger: errorShake)
+                    .transition(DSMotion.transition(reduceMotion))
+            }
             switch category.wrappedValue {
             case .connection:
                 ConnectionSettingsPanel(draft: $draft, password: $password, psk: $psk, secretState: secretState,
@@ -245,7 +304,13 @@ struct SettingsTab: View {
         }
         .onChange(of: window.pluginSettingsRequest) { _, request in focusPluginSettings(request: request) }
         .onChange(of: categoryRaw) { _, _ in message = nil }
+        .onChange(of: successText) { _, text in if let text { ToastCenter.shared.show(text) } }
+        .onChange(of: errorText) { _, text in if text != nil { errorShake += 1 } }
+        .animation(DSMotion.standard(reduceMotion), value: errorText)
     }
+
+    private var successText: String? { message.flatMap { $0.1 ? nil : $0.0 } }
+    private var errorText: String? { message.flatMap { $0.1 ? $0.0 : nil } }
 
     private func focusPluginSettings(request: Int) {
         guard request > handledPluginSettingsRequest else { return }
@@ -476,6 +541,7 @@ struct LogPanel: View {
     @Binding var expanded: Bool
     @ObservedObject var store = LogStore.shared
     @State private var appOnly = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static let timeFmt: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; return f
@@ -483,23 +549,25 @@ struct LogPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
+            HStack(spacing: 8) {
                 Button {
-                    withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+                    withAnimation(DSMotion.standard(reduceMotion)) { expanded.toggle() }
                 } label: {
                     Label("連線紀錄（\(store.lines.count)）", systemImage: expanded ? "chevron.down" : "chevron.right")
-                        .font(.callout.weight(.medium))
+                        .font(.headline)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 if !store.streaming {
-                    Text("未連到 strongSwan").font(.caption).foregroundStyle(.orange)
+                    StatusBadge(text: "未連到 strongSwan", tone: .warning)
                 }
-                Spacer()
+                Spacer(minLength: 4)
                 if expanded {
-                    Toggle("只看 App 動作", isOn: $appOnly).toggleStyle(.checkbox).font(.caption)
+                    Toggle("只看 App 動作", isOn: $appOnly).toggleStyle(.switch).controlSize(.mini).font(.caption)
                     Button("拷貝") {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(store.allText, forType: .string)
+                        ToastCenter.shared.show("已拷貝連線紀錄")
                     }
                     .controlSize(.small)
                     Button("清除") { store.clear() }.controlSize(.small)
@@ -546,57 +614,134 @@ struct EnvironmentTab: View {
     @ObservedObject var window: WindowModel
     @ObservedObject private var report = DiagnosticRunner.shared
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// 檢查結果還沒出來（第一次開啟，或還有項目在背景查詢）
+    private var loading: Bool { env.items.isEmpty || env.items.contains { $0.level == .checking } }
+    private var problems: [CheckItem] { env.items.filter { $0.level == .fail } }
+    /// 下一步：第一個有動作可按的失敗項目
+    private var nextAction: CheckItem? { problems.first { $0.action != .none } }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            List(env.items) { item in
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: symbol(item.level))
-                        .foregroundStyle(color(item.level))
-                        .font(.title3)
-                        .frame(width: 22)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(item.title).font(.body.weight(.medium))
-                        Text(item.detail).font(.callout).foregroundStyle(.secondary)
-                            .textSelection(.enabled)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                StatusCard(title: statusTitle, tone: statusTone, badge: statusBadge) {
+                    Image(systemName: loading ? "hourglass" : statusTone.symbol).font(.system(size: 26, weight: .medium))
+                } detail: {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(statusDetail)
+                        if let msg = env.lastMessage, !env.running { Text(msg).textSelection(.enabled) }
                     }
-                    Spacer()
-                    if item.action != .none {
-                        Button(item.actionTitle) { perform(item.action) }
-                            .disabled(env.running)
+                } actions: {
+                    HStack(spacing: 10) {
+                        if let item = nextAction {
+                            LoadingButton(item.actionTitle, systemImage: "wrench.and.screwdriver", isLoading: env.running,
+                                          prominent: true) { perform(item.action) }
+                                .disabled(env.running)
+                            LoadingButton("重新檢查", systemImage: "arrow.clockwise", isLoading: false) { env.check() }
+                                .disabled(env.running)
+                        } else {
+                            LoadingButton("重新檢查", systemImage: "arrow.clockwise", isLoading: env.running || loading,
+                                          prominent: true, succeeded: { env.allOK }) { env.check() }
+                                .disabled(env.running)
+                        }
+                        Spacer(minLength: 0)
                     }
                 }
-                .padding(.vertical, 4)
-            }
-            .listStyle(.inset(alternatesRowBackgrounds: true))
 
-            HStack {
                 if env.running {
-                    ProgressView().controlSize(.small)
-                    Text(env.runningText).font(.callout).foregroundStyle(.secondary)
-                } else if let msg = env.lastMessage {
-                    Text(msg).font(.callout).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 6) {
+                        ProgressView().progressViewStyle(.linear)
+                        Text(env.runningText).font(.callout).foregroundStyle(.secondary)
+                    }
+                    .transition(DSMotion.transition(reduceMotion))
                 }
-                Spacer()
-                Button("重新檢查") { env.check() }.disabled(env.running)
-            }
 
-            // F3：診斷報告（規格 §5）。只讀取現況，不會改變連線狀態
-            HStack {
-                if report.running {
-                    ProgressView().controlSize(.small)
-                    Text(report.progressText).font(.callout).foregroundStyle(.secondary)
-                } else if let msg = report.lastMessage {
-                    Text(msg).font(.callout).foregroundStyle(.secondary)
-                } else {
-                    Text("連線有問題時，產生報告傳給管理者（不含密碼與預設共享金鑰）")
-                        .font(.callout).foregroundStyle(.secondary)
+                DSCard("檢查項目", systemImage: "checklist") {
+                    if env.items.isEmpty {
+                        ForEach(0..<5, id: \.self) { _ in SkeletonRow() }
+                    } else {
+                        ForEach(Array(env.items.enumerated()), id: \.element.id) { index, item in
+                            if index > 0 { Divider() }
+                            itemRow(item).staggeredAppear(index)
+                        }
+                    }
                 }
-                Spacer()
-                Button("產生診斷報告") { report.generate(checks: env.items) }
-                    .disabled(report.running)
+
+                // F3：診斷報告（規格 §5）。只讀取現況，不會改變連線狀態
+                DSCard("診斷報告", systemImage: "doc.text.magnifyingglass",
+                       subtitle: "連線有問題時，產生報告傳給管理者（不含密碼與預設共享金鑰）") {
+                    HStack(spacing: 10) {
+                        LoadingButton("產生診斷報告", systemImage: "doc.badge.plus", isLoading: report.running,
+                                      succeeded: { report.lastMessage?.hasPrefix("已產生") == true }) {
+                            report.generate(checks: env.items)
+                        }
+                        .disabled(report.running)
+                        Group {
+                            if report.running { Text(report.progressText) }
+                            else if let msg = report.lastMessage { Text(msg).textSelection(.enabled) }
+                        }
+                        .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                    }
+                }
             }
+            .padding(4)
+            .animation(DSMotion.standard(reduceMotion), value: env.running)
         }
         .onAppear { env.check() }
+    }
+
+    private func itemRow(_ item: CheckItem) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            if item.level == .checking {
+                ProgressView().controlSize(.small).frame(width: 22)
+            } else {
+                Image(systemName: symbol(item.level))
+                    .foregroundStyle(color(item.level))
+                    .font(.title3)
+                    .frame(width: 22)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.title).font(.body.weight(.medium))
+                Text(item.detail).font(.callout)
+                    .foregroundStyle(item.level == .fail ? Color.red : Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            Spacer(minLength: 8)
+            if item.action != .none {
+                Button(item.actionTitle) { perform(item.action) }
+                    .disabled(env.running)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var statusTone: StatusTone {
+        if loading { return .working }
+        if !problems.isEmpty { return .error }
+        return env.items.contains { $0.level == .warn } ? .warning : .ok
+    }
+
+    private var statusTitle: String {
+        if loading { return "檢查中…" }
+        if !problems.isEmpty { return "有 \(problems.count) 項需要處理" }
+        return env.items.contains { $0.level == .warn } ? "可以使用，有項目要留意" : "環境已就緒"
+    }
+
+    private var statusBadge: String {
+        if loading { return "檢查中" }
+        return "\(env.items.filter { $0.level == .ok }.count)/\(env.items.count) 通過"
+    }
+
+    private var statusDetail: String {
+        if loading { return "正在確認 strongSwan、系統元件與設定檔。" }
+        if let item = nextAction { return "下一步：\(item.title)，按「\(item.actionTitle)」。" }
+        if let item = problems.first { return "下一步：依「\(item.title)」的說明處理後，按「重新檢查」。" }
+        if let item = env.items.first(where: { $0.level == .warn }) { return "\(item.title)：\(item.detail)" }
+        return "所有項目都通過，可以到「連線」頁連線。"
     }
 
     private func perform(_ a: CheckAction) {
@@ -630,46 +775,34 @@ struct EnvironmentTab: View {
 struct AboutTab: View {
     @ObservedObject private var updates = UpdateCenter.shared
     @AppStorage(UpdateCenter.autoCheckKey) private var autoCheck = false   // 預設不每日檢查
-    @State private var copied = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                // 版本
-                HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 16) {
+                StatusCard(title: AppInfo.name, tone: updateTone, badge: updateBadge) {
                     Image(nsImage: NSApp.applicationIconImage)
-                        .resizable().frame(width: 72, height: 72)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(AppInfo.name).font(.title2.weight(.semibold))
+                        .resizable().frame(width: 48, height: 48)
+                } detail: {
+                    VStack(alignment: .leading, spacing: 3) {
                         Text(AboutInfo.versionText(version: AppInfo.version, build: AppInfo.build))
-                            .font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                            .textSelection(.enabled)
+                        Text(updateSummary)
                     }
-                    Spacer()
-                    VStack(alignment: .trailing, spacing: 4) {
-                        Button("拷貝版本資訊") { copyVersionInfo() }
-                        Text(copied ? "已拷貝" : " ").font(.caption).foregroundStyle(.green)
-                    }
-                }
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.08)))
-
-                SettingsCard("連結") {
-                    linkButton("GitHub 專案頁", systemImage: "chevron.left.forwardslash.chevron.right", url: AppInfo.repoURL)
-                    linkButton("使用說明（README）", systemImage: "book", url: AppInfo.readmeURL)
-                    linkButton("所有版本下載（Releases）", systemImage: "arrow.down.circle", url: AppInfo.releasesURL)
-                }
-
-                SettingsCard("檢查更新") {
+                } actions: {
                     HStack(spacing: 10) {
-                        Button(updates.check == .checking ? "檢查中…" : "檢查更新") { updates.checkNow() }
+                        LoadingButton(updates.check == .checking ? "檢查中…" : "檢查更新", systemImage: "arrow.triangle.2.circlepath",
+                                      isLoading: updates.check == .checking, prominent: true) { updates.checkNow() }
                             .disabled(updates.check == .checking || updates.isInstalling)
-                        if updates.check == .checking { ProgressView().controlSize(.small) }
-                        Spacer()
+                        Button("拷貝版本資訊") { copyVersionInfo() }
+                        Spacer(minLength: 0)
                     }
+                }
+
+                DSCard("檢查更新", systemImage: "arrow.down.app") {
                     updateResult
                     Toggle("每天自動檢查更新", isOn: $autoCheck)
-                        .toggleStyle(.checkbox)
+                        .toggleStyle(.switch)
                         .onChange(of: autoCheck) { _, on in if on { updates.autoCheckIfDue() } }
                     Text(autoCheck ? "每天連到 GitHub 檢查一次，有新版本會顯示在這裡與狀態列選單；不會自動安裝。"
                                    : "只有按下「檢查更新」時才會連到 GitHub；不會自動下載或安裝。")
@@ -677,7 +810,13 @@ struct AboutTab: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                SettingsCard("授權與致謝") {
+                DSCard("連結", systemImage: "link") {
+                    linkButton("GitHub 專案頁", systemImage: "chevron.left.forwardslash.chevron.right", url: AppInfo.repoURL)
+                    linkButton("使用說明（README）", systemImage: "book", url: AppInfo.readmeURL)
+                    linkButton("所有版本下載（Releases）", systemImage: "arrow.down.circle", url: AppInfo.releasesURL)
+                }
+
+                DSCard("授權與致謝", systemImage: "checkmark.seal") {
                     HStack(spacing: 8) {
                         Text("\(AppInfo.name) 以 MIT 授權釋出。")
                         Button("查看授權") { NSWorkspace.shared.open(AppInfo.licenseURL) }
@@ -714,22 +853,55 @@ struct AboutTab: View {
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     case .working(let text):
-                        HStack(spacing: 8) { ProgressView().controlSize(.small); Text(text).font(.callout) }
+                        VStack(alignment: .leading, spacing: 6) {
+                            ProgressView().progressViewStyle(.linear)
+                            Text(text).font(.callout).foregroundStyle(.secondary)
+                        }
                     case .failed(let reason):
-                        Label(reason, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                            .font(.callout).fixedSize(horizontal: false, vertical: true)
+                        ErrorBanner(message: reason, nextStep: "可再按一次「下載並安裝」，或按「前往下載」手動安裝。")
                     }
                 }
+                .transition(DSMotion.transition(reduceMotion))
             case .upToDate(let v):
                 Label("已是最新版本（\(v)）", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                    .transition(DSMotion.transition(reduceMotion))
             case .failed(let reason):
-                HStack(spacing: 10) {
-                    Label(reason, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 8) {
+                    ErrorBanner(message: reason, nextStep: "確認網路後再按「檢查更新」，或到 Releases 頁手動下載。")
                     Button("開啟 Releases 頁") { NSWorkspace.shared.open(AppInfo.releasesURL) }
-                    Spacer()
                 }
+                .transition(DSMotion.transition(reduceMotion))
             }
+        }
+    }
+
+    private var updateTone: StatusTone {
+        switch updates.check {
+        case .idle: return .neutral
+        case .checking: return .working
+        case .done(.newer): return .warning
+        case .done(.upToDate): return .ok
+        case .done(.failed): return .error
+        }
+    }
+
+    private var updateBadge: String {
+        switch updates.check {
+        case .idle: return "尚未檢查"
+        case .checking: return "檢查中"
+        case .done(.newer(let v, _)): return "有新版本 \(v)"
+        case .done(.upToDate): return "最新版本"
+        case .done(.failed): return "檢查失敗"
+        }
+    }
+
+    private var updateSummary: String {
+        switch updates.check {
+        case .idle: return "按「檢查更新」確認是否有新版本。"
+        case .checking: return "正在連到 GitHub…"
+        case .done(.newer): return "下方可直接下載並安裝新版本。"
+        case .done(.upToDate): return "目前已是最新版本。"
+        case .done(.failed): return "檢查更新失敗，下方有原因與下一步。"
         }
     }
 
@@ -744,10 +916,6 @@ struct AboutTab: View {
                                       macOS: AboutInfo.macOSVersion, chip: AboutInfo.chip)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
-        copied = true
-        Task {
-            try? await Task.sleep(for: .seconds(1.5))
-            copied = false
-        }
+        ToastCenter.shared.show("已拷貝版本資訊")
     }
 }
