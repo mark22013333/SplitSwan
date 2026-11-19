@@ -30,8 +30,8 @@ internal static class DiagnosticRunner
             await RunAsync("WSL 發行版", Wsl, "-l", "-v"),
             ReadFile(".wslconfig", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".wslconfig")),
             await EngineStatusAsync(settings.Distro),
-            await RunAsync("IPv4 路由表", Path.Combine(Environment.SystemDirectory, "route.exe"), "print", "-4"),
-            await RunAsync("網路介面位址", Path.Combine(Environment.SystemDirectory, "ipconfig.exe")),
+            await RunConsoleToolAsync("IPv4 路由表", Path.Combine(Environment.SystemDirectory, "route.exe"), "print", "-4"),
+            await RunConsoleToolAsync("網路介面位址", Path.Combine(Environment.SystemDirectory, "ipconfig.exe")),
             await PowerShellAsync("網卡", "Get-NetAdapter | Sort-Object Name | Format-Table Name, InterfaceDescription, Status -AutoSize | Out-String -Width 200"),
             await PowerShellAsync("DNS 分流規則（NRPT）", "Get-DnsClientNrptRule | Format-Table Namespace, NameServers, Comment -AutoSize | Out-String -Width 200"),
             await PowerShellAsync("Hyper-V 防火牆（WSL）", "Get-NetFirewallHyperVVMSetting -PolicyStore ActiveStore | Format-List | Out-String -Width 200"),
@@ -83,9 +83,23 @@ internal static class DiagnosticRunner
             "[Console]::OutputEncoding = [Text.Encoding]::UTF8; " + script);
 
     private static Task<DiagnosticSection> RunAsync(string title, string file, params string[] args) =>
-        RunAsync(title, file, CommandTimeout, args);
+        RunAsync(title, file, CommandTimeout, new UTF8Encoding(false), args);
 
-    private static async Task<DiagnosticSection> RunAsync(string title, string file, TimeSpan timeout, params string[] args)
+    private static Task<DiagnosticSection> RunAsync(string title, string file, TimeSpan timeout, params string[] args) =>
+        RunAsync(title, file, timeout, new UTF8Encoding(false), args);
+
+    /// <summary>
+    /// route.exe、ipconfig.exe 這類主控台工具輸出用的是 OEM 字碼頁（繁中 Windows 是 950／Big5），不是 UTF-8；
+    /// 用 UTF-8 讀會讓中文欄位變成亂碼。
+    /// </summary>
+    private static Task<DiagnosticSection> RunConsoleToolAsync(string title, string file, params string[] args)
+    {
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        var oem = Encoding.GetEncoding(System.Globalization.CultureInfo.CurrentCulture.TextInfo.OEMCodePage);
+        return RunAsync(title, file, CommandTimeout, oem, args);
+    }
+
+    private static async Task<DiagnosticSection> RunAsync(string title, string file, TimeSpan timeout, Encoding output, params string[] args)
     {
         var display = Path.GetFileName(file) + " " + EngineCommand.JoinCommandLine(args);
         var psi = new ProcessStartInfo(file)
@@ -95,8 +109,8 @@ internal static class DiagnosticRunner
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            StandardOutputEncoding = new UTF8Encoding(false),
-            StandardErrorEncoding = new UTF8Encoding(false),
+            StandardOutputEncoding = output,
+            StandardErrorEncoding = output,
             WorkingDirectory = AppPaths.DataDirOrTemp(),
         };
         foreach (var a in args) psi.ArgumentList.Add(a);
