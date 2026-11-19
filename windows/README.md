@@ -194,6 +194,7 @@ SplitSwan 是解壓縮即用的單一 exe，沒有安裝程式，所以預設沒
 - **連上了但內部主機名稱解析不到**：在設定填「內部網域」，必要時填「內部 DNS」，再重新連線。
 - **連上後某台公司主機不通**：見下面的「某台主機連不上怎麼辦」。
 - 回報問題時，附上「顯示引擎輸出」的內容，先把公司位址與帳號遮蔽。
+- 想一次確認整體狀態時，在系統管理員 PowerShell 執行 `powershell -ExecutionPolicy Bypass -File windows\tools\verify-windows.ps1`（`-Build` 另外建置並跑單元測試，需要 .NET 10 SDK）。它只讀狀態、不連線也不斷線，逐項列出 PASS／FAIL／SKIP；輸出不含密碼與 PSK，內部位址已遮成 `x.x.x.x`。已連線時會另外檢查每個內網網段都走 WSL 的 `vEthernet`、公網流量不走 VPN。
 
 ### 某台主機連不上怎麼辦
 
