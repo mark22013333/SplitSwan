@@ -111,8 +111,14 @@ internal sealed class SettingsForm : ThemedForm
     // 「某台公司主機連不上？」一鍵檢查（同 Mac 版 HostCheckPanel）；沒有 VpnCoordinator 時不顯示
     private readonly VpnCoordinator? _vpn;
     private readonly TextBox _hcInput = new() { PlaceholderText = "主機網域或網址，例：intranet.example.com:8443" };
-    private readonly ThemedButton _hcCheck = new("檢查");
-    private readonly CardPanel _hcCard = new() { Visible = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
+    private readonly LoadingButton _hcCheck = new("檢查");
+    private InputFrame? _hcFrame;
+    /// <summary>輸入格式錯誤時，輸入框下方的紅字。</summary>
+    private readonly ThemedLabel _hcInvalid = new("", TextRole.Bad, Theme.Ui(8.25f)) { Visible = false };
+    /// <summary>這次檢查工作是否以失敗收場（「檢查」按鈕結束時決定要不要打勾）。</summary>
+    private bool _hcFailed;
+    /// <summary>檢查結果卡（SectionCard：內距 14、圓角 10；有問題時橘色淡底）。</summary>
+    private readonly SectionCard _hcCard = new() { Visible = false };
     private readonly TableLayoutPanel _hcBody = UiLayout.Table(1);
     /// <summary>視窗關閉時取消進行中的檢查（DNS、路由查詢、TCP、等待連線）。</summary>
     private readonly CancellationTokenSource _hcCts = new();
@@ -619,24 +625,30 @@ internal sealed class SettingsForm : ThemedForm
         panel.Controls.Add(new ThemedLabel("某台公司主機連不上？", TextRole.Ink, Theme.Ui(9f, FontStyle.Bold)) { Margin = Padding.Empty }, 0, 0);
         var row = UiLayout.Flow();
         row.Margin = new Padding(0, 4, 0, 0);
-        var frame = new InputFrame(_hcInput, mono: true) { Width = ContentWidth - 76, Margin = new Padding(0, 0, 8, 0) };
+        var frame = new InputFrame(_hcInput, mono: true) { Width = ContentWidth - 96, Margin = new Padding(0, 0, 8, 0) };
+        _hcFrame = frame;
         _hcInput.AccessibleName = "要檢查的主機";
         _hcCheck.Margin = Padding.Empty;
         _hcCheck.Anchor = AnchorStyles.Left;
         row.Controls.Add(frame);
         row.Controls.Add(_hcCheck);
         panel.Controls.Add(row, 0, 1);
+        _hcInvalid.MaximumSize = new Size(ContentWidth, 0);
+        _hcInvalid.Margin = new Padding(0, 3, 0, 0);
+        _hcInvalid.AccessibleRole = AccessibleRole.Alert;
+        // 每個控制項都指定 (欄, 列)：隱藏的紅字列不會讓後面的控制項往前遞補
+        panel.Controls.Add(_hcInvalid, 0, 2);
         panel.Controls.Add(new ThemedLabel(
             "會查出主機的 IP，確認後自動加入內網網段、儲存並重新連線，再檢查是否走 VPN；有填連接埠會一併測試能否連線。",
-            TextRole.Muted, Theme.Ui(8.25f)) { MaximumSize = new Size(ContentWidth, 0), Margin = new Padding(0, 3, 0, 0) }, 0, 2);
+            TextRole.Muted, Theme.Ui(8.25f)) { MaximumSize = new Size(ContentWidth, 0), Margin = new Padding(0, 3, 0, 0) }, 0, 3);
         _hcBody.Margin = Padding.Empty;
         _hcCard.Controls.Add(_hcBody);
         _hcCard.MinimumSize = new Size(ContentWidth, 0);
         _hcCard.Margin = new Padding(0, 6, 0, 0);
-        panel.Controls.Add(_hcCard, 0, 3);
+        panel.Controls.Add(_hcCard, 0, 4);
 
         _hcCheck.Click += (_, _) => HcStart();
-        _hcInput.TextChanged += (_, _) => UpdateHcCheckEnabled();
+        _hcInput.TextChanged += (_, _) => { UpdateHcCheckEnabled(); HcClearInvalid(); };
         // 輸入框裡按 Enter 是「檢查」，不是「儲存」：取得焦點時暫時把 AcceptButton 換成「檢查」
         _hcInput.Enter += (_, _) => AcceptButton = _hcCheck;
         _hcInput.Leave += (_, _) => AcceptButton = _saveBtn;
@@ -661,6 +673,8 @@ internal sealed class SettingsForm : ThemedForm
     {
         if (_hcWorking || IsDisposed) return;
         _hcWorking = true;
+        _hcFailed = false;
+        _hcCheck.Begin();
         UpdateHcCheckEnabled();
         try
         {
@@ -678,7 +692,11 @@ internal sealed class SettingsForm : ThemedForm
         finally
         {
             _hcWorking = false;
-            if (!IsDisposed) UpdateHcCheckEnabled();
+            if (!IsDisposed)
+            {
+                _hcCheck.Finish(succeeded: !_hcFailed);
+                UpdateHcCheckEnabled();
+            }
         }
     }
 
@@ -687,9 +705,10 @@ internal sealed class SettingsForm : ThemedForm
         if (_hcWorking || IsDisposed) return;
         if (HostCheck.ParseTarget(_hcInput.Text) is not { } target)
         {
-            HcFailed("格式不正確：請輸入主機網域、IP、主機:連接埠或網址");
+            HcShowInvalid("格式不正確：請輸入主機網域、IP、主機:連接埠或網址");
             return;
         }
+        HcClearInvalid();
         await HcRunAsync(async ct =>
         {
             HcWorking($"查詢 {target.Host} 的 IP…");
@@ -730,6 +749,7 @@ internal sealed class SettingsForm : ThemedForm
         AppLog.Info($"一鍵檢查：已加入網段 {string.Join(", ", add)} 並儲存設定");
         // 之後的連線使用新設定；關窗時 TrayContext 只在按「儲存」（Saved）時才再套用一次，不會重複重連
         _vpn.UpdateSettings(saved);
+        ShowToast("已加入網段並儲存");
         if (!HcConnected)
         {
             HcNeedConnect(target, ips, add);
@@ -785,15 +805,38 @@ internal sealed class SettingsForm : ThemedForm
 
     // 結果區的各種畫面（同 Mac 版 HostCheckPanel.Phase）
 
+    /// <summary>格式錯誤：輸入框紅框並搖晃一次（減少動態效果時不晃），下方紅字說明；改了內容就恢復。</summary>
+    private void HcShowInvalid(string text)
+    {
+        if (IsDisposed) return;
+        _hcInvalid.Text = text;
+        _hcInvalid.Visible = true;
+        if (_hcFrame is { } f)
+        {
+            f.Invalid = true;
+            Shake.Run(f);
+        }
+        _hcInput.Focus();
+        AccessibilityNotifyClients(AccessibleEvents.SystemAlert, -1);
+    }
+
+    private void HcClearInvalid()
+    {
+        if (!_hcInvalid.Visible) return;
+        _hcInvalid.Visible = false;
+        if (_hcFrame is { } f) f.Invalid = false;
+    }
+
     private void HcWorking(string text)
     {
         if (!HcBegin(StatusTone.Idle)) return;
-        HcText(text, TextRole.Muted);
+        HcAdd(new BusyIndicator(BusyStyle.Spinner, text) { AccessibleName = text });
         HcEnd();
     }
 
     private void HcFailed(string text)
     {
+        _hcFailed = true;
         if (!HcBegin(StatusTone.Warn)) return;
         HcText(text, TextRole.Warn);
         HcEnd();
@@ -835,10 +878,11 @@ internal sealed class SettingsForm : ThemedForm
         var portOk = results.All(r => r.PortOk ?? true);
         if (!HcBegin(routeOk && portOk ? StatusTone.Idle : StatusTone.Warn)) return;
         var report = HostCheck.Report(target, results, added, HcConnected ? _vpn?.Vip : null);
+        var rows = new List<ThemedLabel>();
         foreach (var r in results)
         {
-            HcRow(r.ViaTunnel, $"{r.Ip} 路由：{r.Interface ?? "查不到"}（{(r.ViaTunnel ? "有走 VPN" : "沒走 VPN")}）");
-            if (r.PortOk is { } ok && target.Port is { } p) HcRow(ok, $"{r.Ip} 連接埠 {p}：{(ok ? "可連線" : "連不上")}");
+            rows.Add(HcRow(r.ViaTunnel, $"{r.Ip} 路由：{r.Interface ?? "查不到"}（{(r.ViaTunnel ? "有走 VPN" : "沒走 VPN")}）"));
+            if (r.PortOk is { } ok && target.Port is { } p) rows.Add(HcRow(ok, $"{r.Ip} 連接埠 {p}：{(ok ? "可連線" : "連不上")}"));
         }
         HcText(!routeOk ? "還沒走 VPN：確認網段已儲存且已重新連線；若剛重連，稍等幾秒再按一次「再檢查一次」。"
                : !portOk ? "已走 VPN 但連不上，可能是公司端沒有開放。請按「複製結果」交給管理者。"
@@ -846,6 +890,9 @@ internal sealed class SettingsForm : ThemedForm
                : "已走 VPN，連接埠也能連線。", TextRole.Muted);
         HcButtons(("複製結果", false, () => HcCopy(report)), ("再檢查一次", false, HcStart));
         HcEnd();
+        // 結果列依序淡入、由下往上滑入（減少動態效果時只淡入）
+        _hcBody.PerformLayout();
+        Stagger.Reveal(rows);
     }
 
     private void HcCopy(string report)
@@ -853,6 +900,7 @@ internal sealed class SettingsForm : ThemedForm
         try
         {
             Clipboard.SetText(report);
+            ShowToast("已拷貝檢查結果");
         }
         catch (System.Runtime.InteropServices.ExternalException ex)
         {
@@ -904,17 +952,21 @@ internal sealed class SettingsForm : ThemedForm
     private void HcText(string text, TextRole role, bool mono = false) =>
         HcAdd(new ThemedLabel(text, role, mono ? Theme.Mono(8.25f) : Theme.Ui(9f))
         {
-            MaximumSize = new Size(Px(ContentWidth - 26), 0),
+            MaximumSize = new Size(Px(ContentWidth - 30), 0),
             Margin = new Padding(0, _hcBody.Controls.Count == 0 ? 0 : Px(4), 0, 0),
         });
 
     /// <summary>✓／✗ 一列（可選取複製的文字在「複製結果」，這裡只顯示）。</summary>
-    private void HcRow(bool ok, string text) =>
-        HcAdd(new ThemedLabel((ok ? "✓ " : "✗ ") + text, ok ? TextRole.Ok : TextRole.Bad, Theme.Mono(8.25f))
+    private ThemedLabel HcRow(bool ok, string text)
+    {
+        var row = new ThemedLabel((ok ? "✓ " : "✗ ") + text, ok ? TextRole.Ok : TextRole.Bad, Theme.Mono(8.25f))
         {
-            MaximumSize = new Size(Px(ContentWidth - 26), 0),
+            MaximumSize = new Size(Px(ContentWidth - 30), 0),
             Margin = new Padding(0, _hcBody.Controls.Count == 0 ? 0 : Px(2), 0, 0),
-        });
+        };
+        HcAdd(row);
+        return row;
+    }
 
     private void HcButtons(params (string Text, bool Primary, Action Click)[] buttons)
     {
