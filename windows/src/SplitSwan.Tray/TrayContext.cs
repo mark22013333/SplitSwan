@@ -174,21 +174,11 @@ internal sealed class TrayContext : ApplicationContext
             _wizardForm.Activate();
             return;
         }
-        _wizardForm = new WizardForm(_vpn, ShowSettingsAsync, autoStart);
+        _wizardForm = new WizardForm(_vpn, importOnShow => ShowSettings(importOnShow), autoStart);
         _wizardForm.Finished += () => Balloon("SplitSwan 設定完成", "之後從托盤圖示按右鍵就能連線／斷線", false);
         _wizardForm.FormClosed += (_, _) => _wizardForm = null;
         _wizardForm.Show();
         _wizardForm.Activate();
-    }
-
-    /// <summary>精靈步驟 5：開設定視窗（可直接開始匯入），等它關閉後回傳已儲存的設定（取消為 null）。</summary>
-    private Task<StoredSettings?> ShowSettingsAsync(bool importOnShow)
-    {
-        var tcs = new TaskCompletionSource<StoredSettings?>();
-        var form = ShowSettings(importOnShow);
-        // 視窗已經開著（例如使用者先從托盤開了）：等同一個視窗關閉
-        form.FormClosed += (_, _) => tcs.TrySetResult(form.Saved);
-        return tcs.Task;
     }
 
     private void Redraw()
@@ -313,7 +303,12 @@ internal sealed class TrayContext : ApplicationContext
             initialPage: page ?? SettingsPage.Connection);
         _settingsForm.FormClosed += (_, _) =>
         {
-            if (_settingsForm?.Saved is { } saved) _vpn.UpdateSettings(saved);
+            if (_settingsForm?.Saved is { } saved)
+            {
+                _vpn.UpdateSettings(saved);
+                // 精靈開著時，從托盤開的設定視窗儲存也要讓它繼續（不只精靈自己的按鈕）
+                if (_wizardForm is { IsDisposed: false } wizard) wizard.SettingsSaved();
+            }
             _settingsForm = null;
         };
         var form = _settingsForm;

@@ -16,6 +16,9 @@ public enum WizardStep
 
 public enum WizardStepStatus { NotStarted, Running, Done, Skipped, Failed }
 
+/// <summary>設定視窗儲存後精靈要做的事（不論設定視窗是從精靈還是托盤開的）。</summary>
+public enum WizardSettingsReaction { None, ContinueConfigure, RetestConnection }
+
 /// <summary>
 /// 精靈狀態（存 %LOCALAPPDATA%\SplitSwan\wizard.json，重開機後從中斷處繼續）。純邏輯，不碰檔案與 UI。
 /// 規則：
@@ -145,6 +148,17 @@ public sealed class SetupWizardState
         RebootedSinceInstall = true;
         return true;
     }
+
+    /// <summary>
+    /// 設定儲存了：停在「設定」等使用者 → 繼續；測試連線失敗 → 重測；其他情況（執行中、還沒到第 5 步、已完成）不動。
+    /// </summary>
+    public WizardSettingsReaction OnSettingsSaved() => (Current, _status[Current]) switch
+    {
+        (_, WizardStepStatus.Running) => WizardSettingsReaction.None,
+        (WizardStep.Configure, not (WizardStepStatus.Done or WizardStepStatus.Skipped)) => WizardSettingsReaction.ContinueConfigure,
+        (WizardStep.TestConnection, WizardStepStatus.Failed) => WizardSettingsReaction.RetestConnection,
+        _ => WizardSettingsReaction.None,
+    };
 
     public bool GoNext()
     {
