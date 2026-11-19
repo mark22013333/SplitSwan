@@ -322,7 +322,8 @@ public class StatusPanelModelTests
     public void Busy_DisconnectEnabled_ConnectDisabled()
     {
         var m = StatusPanelModel.Build(TrayState.Busy, null, "連線中（VPN1）…", null, true, busy: true);
-        Assert.Equal(StatusTone.Warn, m.Tone);
+        // 進行中用 Working（橘色時鐘，同 Mac 1.9.20），不再借用提醒的 Warn
+        Assert.Equal(StatusTone.Working, m.Tone);
         Assert.Equal("連線中（VPN1）…", m.Headline);
         Assert.False(m.ShowFacts);
         Assert.Equal(PanelPrimary.Disconnect, m.Primary);
@@ -333,6 +334,63 @@ public class StatusPanelModelTests
     [Fact]
     public void Busy_NoText() =>
         Assert.Equal("處理中…", StatusPanelModel.Build(TrayState.Busy, null, null, null, false, true).Headline);
+
+    [Theory]
+    [InlineData("連線中…（依序嘗試 VPN1、VPN2）", "連線中", false)]
+    [InlineData("連線 VPN2 中…", "連線中", false)]
+    [InlineData("斷線中…", "斷線中", true)]
+    [InlineData("目前動作完成後會斷線…", "處理中", false)]
+    [InlineData(null, "處理中", false)]
+    public void Busy_BadgeAndSpinnerFollowBusyText(string? busyText, string badge, bool primaryBusy)
+    {
+        var m = StatusPanelModel.Build(TrayState.Busy, null, busyText, null, true, busy: true);
+        Assert.Equal(badge, m.Badge);
+        Assert.Equal(primaryBusy, m.PrimaryBusy);
+        Assert.False(string.IsNullOrWhiteSpace(m.NextStep));
+        Assert.Null(m.ErrorText);
+    }
+
+    [Theory]
+    [InlineData(TrayState.Connected, "已連線")]
+    [InlineData(TrayState.Error, "連線失敗")]
+    [InlineData(TrayState.Unknown, "需要確認")]
+    [InlineData(TrayState.Disconnected, "未連線")]
+    public void Badge_PerState(TrayState state, string badge)
+    {
+        var m = StatusPanelModel.Build(state, "vpn1", null, "原因", wantConnected: true, busy: false);
+        Assert.Equal(badge, m.Badge);
+        Assert.False(m.PrimaryBusy);
+        // 每個狀態都有一句下一步，而且只有一行
+        Assert.False(string.IsNullOrWhiteSpace(m.NextStep));
+        Assert.DoesNotContain('\n', m.NextStep);
+    }
+
+    [Fact]
+    public void NextStep_NamesThePrimaryButton()
+    {
+        foreach (var state in new[] { TrayState.Disconnected, TrayState.Error })
+        {
+            var m = StatusPanelModel.Build(state, null, null, null, wantConnected: false, busy: false);
+            Assert.Contains($"「{m.PrimaryText}」", m.NextStep);
+        }
+    }
+
+    [Fact]
+    public void Unknown_NextStepIsTheExplanation()
+    {
+        var m = StatusPanelModel.Build(TrayState.Unknown, null, null, null, wantConnected: true, busy: false);
+        Assert.Equal(m.Detail, m.NextStep);
+        Assert.Null(m.ErrorText);
+    }
+
+    [Fact]
+    public void ErrorText_OnlyForErrorWithReason()
+    {
+        Assert.Equal("對方沒有回應", StatusPanelModel.Build(TrayState.Error, null, null, "對方沒有回應", true, false).ErrorText);
+        Assert.Null(StatusPanelModel.Build(TrayState.Error, null, null, null, true, false).ErrorText);
+        Assert.Null(StatusPanelModel.Build(TrayState.Connected, "vpn1", null, "舊的錯誤", true, false).ErrorText);
+        Assert.Contains("顯示引擎輸出", StatusPanelModel.ErrorNextStep);
+    }
 
     [Fact]
     public void Error_ShowsReason_ReconnectPrimary_DisconnectInMenuWhenRetrying()

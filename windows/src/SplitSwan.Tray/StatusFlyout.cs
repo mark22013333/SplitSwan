@@ -6,35 +6,46 @@ using SplitSwan.Tray.Controls;
 namespace SplitSwan.Tray;
 
 /// <summary>
-/// 狀態面板（視覺稿 C）：左鍵托盤圖示彈出，再點一次或失去焦點就關。
+/// 狀態面板（Mac 1.9.20 連線頁的設計）：左鍵托盤圖示彈出，再點一次或失去焦點就關。
 /// 無邊框、最上層、不出現在工作列與 Alt+Tab；Windows 11 圓角。位置由 Core 的 FlyoutPlacement 計算。
-/// 內容：狀態大字＋狀態點、虛擬 IP／已連線時間／握手耗時、通道流量（已連線且引擎有回報時）、狀態更新時間、
-/// 網段摘要一行（設定勾選「顯示完整網段清單」時再加上網段 chips）與「其他所有流量走本機網路」、
-/// 按鈕（設定／改連到…／連線或斷線）。已連線時間與狀態更新時間每秒更新，只在面板開著時計時。
+/// 內容由上而下：狀態卡（色調圖示、狀態大字＋狀態徽章、一句下一步、唯一的主要按鈕：連線／重新連線／斷線）、
+/// 連線失敗時的紅色錯誤說明（原因可選取複製）、「連線資訊」卡（虛擬 IP／已連線時間／握手耗時、通道流量，只在已連線時）、
+/// 「分流」卡（網段摘要一行，設定勾選「顯示完整網段清單」時再加上網段 chips，與「其他所有流量走本機網路」）、
+/// 最下方狀態更新時間與次要按鈕（改連到…／設定）。已連線時間與狀態更新時間每秒更新，只在面板開著時計時。
 /// </summary>
 internal sealed class StatusFlyout : ThemedForm
 {
     private const int PanelWidth = 320;
+    /// <summary>面板四周的留白。</summary>
+    private const int Inset = 12;
+    /// <summary>卡片寬度。</summary>
+    private const int CardWidth = PanelWidth - Inset * 2;
+    /// <summary>卡片內容寬度（扣掉卡片內距）。</summary>
+    private const int InnerWidth = CardWidth - ToneStyle.CardPadding * 2;
+    /// <summary>「虛擬 IP／已連線／握手耗時」三欄的寬度（合計 InnerWidth）。</summary>
+    private static readonly int[] FactWidths = [116, 80, InnerWidth - 116 - 80];
 
     private readonly VpnCoordinator _vpn;
     private readonly Action _openSettings;
-    private readonly TableLayoutPanel _hero = UiLayout.Table(1);
-    private readonly StatusDot _dot = new(10, halo: true);
-    private readonly ThemedLabel _headline = new("", TextRole.HeroInk, Theme.Ui(13.5f, FontStyle.Bold));
-    private readonly ThemedLabel _detail = new("", TextRole.HeroMuted);
+    private readonly StatusCard _status = new(CardWidth);
+    private readonly ErrorBanner _error = new(CardWidth) { Visible = false };
+    private readonly SectionHeader _infoHeader = new("連線資訊");
+    private readonly SectionCard _infoCard = new() { MinimumSize = new Size(CardWidth, 0) };
     private readonly TableLayoutPanel _facts = UiLayout.Table(3, 2);
-    private readonly ThemedLabel _vipValue = new("", TextRole.HeroInk, Theme.Mono(9f));
-    private readonly ThemedLabel _sinceValue = new("", TextRole.HeroInk, Theme.Mono(9f));
-    private readonly ThemedLabel _buildValue = new("", TextRole.HeroInk, Theme.Mono(9f));
-    private readonly ThemedLabel _traffic = new("", TextRole.HeroInk, Theme.Mono(9f));
-    private readonly ThemedLabel _fresh = new("", TextRole.HeroMuted, Theme.Ui(8.25f));
+    private readonly ThemedLabel _vipValue = new("", TextRole.Ink, Theme.Mono(9f));
+    private readonly ThemedLabel _sinceValue = new("", TextRole.Ink, Theme.Mono(9f));
+    private readonly ThemedLabel _buildValue = new("", TextRole.Ink, Theme.Mono(9f));
+    private readonly ThemedLabel _traffic = new("", TextRole.Ink, Theme.Mono(9f));
+    private readonly ThemedLabel _fresh = new("", TextRole.Muted, Theme.Ui(8.25f));
     private readonly ThemedLabel _summary = new("", TextRole.Ink);
     private readonly ThemedLabel _vpnLaneLabel = LaneLabel("走 VPN");
     private readonly ChipFlow _vpnLane = new();
     private readonly ChipFlow _localLane = new();
     private readonly ThemedButton _settings = new("設定");
     private readonly ThemedButton _gatewayMenu = new("改連到…") { DropDownArrow = true };
-    private readonly ThemedButton _primary = new("斷線", primary: true);
+    private readonly LoadingButton _primary = new("斷線", primary: true);
+    /// <summary>主要按鈕轉圈時是不是在斷線（結束時成功＝已不再連線，才打勾）。</summary>
+    private bool _primaryWasBusy;
     private readonly ContextMenuStrip _gwMenu = new() { ShowImageMargin = false, ShowCheckMargin = true };
     private readonly System.Windows.Forms.Timer _tick = new() { Interval = 1000 };
     /// <summary>三欄數值的 tooltip（握手耗時的說明、已連線時間只是下限的說明）。</summary>
@@ -64,41 +75,35 @@ internal sealed class StatusFlyout : ThemedForm
         AutoSize = true;
         AutoSizeMode = AutoSizeMode.GrowAndShrink;
 
-        // ── 頂部深色區：狀態大字、說明、三欄數值
-        _hero.Padding = new Padding(16, 14, 16, 14);
-        var heroStack = _hero;
-        var big = UiLayout.Flow();
-        _dot.Margin = new Padding(0, 4, 6, 0);
-        _headline.Margin = Padding.Empty;
-        big.Controls.Add(_dot);
-        big.Controls.Add(_headline);
-        heroStack.Controls.Add(big, 0, 0);
-        _detail.MaximumSize = new Size(PanelWidth - 32, 0);
-        _detail.Margin = new Padding(0, 6, 0, 0);
-        heroStack.Controls.Add(_detail, 0, 1);
-        for (int i = 0; i < 3; i++) _facts.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, (PanelWidth - 32) / 3f));
-        _facts.Margin = new Padding(0, 10, 0, 0);
+        // ── 狀態卡：大字狀態、徽章、一句下一步、唯一的主要按鈕（填滿整列）
+        _primary.AutoSize = false;
+        _primary.Size = new Size(_status.ActionWidth, 34);
+        _status.AddAction(_primary);
+        _status.AccessibleName = "連線狀態";
+        _error.Margin = new Padding(0, 10, 0, 0);
+
+        // ── 連線資訊卡（只在已連線時）：三欄數值與通道流量
+        // 虛擬 IP 欄較寬：完整的 IPv4（15 字元，等寬字）不必省略
+        foreach (var w in FactWidths) _facts.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, w));
         AddFact(0, "虛擬 IP", _vipValue);
         AddFact(1, "已連線", _sinceValue);
         AddFact(2, StatusPanelText.HandshakeCaption, _buildValue, StatusPanelText.HandshakeTip);
-        heroStack.Controls.Add(_facts, 0, 2);
-        _traffic.MaximumSize = new Size(PanelWidth - 32, 0);
-        _traffic.Margin = new Padding(0, 8, 0, 0);
+        var info = UiLayout.Table(1, 2);
+        info.Controls.Add(_facts, 0, 0);
+        _traffic.MaximumSize = new Size(InnerWidth, 0);
+        _traffic.Margin = new Padding(0, ToneStyle.RowSpacing, 0, 0);
         _traffic.AccessibleName = "通道流量";
-        heroStack.Controls.Add(_traffic, 0, 3);
-        _fresh.MaximumSize = new Size(PanelWidth - 32, 0);
-        _fresh.Margin = new Padding(0, 6, 0, 0);
-        _fresh.AccessibleName = "狀態更新時間";
-        heroStack.Controls.Add(_fresh, 0, 4);
+        info.Controls.Add(_traffic, 0, 1);
+        _infoCard.Controls.Add(info);
+        _infoCard.AccessibleName = "連線資訊";
+        _infoHeader.Margin = new Padding(0, 14, 0, 6);
 
-        // ── 內容：分流說明與按鈕
-        var body = UiLayout.Table(1);
-        body.Padding = new Padding(16, 14, 16, 14);
+        // ── 分流卡：網段摘要與 chips
         // 每個控制項都指定 (欄, 列)：隱藏的網段 chips 列不會讓後面的控制項往前遞補
         var lanes = UiLayout.Table(2, 3);
         lanes.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 82));
-        lanes.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, PanelWidth - 32 - 82));
-        _summary.MaximumSize = new Size(PanelWidth - 32, 0);
+        lanes.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, InnerWidth - 82));
+        _summary.MaximumSize = new Size(InnerWidth, 0);
         _summary.Margin = new Padding(0, 0, 0, 8);
         _summary.AccessibleName = "走 VPN 的網段";
         lanes.Controls.Add(_summary, 0, 0);
@@ -107,22 +112,38 @@ internal sealed class StatusFlyout : ThemedForm
         lanes.Controls.Add(_vpnLane, 1, 1);
         lanes.Controls.Add(LaneLabel("走本機網路"), 0, 2);
         lanes.Controls.Add(_localLane, 1, 2);
-        _vpnLane.MaximumSize = new Size(PanelWidth - 32 - 82, 0);
+        _vpnLane.MaximumSize = new Size(InnerWidth - 82, 0);
         _localLane.SetChips(["其他所有流量"], ChipKind.Local, mono: false);
-        body.Controls.Add(lanes, 0, 0);
+        var lanesCard = new SectionCard { MinimumSize = new Size(CardWidth, 0) };
+        lanesCard.Controls.Add(lanes);
+        lanesCard.AccessibleName = "分流";
+        var lanesHeader = new SectionHeader("分流") { Margin = new Padding(0, 14, 0, 6) };
 
+        // ── 最下方：狀態更新時間、次要按鈕
+        var footer = UiLayout.Table(2, 1);
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, CardWidth - 150));
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
+        footer.Margin = new Padding(0, 12, 0, 0);
+        _fresh.MaximumSize = new Size(CardWidth - 150, 0);
+        _fresh.Anchor = AnchorStyles.Left;
+        _fresh.Margin = Padding.Empty;
+        _fresh.AccessibleName = "狀態更新時間";
+        footer.Controls.Add(_fresh, 0, 0);
         var buttons = UiLayout.Flow(FlowDirection.RightToLeft);
         buttons.Anchor = AnchorStyles.Right;
-        buttons.Margin = new Padding(0, 10, 0, 0);
-        buttons.Controls.AddRange([_primary, _gatewayMenu, _settings]);
-        body.Controls.Add(buttons, 0, 1);
+        buttons.Controls.AddRange([_settings, _gatewayMenu]);
+        footer.Controls.Add(buttons, 1, 0);
 
-        var root = UiLayout.Table(1, 2);
-        root.Controls.Add(_hero, 0, 0);
-        root.Controls.Add(body, 0, 1);
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, PanelWidth));
-        _hero.Dock = DockStyle.Fill;
-        body.Dock = DockStyle.Fill;
+        var root = UiLayout.Table(1, 7);
+        root.Padding = new Padding(Inset);
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, CardWidth));
+        root.Controls.Add(_status, 0, 0);
+        root.Controls.Add(_error, 0, 1);
+        root.Controls.Add(_infoHeader, 0, 2);
+        root.Controls.Add(_infoCard, 0, 3);
+        root.Controls.Add(lanesHeader, 0, 4);
+        root.Controls.Add(lanesCard, 0, 5);
+        root.Controls.Add(footer, 0, 6);
         Controls.Add(root);
 
         _settings.Click += (_, _) => { HideFlyout(deactivated: false); _openSettings(); };
@@ -136,7 +157,7 @@ internal sealed class StatusFlyout : ThemedForm
 
     private void AddFact(int col, string caption, ThemedLabel value, string? tip = null)
     {
-        var cap = new ThemedLabel(caption, TextRole.HeroMuted, Theme.Ui(7.5f)) { Margin = Padding.Empty };
+        var cap = new ThemedLabel(caption, TextRole.Muted, Theme.Ui(7.5f)) { Margin = Padding.Empty };
         if (tip is not null)
         {
             _tips.SetToolTip(cap, tip);
@@ -146,7 +167,7 @@ internal sealed class StatusFlyout : ThemedForm
         value.Margin = new Padding(0, 1, 0, 0);
         value.AutoEllipsis = true;
         value.AutoSize = false;
-        value.Size = new Size((PanelWidth - 32) / 3 - 4, 18);   // 96 DPI 的邏輯像素，視窗縮放時一起放大
+        value.Size = new Size(FactWidths[col] - 4, 18);   // 96 DPI 的邏輯像素，視窗縮放時一起放大
         _facts.Controls.Add(cap, col, 0);
         _facts.Controls.Add(value, col, 1);
         value.AccessibleName = caption;
@@ -178,8 +199,6 @@ internal sealed class StatusFlyout : ThemedForm
 
     protected override void OnThemeApplied()
     {
-        _hero.BackColor = Theme.C(Theme.Palette.Hero);
-        BackColor = Theme.Surface;
         _gwMenu.Renderer = new ThemedMenuRenderer();
         _gwMenu.BackColor = Theme.Surface;
         _gwMenu.ForeColor = Theme.Ink;
@@ -311,11 +330,10 @@ internal sealed class StatusFlyout : ThemedForm
             _vpn.WantConnected, _vpn.IsBusy);
         _model = m;
         SuspendLayout();
-        _dot.Tone = m.Tone;
-        _headline.Text = m.Headline;
-        _detail.Text = m.Detail ?? "";
-        _detail.Visible = m.Detail is not null;
-        _facts.Visible = m.ShowFacts;
+        _status.Set(m.Tone, m.Headline, m.Badge, m.NextStep);
+        if (m.ErrorText is { } err) _error.Set(err, StatusPanelModel.ErrorNextStep);
+        _error.Visible = m.ErrorText is not null;
+        _infoHeader.Visible = _infoCard.Visible = m.ShowFacts;
         _vipValue.Text = _vpn.Vip ?? "—";
         var gw = _vpn.ConnectedGateway;
         _buildValue.Text = gw is { } n ? StatusPanelModel.FormatSeconds(StatusPanelModel.LastSuccessSeconds(_vpn.History.Records(n))) : "—";
@@ -342,6 +360,14 @@ internal sealed class StatusFlyout : ThemedForm
 
         _primary.Text = m.PrimaryText;
         _primary.Enabled = m.PrimaryEnabled;
+        // 連線類是強調色的主要按鈕；斷線用外框樣式（同 Mac 連線頁）
+        _primary.Primary = m.Primary != PanelPrimary.Disconnect;
+        if (m.PrimaryBusy) { _primary.Begin(); _primaryWasBusy = true; }
+        else if (_primaryWasBusy)
+        {
+            _primaryWasBusy = false;
+            _primary.Finish(succeeded: state == TrayState.Disconnected);
+        }
         _gatewayMenu.Text = m.GatewayMenuText;
         _gatewayMenu.Enabled = m.ConnectEnabled || m.DisconnectInMenu;
         _primary.AccessibleDescription = m.Headline;

@@ -33,6 +33,21 @@ public sealed record StatusPanelModel(
     /// <summary>主要按鈕可不可以按。</summary>
     public bool PrimaryEnabled => Primary == PanelPrimary.Disconnect ? DisconnectEnabled : ConnectEnabled;
 
+    /// <summary>狀態卡右上角的狀態徽章（例「已連線」「連線中」「連線失敗」）。</summary>
+    public string Badge { get; init; } = "";
+
+    /// <summary>狀態卡大字下的一句話：告訴使用者現在該做什麼（同 Mac 版連線頁的 summary）。</summary>
+    public string NextStep { get; init; } = "";
+
+    /// <summary>錯誤說明（紅色 ErrorBanner）的訊息：只有連線失敗且有原因時才有。</summary>
+    public string? ErrorText => Tone == StatusTone.Bad ? Detail : null;
+
+    /// <summary>主要按鈕要不要轉圈：正在斷線（主要按鈕就是斷線）時。</summary>
+    public bool PrimaryBusy { get; init; }
+
+    /// <summary>錯誤說明下方的下一步。</summary>
+    public const string ErrorNextStep = "仍無法連線時，從托盤選單開啟「顯示引擎輸出」查看協商過程，或產生診斷報告。";
+
     /// <param name="gateway">引擎回報的連線名稱（例 vpn1）。</param>
     /// <param name="busyText">動作進行中的文字（例「連線中…」）。</param>
     /// <param name="note">錯誤或重試提示（VpnCoordinator 的 LastError ?? RetryNote）。</param>
@@ -47,7 +62,7 @@ public sealed record StatusPanelModel(
         (StatusTone tone, string headline, string? detail, PanelPrimary primary) = state switch
         {
             TrayState.Connected => (StatusTone.Ok, gw is null ? "已連線" : "已連線　" + gw, null, PanelPrimary.Disconnect),
-            TrayState.Busy => (StatusTone.Warn, string.IsNullOrWhiteSpace(busyText) ? "處理中…" : OneLine(busyText!), null,
+            TrayState.Busy => (StatusTone.Working, string.IsNullOrWhiteSpace(busyText) ? "處理中…" : OneLine(busyText!), null,
                 PanelPrimary.Disconnect),
             TrayState.Error => (StatusTone.Bad, "未連上", oneLine, PanelPrimary.Reconnect),
             TrayState.Unknown => (StatusTone.Warn, "狀態不明",
@@ -60,10 +75,43 @@ public sealed record StatusPanelModel(
             PanelPrimary.Reconnect => "重新連線",
             _ => "連線",
         };
+        var busyKind = state == TrayState.Busy ? BusyKindOf(busyText) : BusyKind.Other;
+        var (badge, nextStep) = state switch
+        {
+            TrayState.Connected => ("已連線", "公司網段走 VPN，其他流量走原本的網路。"),
+            TrayState.Busy => busyKind switch
+            {
+                BusyKind.Connecting => ("連線中", "正在與閘道協商，通常數秒內完成；按「斷線」可停止。"),
+                BusyKind.Disconnecting => ("斷線中", "正在關閉通道，請稍候。"),
+                _ => ("處理中", "目前的動作完成後會更新狀態，請稍候。"),
+            },
+            TrayState.Error => ("連線失敗", "按「重新連線」再試一次，或從「選擇閘道…」指定一台。"),
+            TrayState.Unknown => ("需要確認", detail!),
+            _ => ("未連線", "按「連線」開始；連不上時會自動換下一台閘道。"),
+        };
         return new StatusPanelModel(tone, headline, detail, state == TrayState.Connected, primary, primaryText,
             connectEnabled, disconnectEnabled,
             DisconnectInMenu: primary != PanelPrimary.Disconnect && disconnectEnabled,
-            GatewayMenuText: state == TrayState.Connected ? "改連到…" : "選擇閘道…");
+            GatewayMenuText: state == TrayState.Connected ? "改連到…" : "選擇閘道…")
+        {
+            Badge = badge,
+            NextStep = nextStep,
+            PrimaryBusy = busyKind == BusyKind.Disconnecting,
+        };
+    }
+
+    private enum BusyKind { Connecting, Disconnecting, Other }
+
+    /// <summary>
+    /// 動作進行中的種類，依 VpnCoordinator 的忙碌文字開頭判斷：「連線…」為連線中、「斷線…」為斷線中；
+    /// 其他（例「目前動作完成後會斷線…」、沒有文字）都算處理中。
+    /// </summary>
+    private static BusyKind BusyKindOf(string? busyText)
+    {
+        var t = busyText?.TrimStart() ?? "";
+        return t.StartsWith("連線", StringComparison.Ordinal) ? BusyKind.Connecting
+            : t.StartsWith("斷線", StringComparison.Ordinal) ? BusyKind.Disconnecting
+            : BusyKind.Other;
     }
 
     private static string OneLine(string s) => s.Replace("\r", " ").Replace("\n", " ").Trim();
