@@ -29,6 +29,7 @@ internal sealed class TrayContext : ApplicationContext
     private readonly ToolStripMenuItem _install = new("首次設定精靈…");
     private readonly ToolStripMenuItem _showLog = new("顯示引擎輸出");
     private readonly ToolStripMenuItem _openLogDir = new("開啟記錄資料夾");
+    private readonly ToolStripMenuItem _diagnose = new("產生診斷報告…");
     private readonly ToolStripMenuItem _auto = new("自動重連") { CheckOnClick = false };
     private readonly ToolStripMenuItem _exit = new("斷線並結束");
     private bool _exiting;
@@ -86,6 +87,7 @@ internal sealed class TrayContext : ApplicationContext
         _install.Click += (_, _) => ShowWizard(autoStart: false);
         _showLog.Click += (_, _) => ShowLog();
         _openLogDir.Click += (_, _) => LogForm.OpenLogFolder();
+        _diagnose.Click += (_, _) => Guard(WriteDiagnosticReportAsync);
         _auto.Click += (_, _) => ToggleAuto();
         _exit.Click += (_, _) => Exit();
 
@@ -94,7 +96,7 @@ internal sealed class TrayContext : ApplicationContext
             _updateItem, _header, new ToolStripSeparator(),
             _connect, _connectGw[0], _connectGw[1], _connectGw[2], _disconnect, new ToolStripSeparator(),
             _settingsItem, _import, _install, new ToolStripSeparator(),
-            _showLog, _openLogDir, _auto, _iconMenu, new ToolStripSeparator(),
+            _showLog, _openLogDir, _diagnose, _auto, _iconMenu, new ToolStripSeparator(),
             _exit,
         ]);
 
@@ -257,6 +259,24 @@ internal sealed class TrayContext : ApplicationContext
     }
 
     /// <summary>通知：ShowBalloonTip 遇到空標題或空內文會丟例外，先補上預設文字。</summary>
+    /// <summary>「產生診斷報告…」：背景收集（約 10–30 秒），完成後在檔案總管選取報告檔。產生中選單項目停用。</summary>
+    private async Task WriteDiagnosticReportAsync()
+    {
+        _diagnose.Enabled = false;
+        _diagnose.Text = "正在產生診斷報告…";
+        try
+        {
+            var path = await DiagnosticRunner.WriteAsync(_vpn.Settings, _vpn.Vip);
+            Balloon("診斷報告已產生", "公司位址與帳密已遮蔽，可以直接傳給維護者。檔案已在檔案總管中選取。", false);
+            DiagnosticRunner.Reveal(path);
+        }
+        finally
+        {
+            _diagnose.Text = "產生診斷報告…";
+            _diagnose.Enabled = true;
+        }
+    }
+
     private void Balloon(string title, string body, bool isError)
     {
         if (string.IsNullOrWhiteSpace(title)) title = AppPaths.AppName;
