@@ -142,9 +142,9 @@ final class ExternalVPNController: ObservableObject {
                 decoded.tunnel = status.tunnel
                 decoded.routeCount = status.routeCount
             }
-            let previous = status.phase
+            let previous = status
             status = decoded
-            if ExternalFailureLog.shouldRecord(operation: operation, previous: previous, next: decoded.phase) { recordFailure(output) }
+            if ExternalFailureLog.shouldRecord(operation: operation, previous: previous, next: decoded) { recordFailure(output) }
         }
         else {
             status = ExternalVPNStatus(phase: isManaging ? .recoveryRequired : .failed,

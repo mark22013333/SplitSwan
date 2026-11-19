@@ -7,8 +7,21 @@ enum ExternalFailureLog {
     static let keep = 10
     private static let pattern = try! NSRegularExpression(pattern: #"^external-split-failure-([0-9]{8}-[0-9]{6})(?:-([0-9]{1,2}))?\.txt$"#)
 
-    static func shouldRecord(operation: String, previous: ExternalVPNPhase, next: ExternalVPNPhase) -> Bool {
-        operation == "tick" && previous != .failed && next == .failed
+    // 第一次失敗後 root 會自動重新等待，狀態不會經過 failed，要另外由 autoRetried 的轉變觸發。
+    static func shouldRecord(operation: String, previous: ExternalVPNPhase, next: ExternalVPNPhase, autoRetried: Bool = false) -> Bool {
+        operation == "tick" && (autoRetried || (previous != .failed && next == .failed))
+    }
+
+    // 只有 autoRetried 從無到有才算新的失敗。App 重啟後第一次讀到的是 status 操作，不記錄：失敗發生在上一次執行期間，當時已記過。
+    static func shouldRecord(operation: String, previous: ExternalVPNStatus, next: ExternalVPNStatus) -> Bool {
+        shouldRecord(operation: operation, previous: previous.phase, next: next.phase,
+                     autoRetried: next.autoRetried == true && previous.autoRetried != true)
+    }
+
+    static func dnsDifferenceSection(statusJSON: String) -> (String, String)? {
+        guard let status = try? JSONDecoder().decode(ExternalVPNStatus.self, from: Data(statusJSON.utf8)),
+              let lines = status.latestFailure?.dnsDifferences, !lines.isEmpty else { return nil }
+        return ("DNS 差異", lines.joined(separator: "\n"))
     }
 
     static func directory(_ preferences: UserDefaults, home: String = NSHomeDirectory()) -> URL {
@@ -44,7 +57,7 @@ enum ExternalFailureLog {
     }
 
     static func record(statusJSON: String, directory: URL, home: String = NSHomeDirectory(), now: Date = Date(), run: Runner) async -> URL? {
-        let sections = [
+        let sections = [dnsDifferenceSection(statusJSON: statusJSON)].compactMap { $0 } + [
             ("netstat -rn -f inet", await run("/usr/sbin/netstat", ["-rn", "-f", "inet"])),
             ("scutil --dns", await run("/usr/sbin/scutil", ["--dns"])),
             ("ifconfig（只列介面名稱與 inet）", interfaceSummary(await run("/sbin/ifconfig", [])))

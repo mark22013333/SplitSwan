@@ -71,6 +71,18 @@ final class FakeRuntime: ExternalVPNRuntime {
     }
     func save(_ session: ExternalVPNSession?) throws { saved = session; if let session { savedHistory.append(session) } }
 }
+// 連上 VPN 後要連續觀察到相同設定才套用；這裡把觀察期走完，回傳一次套用嘗試的結果。
+func attempt(_ engine: ExternalVPNEngine, _ input: ExternalVPNSession) -> ExternalVPNSession {
+    var session = try! engine.tick(input)
+    for _ in 0..<8 where session.phase == .waiting && session.message.contains("等待設定穩定") {
+        session = try! engine.tick(session)
+    }
+    return session
+}
+// 第一次失敗會自動復原並重新等待；兩種結果都代表本次分流已停止並撤回。
+func stopped(_ session: ExternalVPNSession) -> Bool {
+    session.phase == .failed || (session.phase == .waiting && session.autoRetried == true && session.latestFailure != nil)
+}
 
 check("IPv4 位址正規化", try! ExternalIPv4("192.000.2.5").description == "192.0.2.5")
 for invalid in ["", "192.0.2", "256.0.0.1", "１２７.0.0.1", "192.0.2.1;id", "-1.0.0.0"] {
@@ -116,7 +128,7 @@ var session = try! engine.prepare(owner: 501, profile: ExternalVPNProfile())
 check("準備只記錄、不新增路由", session.phase == .waiting && fake.adds == 0)
 check("尚未連 VPN 時繼續等待", try! engine.tick(session).phase == .waiting)
 fake.state = connected()
-session = try! engine.tick(session)
+session = attempt(engine, session)
 check("連上 PPP 後自動分流", session.phase == .active && !session.addedRoutes.isEmpty && session.tunnel == "ppp0")
 check("新增前已保存復原意圖", fake.intentsObserved)
 check("原 VPN /1 未被刪除", fake.state.routes.contains { $0.isTunnel && $0.network.prefix == 1 })
@@ -131,24 +143,24 @@ check("停止復原自己路由與 DNS", session.phase == .idle && fake.state.ro
 let failed = FakeRuntime(); let failedEngine = ExternalVPNEngine(runtime: failed)
 let pending = try! failedEngine.prepare(owner: 501, profile: ExternalVPNProfile())
 failed.state = connected(); failed.failAt = 3
-let result = try! failedEngine.tick(pending)
-check("中途新增失敗會復原已新增路由", result.phase == .failed && failed.removes == 2 && result.addedRoutes.isEmpty)
+let result = attempt(failedEngine, pending)
+check("中途新增失敗會復原已新增路由", stopped(result) && failed.removes == 2 && result.addedRoutes.isEmpty)
 let failedPlan = try! ExternalVPNPlanner.plan(pending, current: connected(), tunnel: "ppp0").additions
 let race = FakeRuntime(); let raceEngine = ExternalVPNEngine(runtime: race)
 let racePending = try! raceEngine.prepare(owner: 501, profile: ExternalVPNProfile())
 race.state = connected(); race.failAt = 1; race.conflictOnFailure = failedPlan[0]
-_ = try! raceEngine.tick(racePending)
+_ = attempt(raceEngine, racePending)
 check("新增拒絕不刪除同時存在的同值路由", race.removes == 0 && race.state.routes.contains(failedPlan[0]))
 
 let uncertain = FakeRuntime(); let uncertainEngine = ExternalVPNEngine(runtime: uncertain)
 let uncertainPending = try! uncertainEngine.prepare(owner: 501, profile: ExternalVPNProfile())
 uncertain.state = connected(); uncertain.failAt = 3; uncertain.failAfterAdd = true
-let uncertainResult = try! uncertainEngine.tick(uncertainPending)
-check("核心已新增後才逾時，仍依意圖復原全部路由", uncertainResult.phase == .failed && uncertain.removes == 3 && uncertainResult.addedRoutes.isEmpty && !uncertain.state.routes.contains(where: \.isOwned))
+let uncertainResult = attempt(uncertainEngine, uncertainPending)
+check("核心已新增後才逾時，仍依意圖復原全部路由", stopped(uncertainResult) && uncertain.removes == 3 && uncertainResult.addedRoutes.isEmpty && !uncertain.state.routes.contains(where: \.isOwned))
 let uncertainRecovery = FakeRuntime(); let uncertainRecoveryEngine = ExternalVPNEngine(runtime: uncertainRecovery)
 let uncertainRecoveryPending = try! uncertainRecoveryEngine.prepare(owner: 501, profile: ExternalVPNProfile())
 uncertainRecovery.state = connected(); uncertainRecovery.failAt = 1; uncertainRecovery.failAfterAdd = true; uncertainRecovery.failRemove = true
-let uncertainRetained = try! uncertainRecoveryEngine.tick(uncertainRecoveryPending)
+let uncertainRetained = attempt(uncertainRecoveryEngine, uncertainRecoveryPending)
 check("逾時且復原失敗時保留未確定路由供下次復原", uncertainRetained.phase == .recoveryRequired && uncertainRetained.addedRoutes.count == 1)
 uncertainRecovery.failRemove = false
 check("重新啟動引擎仍可清除逾時路由", try! ExternalVPNEngine(runtime: uncertainRecovery).restore(uncertainRetained).phase == .idle)
@@ -165,7 +177,7 @@ check("內部 DNS 被實體精確路由接管時拒絕分流", rejected { try Ex
 
 let recovery = FakeRuntime(); let recoveryEngine = ExternalVPNEngine(runtime: recovery)
 var active = try! recoveryEngine.prepare(owner: 501, profile: ExternalVPNProfile())
-recovery.state = connected(); active = try! recoveryEngine.tick(active)
+recovery.state = connected(); active = attempt(recoveryEngine, active)
 recovery.failRemove = true
 let retained = try! recoveryEngine.restore(active)
 check("復原失敗保留紀錄與 recoveryRequired", retained.phase == .recoveryRequired && !retained.addedRoutes.isEmpty && recovery.saved != nil)
@@ -174,7 +186,7 @@ check("重新復原可完成", try! recoveryEngine.restore(retained).phase == .i
 
 let foreign = FakeRuntime(); let foreignEngine = ExternalVPNEngine(runtime: foreign)
 var own = try! foreignEngine.prepare(owner: 501, profile: ExternalVPNProfile())
-foreign.state = connected(); own = try! foreignEngine.tick(own)
+foreign.state = connected(); own = attempt(foreignEngine, own)
 let replaced = own.addedRoutes[0]
 foreign.state.routes.removeAll { $0.network == replaced.network }
 foreign.state.routes.append(route(replaced.network.description, replaced.gateway, replaced.interface, "UGS1I"))
@@ -185,16 +197,16 @@ let unknown = FakeRuntime(); let unknownEngine = ExternalVPNEngine(runtime: unkn
 let unknownPending = try! unknownEngine.prepare(owner: 501, profile: ExternalVPNProfile())
 unknown.state = connected()
 unknown.state.dns[1] = ExternalDNSEntry(key: vpnDNS.key, interface: nil, value: vpnDNS.value)
-check("無法辨識 DNS 歸屬不改路由", try! unknownEngine.tick(unknownPending).phase == .failed && unknown.adds == 0)
+check("無法辨識 DNS 歸屬不改路由", stopped(attempt(unknownEngine, unknownPending)) && unknown.adds == 0)
 let missing = FakeRuntime(); let missingEngine = ExternalVPNEngine(runtime: missing)
 let missingPending = try! missingEngine.prepare(owner: 501, profile: ExternalVPNProfile())
 missing.state = connected()
 missing.state.dns[1] = ExternalDNSEntry(key: vpnDNS.key, interface: "ppp0", value: plist(["ServerAddresses": ["198.51.100.53"], "SupplementalMatchDomains": [""]]))
-check("缺少內部 DNS suffix 不洩漏查詢", try! missingEngine.tick(missingPending).phase == .failed && missing.adds == 0)
+check("缺少內部 DNS suffix 不洩漏查詢", stopped(attempt(missingEngine, missingPending)) && missing.adds == 0)
 let global = FakeRuntime(); let globalEngine = ExternalVPNEngine(runtime: global)
 let globalPending = try! globalEngine.prepare(owner: 501, profile: ExternalVPNProfile())
 global.state = connected(); global.state.dns = [physicalDNS]; global.state.defaultDNSServers = ["198.51.100.53"]
-check("只有 Global DNS 被修改時拒絕猜測", try! globalEngine.tick(globalPending).phase == .failed && global.adds == 0)
+check("只有 Global DNS 被修改時拒絕猜測", stopped(attempt(globalEngine, globalPending)) && global.adds == 0)
 var v6 = baseline(); v6.ipv6TunnelDefault = true
 let ipv6 = FakeRuntime(); ipv6.state = v6
 check("IPv6 全通道於準備時拒絕", rejected { try ExternalVPNEngine(runtime: ipv6).prepare(owner: 501, profile: ExternalVPNProfile()) })
@@ -235,8 +247,8 @@ let again = try! retryEngine.failed(cleanFailure, error: ExternalVPNError.invali
 check("乾淨重試失敗不升級成待復原且保留首次原因", again.phase == .failed && again.firstFailure?.message == "第一次 DNS 判斷失敗" && again.latestFailure?.message == "後續準備被拒絕" && again.message.contains("第一次 DNS 判斷失敗"))
 let rollbackFailure = FakeRuntime(); let rollbackEngine = ExternalVPNEngine(runtime: rollbackFailure)
 let rollbackPending = try! rollbackEngine.prepare(owner: 501, profile: ExternalVPNProfile())
-rollbackFailure.state = connected(); rollbackFailure.failAt = 2; rollbackFailure.failSnapshotAt = 3
-let rollbackResult = try! rollbackEngine.tick(rollbackPending)
+rollbackFailure.state = connected(); rollbackFailure.failAt = 2; rollbackFailure.failSnapshotAt = 5
+let rollbackResult = attempt(rollbackEngine, rollbackPending)
 check("復原讀取失敗仍保留最初套用原因", rollbackResult.phase == .recoveryRequired && rollbackResult.firstFailure?.message == "測試新增遭拒" && rollbackResult.latestFailure?.stage == .restoring)
 check("復原開始之前已保存首次失敗", rollbackFailure.savedHistory.contains { $0.phase == .recoveryRequired && $0.firstFailure?.message == "測試新增遭拒" && $0.latestFailure?.stage == .applyingRoutes })
 let jsonEncoder = JSONEncoder()
@@ -263,7 +275,7 @@ func preserving(_ state: ExternalNetworkSnapshot = noSuffix()) -> (FakeRuntime, 
     let runtime = FakeRuntime(); let engine = ExternalVPNEngine(runtime: runtime)
     let pending = try! engine.prepare(owner: 501, profile: preserveProfile)
     runtime.state = state
-    return (runtime, engine, try! engine.tick(pending))
+    return (runtime, engine, attempt(engine, pending))
 }
 let keepInitial = noSuffix()
 let (keep, keepEngine, keepActive) = preserving(keepInitial)
@@ -296,8 +308,8 @@ for (name, servers, extra) in [
     let pending = try! engine.prepare(owner: 501, profile: preserveProfile)
     runtime.state = noSuffix(); runtime.state.defaultDNSServers = servers
     if let extra { runtime.state.dns.append(extra) }
-    let result = try! engine.tick(pending)
-    check("保留模式拒絕\(name)且路由與 DNS 零寫入", result.phase == .failed && runtime.adds == 0 && runtime.dnsWrites == 0)
+    let result = attempt(engine, pending)
+    check("保留模式拒絕\(name)且路由與 DNS 零寫入", stopped(result) && runtime.adds == 0 && runtime.dnsWrites == 0)
 }
 for (name, change) in [
     ("未知歸屬", { (state: inout ExternalNetworkSnapshot) in state.dns[1] = ExternalDNSEntry(key: vpnDNS.key, interface: nil, value: state.dns[1].value) }),
@@ -308,40 +320,42 @@ for (name, change) in [
 ] {
     var state = noSuffix(); change(&state)
     let (runtime, _, result) = preserving(state)
-    check("保留模式仍拒絕\(name)且零寫入", result.phase == .failed && runtime.adds == 0 && runtime.dnsWrites == 0)
+    check("保留模式仍拒絕\(name)且零寫入", stopped(result) && runtime.adds == 0 && runtime.dnsWrites == 0)
 }
 let (drift, driftEngine, driftActive) = preserving()
 drift.state.dns[1] = ExternalDNSEntry(key: vpnDNS.key, interface: "ppp0", value: plist(["ServerAddresses": ["198.51.100.54"], "SupplementalMatchDomains": [""]]))
 let driftDNS = drift.state.dns
 let driftResult = try! driftEngine.tick(driftActive)
-check("DNS 變動時只撤回路由並保留外部 DNS 新值", driftResult.phase == .failed && driftResult.addedRoutes.isEmpty && drift.dnsWrites == 0 && drift.state.dns == driftDNS)
+check("DNS 變動時只撤回路由並保留外部 DNS 新值", stopped(driftResult) && driftResult.addedRoutes.isEmpty && drift.dnsWrites == 0 && drift.state.dns == driftDNS)
 let (globalDrift, globalDriftEngine, globalDriftActive) = preserving()
 globalDrift.state.defaultDNSServers = ["198.51.100.54"]
-check("全域解析器變動也停止保留模式", try! globalDriftEngine.tick(globalDriftActive).phase == .failed && globalDrift.dnsWrites == 0)
+check("全域解析器變動也停止保留模式", stopped(try! globalDriftEngine.tick(globalDriftActive)) && globalDrift.dnsWrites == 0)
 let (unownedGlobal, unownedGlobalEngine, unownedGlobalActive) = preserving()
 unownedGlobal.state.defaultDNSServers.append("8.8.8.8")
 let unownedGlobalResult = try! unownedGlobalEngine.tick(unownedGlobalActive)
-check("作用中出現未知全域 DNS 會撤回自己路由且不寫 DNS", unownedGlobalResult.phase == .failed && !unownedGlobal.state.routes.contains(where: \.isOwned) && unownedGlobal.dnsWrites == 0)
+check("作用中出現未知全域 DNS 會撤回自己路由且不寫 DNS", stopped(unownedGlobalResult) && !unownedGlobal.state.routes.contains(where: \.isOwned) && unownedGlobal.dnsWrites == 0)
 let (legacyGlobal, legacyGlobalEngine, legacyGlobalActive) = preserving()
 legacyGlobal.state.defaultDNSServers = ["8.8.8.8"]
 var legacyGlobalSession = legacyGlobalActive
 legacyGlobalSession.preservedDNS = ExternalDNSState(legacyGlobal.state)
 let legacyGlobalResult = try! legacyGlobalEngine.tick(legacyGlobalSession)
-check("舊作用中紀錄即使 DNS 證據吻合仍須驗證全域解析器歸屬", legacyGlobalResult.phase == .failed && !legacyGlobal.state.routes.contains(where: \.isOwned) && legacyGlobal.dnsWrites == 0)
+check("舊作用中紀錄即使 DNS 證據吻合仍須驗證全域解析器歸屬", stopped(legacyGlobalResult) && !legacyGlobal.state.routes.contains(where: \.isOwned) && legacyGlobal.dnsWrites == 0)
 let (dnsRouteDrift, dnsRouteEngine, dnsRouteActive) = preserving(publicKeep)
 dnsRouteDrift.state.routes.append(route("8.8.4.4/32"))
-check("DNS 值不變但路由被外部接管仍會復原", try! dnsRouteEngine.tick(dnsRouteActive).phase == .failed && dnsRouteDrift.dnsWrites == 0 && dnsRouteDrift.state.routes.contains { $0.network == network("8.8.4.4/32") })
+check("DNS 值不變但路由被外部接管仍會復原", stopped(try! dnsRouteEngine.tick(dnsRouteActive)) && dnsRouteDrift.dnsWrites == 0 && dnsRouteDrift.state.routes.contains { $0.network == network("8.8.4.4/32") })
 let (lost, lostEngine, lostActive) = preserving()
 lost.state.routes.removeAll { $0.isTunnel }
-check("VPN 中斷時撤回自己路由且不改 DNS", try! lostEngine.tick(lostActive).phase == .failed && !lost.state.routes.contains(where: \.isOwned) && lost.dnsWrites == 0)
+let lostResult = try! lostEngine.tick(lostActive)
+check("VPN 中斷時撤回自己路由且不改 DNS", stopped(lostResult) && !lost.state.routes.contains(where: \.isOwned) && lost.dnsWrites == 0)
+check("VPN 中斷的原因寫通道中斷，不叫使用者重新準備", lostResult.latestFailure?.message == "外部 VPN 通道已中斷或改變，已撤回分流" && !lostResult.message.contains("重新準備"))
 let (noEvidence, noEvidenceEngine, noEvidenceActive) = preserving()
 var missingEvidence = noEvidenceActive; missingEvidence.preservedDNS = nil
-check("保留模式缺少觀察紀錄時復原而不猜測", try! noEvidenceEngine.tick(missingEvidence).phase == .failed && noEvidence.dnsWrites == 0)
+check("保留模式缺少觀察紀錄時復原而不猜測", stopped(try! noEvidenceEngine.tick(missingEvidence)) && noEvidence.dnsWrites == 0)
 let partialKeep = FakeRuntime(); let partialKeepEngine = ExternalVPNEngine(runtime: partialKeep)
 let partialKeepPending = try! partialKeepEngine.prepare(owner: 501, profile: preserveProfile)
 partialKeep.state = noSuffix(); partialKeep.failAt = 2
-let partialKeepResult = try! partialKeepEngine.tick(partialKeepPending)
-check("保留模式中途路由遭拒會復原且留下首次原因", partialKeepResult.phase == .failed && partialKeep.removes == 1 && partialKeep.dnsWrites == 0 && partialKeepResult.firstFailure?.stage == .applyingRoutes)
+let partialKeepResult = attempt(partialKeepEngine, partialKeepPending)
+check("保留模式中途路由遭拒會復原且留下首次原因", stopped(partialKeepResult) && partialKeep.removes == 1 && partialKeep.dnsWrites == 0 && partialKeepResult.firstFailure?.stage == .applyingRoutes)
 var semanticState = noSuffix()
 semanticState.dns[1] = ExternalDNSEntry(key: vpnDNS.key, interface: "ppp0", value: try! PropertyListSerialization.data(fromPropertyList: noSuffix().dns[1].dictionary, format: .xml, options: 0))
 check("唯讀 DNS 證據使用語意比對而非 plist 位元組順序", ExternalDNSState(noSuffix()).matches(semanticState))
@@ -380,7 +394,7 @@ if let endpointPlan {
     let withoutEndpoint = try! ExternalVPNPlanner.plan(endpointPending, current: connected(), tunnel: "ppp0")
     check("借用新端點不縮小公網或指定 IP 驗證範圍", endpointPlan.evidence.publicNetworks == withoutEndpoint.evidence.publicNetworks && endpointPlan.evidence.directHosts == [f5Endpoint.network])
     check("新端點凍結為 borrowed，未列入新增意圖", endpointPlan.evidence.borrowedRoutes.contains(f5Endpoint) && !endpointPlan.additions.contains { $0.network == f5Endpoint.network })
-    let endpointActive = try! endpointEngine.tick(endpointPending)
+    let endpointActive = attempt(endpointEngine, endpointPending)
     check("新端點存在時正常啟用分流", endpointActive.phase == .active && !endpointActive.addedRoutes.isEmpty)
     check("啟用時先持久化端點證據且不取得端點刪除權", endpointRuntime.savedHistory.contains { $0.phase == .applying && $0.addedRoutes.isEmpty && $0.routingEvidence?.borrowedRoutes.contains(f5Endpoint) == true } && endpointRuntime.savedHistory.allSatisfy { !$0.addedRoutes.contains { $0.network == f5Endpoint.network } })
     let endpointRecord = try! ExternalVPNJournal.decode(ExternalVPNJournal.encode(endpointActive))
@@ -414,7 +428,7 @@ if let endpointPlan {
         driftRuntime.state = changed
         let driftEngine = ExternalVPNEngine(runtime: driftRuntime)
         let driftResult = try! driftEngine.tick(endpointRecord)
-        check("凍結後端點\(name)撤回分流且不重新借用", driftResult.phase == .failed && driftResult.firstFailure?.stage == .verifying && driftRuntime.adds == 0 && driftResult.addedRoutes.isEmpty && replacement.map { driftRuntime.state.routes.contains($0) } != false)
+        check("凍結後端點\(name)撤回分流且不重新借用", stopped(driftResult) && driftResult.firstFailure?.stage == .verifying && driftRuntime.adds == 0 && driftResult.addedRoutes.isEmpty && replacement.map { driftRuntime.state.routes.contains($0) } != false)
     }
     for (name, replacement) in endpointDrifts where !["消失", "scoped", "更換 proto1 身分"].contains(name) {
         var changed = connected()
@@ -427,7 +441,7 @@ if let endpointPlan {
     let protoPending = try! protoEngine.prepare(owner: 501, profile: endpointProfile)
     protoRuntime.state = connected()
     protoRuntime.state.routes.append(protoEndpoint)
-    let protoActive = try! protoEngine.tick(protoPending)
+    let protoActive = attempt(protoEngine, protoPending)
     check("連線後新出現 proto1 端點也只借用而不取得刪除權", protoActive.phase == .active && protoActive.routingEvidence?.borrowedRoutes.contains(protoEndpoint) == true && !protoActive.addedRoutes.contains { $0.network == protoEndpoint.network })
     let protoStopped = try! protoEngine.restore(protoActive)
     check("還原保留連線後新出現的 foreign proto1 端點", protoStopped.phase == .idle && protoRuntime.state.routes.contains(protoEndpoint) && protoRuntime.removes == protoActive.addedRoutes.count)
@@ -441,7 +455,7 @@ let borrowedPending = try! borrowedEngine.prepare(owner: 501, profile: ExternalV
 borrowedRuntime.state = connectedBorrowing(borrowedRuntime.state)
 let borrowedPlan = try! ExternalVPNPlanner.plan(borrowedPending, current: borrowedRuntime.state, tunnel: "ppp0")
 check("完整既有實體覆蓋允許零新增規劃", borrowedPlan.additions.isEmpty && !borrowedPlan.evidence.publicNetworks.isEmpty)
-let borrowedActive = try! borrowedEngine.tick(borrowedPending)
+let borrowedActive = attempt(borrowedEngine, borrowedPending)
 check("零新增仍需完整證據才成 active", borrowedActive.phase == .active && borrowedActive.addedRoutes.isEmpty && borrowedActive.routingEvidence != nil && borrowedActive.journalVersion == 3 && borrowedRuntime.adds == 0)
 check("零新增完整覆蓋允許公司驗證", !rejected { try CompanyVPNPlanner.validateExternal(borrowedActive, borrowedRuntime.state) })
 let borrowedSnapshot = borrowedRuntime.state
@@ -479,7 +493,7 @@ for (name, extra) in [
 borrowedRuntime.state = borrowedSnapshot
 borrowedRuntime.state.routes.removeAll { borrowedCoverage.contains($0) }
 let lostBorrowed = try! borrowedEngine.tick(borrowedActive)
-check("借用路由消失時不維持零新增 active", lostBorrowed.phase == .failed && borrowedRuntime.removes == 0 && lostBorrowed.canRetry)
+check("借用路由消失時不維持零新增 active", stopped(lostBorrowed) && borrowedRuntime.removes == 0 && lostBorrowed.autoRetried == true)
 var partialBorrowing = borrowedSnapshot
 partialBorrowing.routes.removeAll { $0 == representative }
 let partialPlan = try! ExternalVPNPlanner.plan(borrowedPending, current: partialBorrowing, tunnel: "ppp0")
@@ -494,7 +508,7 @@ check("正常 connected LAN 不重複新增", !intactLAN.additions.contains { $0
 lanRuntime.state.routes.removeAll { $0.network == lanPending.baseline.localNetwork }
 let missingLAN = try! ExternalVPNPlanner.plan(lanPending, current: lanRuntime.state, tunnel: "ppp0")
 check("缺失 LAN 優先規劃真正 direct route", missingLAN.additions.first?.kind == .directInterface && missingLAN.additions.first?.gateway == "link#1" && missingLAN.additions.first?.network == lanPending.baseline.localNetwork)
-let lanActive = try! lanEngine.tick(lanPending)
+let lanActive = attempt(lanEngine, lanPending)
 check("缺失 LAN 套用後完整驗證成功", lanActive.phase == .active && lanActive.addedRoutes.first?.kind == .directInterface && lanRuntime.intentsObserved)
 check("direct route 先保存 schema3 證據", lanRuntime.savedHistory.contains { $0.phase == .applying && $0.addedRoutes.first?.kind == .directInterface && $0.journalVersion == 3 && $0.routingEvidence != nil })
 let directRecord = try! ExternalVPNJournal.decode(ExternalVPNJournal.encode(lanActive))
@@ -543,7 +557,7 @@ let reappearedEngine = ExternalVPNEngine(runtime: reappeared)
 let reappearedPending = try! reappearedEngine.prepare(owner: 501, profile: ExternalVPNProfile(dnsMode: .preserveVPN))
 reappeared.state = connected(); reappeared.state.interfaceIndex = 1
 reappeared.state.routes.removeAll { $0.network == reappearedPending.baseline.localNetwork }
-let reappearedActive = try! reappearedEngine.tick(reappearedPending)
+let reappearedActive = attempt(reappearedEngine, reappearedPending)
 reappeared.state.routes.removeAll { $0.kind == .directInterface && $0.isOwned }
 let originalLAN = reappearedPending.baseline.routes.first { $0.network == reappearedPending.baseline.localNetwork }!
 reappeared.state.routes.append(originalLAN)
@@ -556,7 +570,7 @@ let rebuiltEngine = ExternalVPNEngine(runtime: rebuilt)
 let rebuiltPending = try! rebuiltEngine.prepare(owner: 501, profile: ExternalVPNProfile(dnsMode: .preserveVPN))
 rebuilt.state = connected(); rebuilt.state.interfaceIndex = 1
 rebuilt.state.routes.removeAll { $0.network == lanNetwork }
-let rebuiltActive = try! rebuiltEngine.tick(rebuiltPending)
+let rebuiltActive = attempt(rebuiltEngine, rebuiltPending)
 check("baseline 缺原 LAN 時啟用會補直連", rebuiltActive.phase == .active && rebuiltActive.addedRoutes.first?.kind == .directInterface)
 rebuilt.state.routes.removeAll { $0.kind == .directInterface && $0.isOwned }
 let nativeLAN = route("192.0.2.0/24", "link#1", "en0", "UCS")
@@ -571,7 +585,7 @@ for foreign in [route("192.0.2.0/24", "link#1", "en1", "UCS"), route("192.0.2.0/
     let otherPending = try! otherEngine.prepare(owner: 501, profile: ExternalVPNProfile(dnsMode: .preserveVPN))
     other.state = connected(); other.state.interfaceIndex = 1
     other.state.routes.removeAll { $0.network == lanNetwork }
-    let otherActive = try! otherEngine.tick(otherPending)
+    let otherActive = attempt(otherEngine, otherPending)
     other.state.routes.removeAll { $0.kind == .directInterface && $0.isOwned }
     other.state.routes.append(foreign)
     let otherStop = try! otherEngine.restore(otherActive)
@@ -583,8 +597,8 @@ let directTimeoutPending = try! directTimeoutEngine.prepare(owner: 501, profile:
 directTimeout.state = connected(); directTimeout.state.interfaceIndex = 1
 directTimeout.state.routes.removeAll { $0.network == directTimeoutPending.baseline.localNetwork }
 directTimeout.failAt = 1; directTimeout.failAfterAdd = true
-let directTimeoutFailed = try! directTimeoutEngine.tick(directTimeoutPending)
-check("direct 新增後逾時可依 WAL 精確復原", directTimeoutFailed.phase == .failed && directTimeout.removes == 1 && directTimeoutFailed.addedRoutes.isEmpty)
+let directTimeoutFailed = attempt(directTimeoutEngine, directTimeoutPending)
+check("direct 新增後逾時可依 WAL 精確復原", stopped(directTimeoutFailed) && directTimeout.removes == 1 && directTimeoutFailed.addedRoutes.isEmpty)
 
 let directProfile = ExternalVPNProfile(protectedNetworks: ["203.0.0.0/16"], dnsMode: .preserveVPN, directIPv4: ["203.0.113.8"])
 check("指定 IP 正規化並去重", try! ExternalVPNProfile(directIPv4: ["203.000.113.8", "203.0.113.8"]).validated().directIPv4 == ["203.0.113.8"])
@@ -595,7 +609,7 @@ check("指定 IP 限制小型清單", rejected { try ExternalVPNProfile(directIP
 let directRuntime = FakeRuntime(); let directEngine = ExternalVPNEngine(runtime: directRuntime)
 let directPending = try! directEngine.prepare(owner: 501, profile: directProfile)
 directRuntime.state = connected(); directRuntime.state.routes.append(route("203.0.0.0/16", "198.51.100.1", "ppp0"))
-let directActive = try! directEngine.tick(directPending)
+let directActive = attempt(directEngine, directPending)
 check("保留 /16 只新增明確指定 /32", directActive.phase == .active && directActive.addedRoutes.contains { $0.network == network("203.0.113.8/32") && $0.interface == "en0" })
 check("指定 IP 旁的同網段位址仍走 VPN", CompanyVPNPlanner.winners(try! ExternalIPv4("203.0.113.9"), routes: directRuntime.state.routes).allSatisfy { $0.interface == "ppp0" })
 let conflictingDNSProfile = ExternalVPNProfile(dnsMode: .preserveVPN, directIPv4: ["198.51.100.53"])
@@ -605,7 +619,7 @@ var hostCollision = connected(); hostCollision.routes += [route("203.0.0.0/16", 
 check("指定 IP 遇相同 host foreign 路由不覆寫", rejected { try ExternalVPNPlanner.plan(directPending, current: hostCollision, tunnel: "ppp0") })
 var legacyActive = borrowedActive; legacyActive.routingEvidence = nil; legacyActive.journalVersion = nil
 borrowedRuntime.state = borrowedSnapshot
-check("舊 active 無證據不維持成功", try! borrowedEngine.tick(legacyActive).phase == .failed)
+check("舊 active 無證據不維持成功", stopped(try! borrowedEngine.tick(legacyActive)))
 let endpointEvidence = ExternalVPNRoutingEvidence(publicNetworks: [network("255.255.255.255/32")], directHosts: [], borrowedRoutes: baseline().routes, physicalInterfaceIndex: 1)
 var endpointSession = ExternalVPNSession(owner: 501, baseline: baseline(), profile: ExternalVPNProfile())
 endpointSession.tunnel = "ppp0"
@@ -627,7 +641,7 @@ for legacyVersion: Int? in [nil, 2] {
     oldRuntime.state = connected(); oldRuntime.state.interfaceIndex = 1
     oldRuntime.state.routes.removeAll { $0.network == decoded.baseline.localNetwork }
     let retry = try! oldEngine.prepare(owner: 501, profile: decoded.profile, previous: decoded)
-    let retriedLAN = try! oldEngine.tick(retry)
+    let retriedLAN = attempt(oldEngine, retry)
     check("legacy \(legacyVersion ?? 1) failed 重試沿用原快照成功補 LAN", retriedLAN.phase == .active && retriedLAN.baseline.routes == previous.baseline.routes && retriedLAN.baseline.interfaceIndex == nil && retriedLAN.journalVersion == 3 && retriedLAN.addedRoutes.first?.gateway == "link#1")
     var renumbered = oldRuntime.state; renumbered.interfaceIndex = 2
     check("legacy \(legacyVersion ?? 1) 遷移後持續拒絕 ifindex 變動", rejected { try retriedLAN.routingEvidence!.validate(retriedLAN, current: renumbered) })
@@ -657,7 +671,7 @@ for (name, replacement) in [
     let pending = try! conflictEngine.prepare(owner: 501, profile: ExternalVPNProfile(dnsMode: .preserveVPN))
     conflictRuntime.state = connected(); conflictRuntime.state.interfaceIndex = 1
     conflictRuntime.state.routes.removeAll { $0.network == pending.baseline.localNetwork }
-    let active = try! conflictEngine.tick(pending)
+    let active = attempt(conflictEngine, pending)
     conflictRuntime.state.routes.removeAll { $0.network == pending.baseline.localNetwork }
     conflictRuntime.state.routes.append(replacement)
     let cleaned = try! conflictEngine.restore(active)
@@ -665,9 +679,9 @@ for (name, replacement) in [
 }
 let verifyFailureRuntime = FakeRuntime(); let verifyFailureEngine = ExternalVPNEngine(runtime: verifyFailureRuntime)
 let verifyFailurePending = try! verifyFailureEngine.prepare(owner: 501, profile: ExternalVPNProfile(dnsMode: .preserveVPN))
-verifyFailureRuntime.state = connected(); verifyFailureRuntime.failSnapshotAt = 3
-let verificationFailed = try! verifyFailureEngine.tick(verifyFailurePending)
-check("套用後無法讀取驗證快照不標 active 並撤回 owned", verificationFailed.phase == .failed && verificationFailed.latestFailure?.stage == .verifying && verificationFailed.addedRoutes.isEmpty && verifyFailureRuntime.removes > 0)
+verifyFailureRuntime.state = connected(); verifyFailureRuntime.failSnapshotAt = 5
+let verificationFailed = attempt(verifyFailureEngine, verifyFailurePending)
+check("套用後無法讀取驗證快照不標 active 並撤回 owned", stopped(verificationFailed) && verificationFailed.latestFailure?.stage == .verifying && verificationFailed.addedRoutes.isEmpty && verifyFailureRuntime.removes > 0)
 
 for index: UInt32? in [nil, 0] {
     var oldBaseline = baseline(); oldBaseline.interfaceIndex = nil
@@ -679,10 +693,10 @@ let vanishedRuntime = FakeRuntime(); let vanishedEngine = ExternalVPNEngine(runt
 let vanishedPending = try! vanishedEngine.prepare(owner: 501, profile: ExternalVPNProfile(dnsMode: .preserveVPN))
 vanishedRuntime.state = connected()
 vanishedRuntime.mutateSnapshot = { current, count in
-    if count == 3 { current.routes.removeAll(where: \.isTunnel) }
+    if count == 5 { current.routes.removeAll(where: \.isTunnel) }
 }
-let vanishedResult = try! vanishedEngine.tick(vanishedPending)
-check("套用第 3 次快照 F5 消失不得 active 並撤回 owned", vanishedResult.phase == .failed && vanishedResult.latestFailure?.stage == .verifying && vanishedResult.addedRoutes.isEmpty && vanishedRuntime.removes > 0 && !vanishedRuntime.state.routes.contains(where: \.isOwned))
+let vanishedResult = attempt(vanishedEngine, vanishedPending)
+check("套用驗證那次快照 F5 消失不得 active 並撤回 owned", stopped(vanishedResult) && vanishedResult.latestFailure?.stage == .verifying && vanishedResult.addedRoutes.isEmpty && vanishedRuntime.removes > 0 && !vanishedRuntime.state.routes.contains(where: \.isOwned))
 var unselected = borrowedActive; unselected.tunnel = nil
 check("完整證據缺少已選通道不得驗證成功", rejected { try borrowedActive.routingEvidence!.validate(unselected, current: borrowedSnapshot) })
 check("未選通道仍可單獨驗證實體網路身分", !rejected { try ExternalVPNRoutingEvidence.validateNetwork(unselected, borrowedSnapshot) })
@@ -695,7 +709,7 @@ let mixedPending = try! mixedEngine.prepare(owner: 501, profile: ExternalVPNProf
 mixedRuntime.state.routes += connected().routes.filter(\.isTunnel)
 check("混合 IPv4 IPv6 原 DNS 保持不變時可規劃 DNS", !rejected { try ExternalVPNPlanner.dnsPlan(mixedPending, current: mixedRuntime.state, tunnel: "ppp0") })
 check("混合 IPv4 IPv6 原 DNS 保持不變時可規劃路由", !rejected { try ExternalVPNPlanner.plan(mixedPending, current: mixedRuntime.state, tunnel: "ppp0") })
-let mixedActive = try! mixedEngine.tick(mixedPending)
+let mixedActive = attempt(mixedEngine, mixedPending)
 check("混合 IPv4 IPv6 原 DNS 可分流且持續驗證", mixedActive.phase == .active && (try! mixedEngine.tick(mixedActive)).phase == .active && mixedRuntime.dnsWrites == 0)
 let mixedCollisionProfile = ExternalVPNProfile(dnsMode: .preserveVPN, directIPv4: ["203.0.113.53"])
 let mixedCollision = ExternalVPNSession(owner: mixedPending.owner, baseline: mixedPending.baseline, profile: mixedCollisionProfile)
@@ -721,7 +735,7 @@ let bootDriftRuntime = FakeRuntime(); bootDriftRuntime.state.bootID = "179259898
 let bootDriftEngine = ExternalVPNEngine(runtime: bootDriftRuntime)
 let bootDriftPending = try! bootDriftEngine.prepare(owner: 501, profile: ExternalVPNProfile(dnsMode: .preserveVPN))
 bootDriftRuntime.state = connected(); bootDriftRuntime.state.bootID = "1792598984.92919"; bootDriftRuntime.state.bootSession = bootUUID
-let bootDriftActive = try! bootDriftEngine.tick(bootDriftPending)
+let bootDriftActive = attempt(bootDriftEngine, bootDriftPending)
 check("boottime 微秒漂移後仍可啟用分流", bootDriftActive.phase == .active)
 let bootDriftAdds = bootDriftRuntime.adds, bootDriftRemovesBefore = bootDriftRuntime.removes
 let bootDriftStop = try! bootDriftEngine.restore(bootDriftActive)
@@ -782,7 +796,7 @@ for mode in [ExternalVPNDNSMode.splitDomains, .preserveVPN] {
     let engine = ExternalVPNEngine(runtime: runtime)
     let pending = try! engine.prepare(owner: 501, profile: ExternalVPNProfile(dnsMode: mode))
     runtime.state = f5Connected(companyDNS)
-    let active = try! engine.tick(pending)
+    let active = attempt(engine, pending)
     check("(a) \(mode.rawValue) F5 端點撞 DNS 時啟用分流並說明", active.phase == .active && active.message.contains("1.1.1.1 是 VPN 通道端點"))
     let again = try! engine.tick(active)
     check("(a) \(mode.rawValue) 作用中重新驗證維持 active 且不重複附註", again.phase == .active && again.message == active.message && runtime.adds == active.addedRoutes.count)
@@ -801,8 +815,128 @@ let failedRuntime = FakeRuntime(); failedRuntime.state = f5Baseline(["1.1.1.1"])
 let failedF5Engine = ExternalVPNEngine(runtime: failedRuntime)
 let failedF5Pending = try! failedF5Engine.prepare(owner: 501, profile: ExternalVPNProfile())
 failedRuntime.state = f5Connected(["1.1.1.1"])
-let failedF5 = try! failedF5Engine.tick(failedF5Pending)
-check("(b) 只有端點 DNS 時 tick 失敗且零寫入", failedF5.phase == .failed && failedRuntime.adds == 0 && failedRuntime.dnsWrites == 0)
+let failedF5 = attempt(failedF5Engine, failedF5Pending)
+check("(b) 只有端點 DNS 時 tick 失敗且零寫入", stopped(failedF5) && failedRuntime.adds == 0 && failedRuntime.dnsWrites == 0)
+
+// VPN 先建通道與路由、DNS 晚幾秒才設定完：要等設定連續穩定才套用。
+func lateDNS(_ server: String) -> ExternalNetworkSnapshot {
+    var state = noSuffix()
+    state.dns[1] = ExternalDNSEntry(key: vpnDNS.key, interface: "ppp0", value: plist(["ServerAddresses": [server], "SupplementalMatchDomains": [""]]))
+    state.defaultDNSServers = [server]
+    return state
+}
+let settle = FakeRuntime(); let settleEngine = ExternalVPNEngine(runtime: settle)
+var settling = try! settleEngine.prepare(owner: 501, profile: preserveProfile)
+settle.state = lateDNS("198.51.100.53")
+settling = try! settleEngine.tick(settling)
+check("第一次看到 VPN 只觀察不套用", settling.phase == .waiting && settle.adds == 0 && settling.message.contains("偵測到 VPN，等待設定穩定（1/3）"))
+check("觀察期間狀態仍回報 waiting", ExternalVPNStatus(session: settling).phase == .waiting)
+check("觀察紀錄可經 v3 journal 保存", (try! ExternalVPNJournal.decode(ExternalVPNJournal.encode(settling))).settling?.count == 1)
+settle.state = lateDNS("198.51.100.54")
+settling = try! settleEngine.tick(settling)
+check("第 2 次 DNS 改變時不套用也不失敗，重新計數", settling.phase == .waiting && settle.adds == 0 && settle.removes == 0 && settling.latestFailure == nil && settling.message.contains("（1/3）"))
+settling = try! settleEngine.tick(settling)
+check("設定相同才累計", settling.phase == .waiting && settle.adds == 0 && settling.message.contains("（2/3）"))
+settling = try! settleEngine.tick(settling)
+check("連續 3 次相同才套用", settling.phase == .active && settle.adds > 0 && settling.settling == nil)
+check("套用時記下的是穩定後的 DNS", settling.preservedDNS?.matches(settle.state) == true && (try! settleEngine.tick(settling)).phase == .active)
+_ = try! settleEngine.restore(settling)
+
+let vanishing = FakeRuntime(); let vanishingEngine = ExternalVPNEngine(runtime: vanishing)
+var flicker = try! vanishingEngine.prepare(owner: 501, profile: preserveProfile)
+vanishing.state = lateDNS("198.51.100.53")
+flicker = try! vanishingEngine.tick(try! vanishingEngine.tick(flicker))
+vanishing.state = baseline()
+flicker = try! vanishingEngine.tick(flicker)
+check("觀察中通道消失就清掉觀察，回到等待 VPN", flicker.phase == .waiting && flicker.settling == nil && !flicker.message.contains("等待設定穩定") && vanishing.adds == 0)
+vanishing.state = lateDNS("198.51.100.53")
+check("通道再出現從 1/3 重新觀察", (try! vanishingEngine.tick(flicker)).message.contains("（1/3）"))
+
+// 套用後 DNS 才改：撤回並自動重試一次，第二次失敗才停在 failed。
+let retryDNS = FakeRuntime(); let retryDNSEngine = ExternalVPNEngine(runtime: retryDNS)
+let retryDNSPending = try! retryDNSEngine.prepare(owner: 501, profile: preserveProfile)
+retryDNS.state = lateDNS("198.51.100.53")
+let firstActive = attempt(retryDNSEngine, retryDNSPending)
+func changeDNS(_ runtime: FakeRuntime, _ server: String) {
+    let changed = lateDNS(server)
+    runtime.state.dns = changed.dns; runtime.state.defaultDNSServers = changed.defaultDNSServers
+}
+changeDNS(retryDNS, "198.51.100.54")
+let autoRetry = try! retryDNSEngine.tick(firstActive)
+check("套用後 DNS 改變會撤回路由並自動重新等待", autoRetry.phase == .waiting && autoRetry.autoRetried == true && autoRetry.addedRoutes.isEmpty && !retryDNS.state.routes.contains(where: \.isOwned) && retryDNS.dnsWrites == 0)
+check("自動重試訊息寫明第一次原因", autoRetry.message.hasPrefix("第一次分流失敗：保留的 VPN DNS 已改變") && autoRetry.message.hasSuffix("；已自動復原並重新等待 VPN 設定穩定"))
+check("自動重試沿用原本上網快照", autoRetry.baseline.routes == retryDNSPending.baseline.routes && autoRetry.firstFailure?.stage == .verifying)
+let autoRetryStatus = ExternalVPNStatus(session: autoRetry)
+check("狀態帶出自動重試與 DNS 差異", autoRetryStatus.autoRetried == true && autoRetryStatus.latestFailure?.dnsDifferences?.contains { $0.contains("198.51.100.53") && $0.contains("198.51.100.54") } == true)
+check("自動重試狀態可經 v3 journal 保存", (try! ExternalVPNJournal.decode(ExternalVPNJournal.encode(autoRetry))).autoRetried == true)
+let retrySettling = try! retryDNSEngine.tick(autoRetry)
+check("自動重試觀察期間仍寫出第一次失敗原因", retrySettling.message.contains("（1/3）") && retrySettling.message.contains("第一次分流失敗：保留的 VPN DNS 已改變"))
+let retryState = retryDNS.state
+retryDNS.state = baseline()
+let retryNoTunnel = try! retryDNSEngine.tick(retrySettling)
+check("自動重試中通道消失，等待訊息仍寫出第一次失敗原因", retryNoTunnel.message.hasPrefix("已記住原本網路，等待外部 VPN 連線") && retryNoTunnel.message.contains("第一次分流失敗：保留的 VPN DNS 已改變"))
+retryDNS.state = retryState
+check("沒有自動重試時等待訊息不附失敗原因", !settling.message.contains("第一次分流失敗") && !flicker.message.contains("第一次分流失敗"))
+let secondActive = attempt(retryDNSEngine, autoRetry)
+check("重試後設定穩定可再次套用", secondActive.phase == .active && secondActive.autoRetried == true && !secondActive.addedRoutes.isEmpty)
+changeDNS(retryDNS, "198.51.100.55")
+let gaveUp = try! retryDNSEngine.tick(secondActive)
+check("第二次失敗停在 failed 不再重試", gaveUp.phase == .failed && gaveUp.addedRoutes.isEmpty && !retryDNS.state.routes.contains(where: \.isOwned) && gaveUp.canRetry)
+let manual = try! retryDNSEngine.prepare(owner: 501, profile: preserveProfile, previous: gaveUp)
+check("使用者手動重新等待會重置自動重試", manual.phase == .waiting && manual.autoRetried != true)
+
+var legacyJournal = try! JSONSerialization.jsonObject(with: ExternalVPNJournal.encode(autoRetry)) as! [String: Any]
+var legacySessionKeys = legacyJournal["session"] as! [String: Any]
+legacySessionKeys.removeValue(forKey: "autoRetried"); legacySessionKeys.removeValue(forKey: "settling")
+legacyJournal["session"] = legacySessionKeys
+let legacyDecoded = try! ExternalVPNJournal.decode(JSONSerialization.data(withJSONObject: legacyJournal))
+check("沒有新欄位的 v3 journal 仍可解碼", legacyDecoded.autoRetried == nil && legacyDecoded.settling == nil && legacyDecoded.journalVersion == 3)
+
+// DNS 差異列出新增、消失、值改變與預設解析器的變化。
+var recordedDNS = lateDNS("198.51.100.53")
+recordedDNS.dns.append(ExternalDNSEntry(key: "State:/Network/Service/gone/DNS", interface: "ppp0", value: plist(["ServerAddresses": ["198.51.100.60"]])))
+var currentDNS = lateDNS("198.51.100.54")
+currentDNS.dns[1] = ExternalDNSEntry(key: vpnDNS.key, interface: "ppp0", value: plist(["ServerAddresses": ["198.51.100.54"], "SupplementalMatchDomains": [""], "SearchDomains": ["corp.example.com"]]))
+currentDNS.dns.append(ExternalDNSEntry(key: "State:/Network/Service/fresh/DNS", interface: "utun7", value: plist(["ServerAddresses": ["203.0.113.53"]])))
+currentDNS.defaultDNSDomains = ["corp.example.com"]
+let dnsDiff = ExternalDNSState(currentDNS).differences(from: ExternalDNSState(recordedDNS))
+check("差異列出值改變的 ServerAddresses", dnsDiff.contains { $0.contains(vpnDNS.key) && $0.contains("ServerAddresses") && $0.contains("記錄時 [198.51.100.53]") && $0.contains("目前 [198.51.100.54]") })
+check("差異列出新出現的欄位", dnsDiff.contains { $0.contains("SearchDomains") && $0.contains("記錄時 （無）") && $0.contains("corp.example.com") })
+check("差異列出消失的 DNS 項目", dnsDiff.contains { $0.hasPrefix("消失") && $0.contains("gone/DNS") && $0.contains("198.51.100.60") })
+check("差異列出新增的 DNS 項目與介面", dnsDiff.contains { $0.hasPrefix("新增") && $0.contains("fresh/DNS") && $0.contains("utun7") && $0.contains("203.0.113.53") })
+check("差異列出預設 DNS 伺服器與網域", dnsDiff.contains { $0.contains("預設 DNS 伺服器") && $0.contains("198.51.100.54") } && dnsDiff.contains { $0.contains("預設 DNS 比對網域") && $0.contains("corp.example.com") })
+var movedInterface = recordedDNS; movedInterface.dns[1] = ExternalDNSEntry(key: vpnDNS.key, interface: "utun3", value: recordedDNS.dns[1].value)
+check("差異列出介面改變", ExternalDNSState(movedInterface).differences(from: ExternalDNSState(recordedDNS)).contains { $0.contains("介面") && $0.contains("ppp0") && $0.contains("utun3") })
+check("相同設定沒有差異", ExternalDNSState(recordedDNS).differences(from: ExternalDNSState(recordedDNS)).isEmpty)
+check("plist 格式不同但語意相同沒有差異", ExternalDNSState(semanticState).differences(from: ExternalDNSState(noSuffix())).isEmpty)
+
+// 差異經 status JSON 給 App，App 只讀 64 KB：行數與每行長度都要有上限。
+let shortLines = ["改變 A", "消失 B"]
+check("差異不多時原樣保留", ExternalVPNFailure.limited(shortLines) == shortLines)
+let twentyLines = (1...20).map { "第 \($0) 項" }
+check("剛好 20 行不加摘要", ExternalVPNFailure.limited(twentyLines) == twentyLines)
+let manyLines = ExternalVPNFailure.limited((1...45).map { "第 \($0) 項" })
+check("超過 20 行時只留 20 行，最後一行寫出未列出的數量", manyLines.count == 20 && manyLines[18] == "第 19 項" && manyLines.last == "另有 26 項差異未列出")
+let longLine = ExternalVPNFailure.limited([String(repeating: "網", count: 1000)])[0]
+check("單行超過 300 字截短並標出省略", longLine.unicodeScalars.count == 300 && longLine.hasSuffix("…"))
+let combining = ExternalVPNFailure.limited(["e" + String(repeating: "\u{301}", count: 5000)])[0]
+check("以 scalar 計長度，組合字元不能讓單行無限長", combining.unicodeScalars.count == 300)
+
+var hugeDNS = lateDNS("198.51.100.53")
+for index in 0..<40 {
+    let domains = (0..<2000).map { "host\($0).zone\(index).internal.example.com" }
+    hugeDNS.dns.append(ExternalDNSEntry(key: "State:/Network/Service/huge\(index)/DNS", interface: "utun4", value: plist(["ServerAddresses": ["203.0.113.53"], "SupplementalMatchDomains": domains])))
+}
+let hugeDiff = ExternalDNSState(hugeDNS).differences(from: ExternalDNSState(lateDNS("198.51.100.53")))
+check("大量 SupplementalMatchDomains 的原始差異確實超過 64 KB", hugeDiff.joined().utf8.count > 65_536)
+let hugeRuntime = FakeRuntime(); hugeRuntime.state = baseline()
+let hugeEngine = ExternalVPNEngine(runtime: hugeRuntime)
+let hugeSession = try! hugeEngine.prepare(owner: 501, profile: preserveProfile)
+let hugeFailed = try! hugeEngine.failed(hugeSession, error: ExternalVPNDetailedError(message: "保留的 VPN DNS 已改變或缺少觀察紀錄，已停止分流並復原", dnsDifferences: hugeDiff), stage: .verifying)
+let hugeStatusBytes = try! JSONEncoder().encode(ExternalVPNStatus(session: hugeFailed)).count
+check("engine 記錄失敗時就截短差異", hugeFailed.latestFailure?.dnsDifferences?.count == 20 && hugeFailed.latestFailure?.dnsDifferences?.last == "另有 21 項差異未列出")
+check("status JSON 編碼後遠小於 64 KB（實際 \(hugeStatusBytes) bytes）", hugeStatusBytes < 16_384)
+check("截短後的 status 仍可解回", (try? JSONDecoder().decode(ExternalVPNStatus.self, from: JSONEncoder().encode(ExternalVPNStatus(session: hugeFailed)))) != nil)
 
 print("通過 \(pass)，失敗 \(fail)")
 exit(fail == 0 ? 0 : 1)

@@ -24,40 +24,64 @@ struct HostCheckPanel: View {
 
     @State private var input = ""
     @State private var phase: Phase = .idle
+    @State private var spinning: Bool?            // 哪一顆按鈕要轉圈：true 檢查並加入、false 只檢查、nil 都不轉
+    @State private var inputShake = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var isWorking: Bool { if case .working = phase { return true }; return false }
     private var inputEmpty: Bool { input.trimmingCharacters(in: .whitespaces).isEmpty }
+    private var phaseKey: String {
+        switch phase {
+        case .idle: return "idle"
+        case .working: return "working"
+        case .needConnect: return "needConnect"
+        case .done: return "done"
+        case .failed(let text): return "failed:" + text
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("某台公司主機連不上？").font(.callout.weight(.medium))
-            HStack(spacing: 8) {
+            Text("某台公司主機連不上？").font(.headline)
+            VStack(alignment: .leading, spacing: 5) {
+                Text("主機").font(.callout.weight(.medium)).foregroundStyle(.secondary)
                 TextField("", text: $input, prompt: Text("主機網域或網址，例：intranet.example.com:8443"))
                     .onSubmit { start(addMissing: true) }   // Enter 等同「檢查並加入」
-                Button("檢查並加入") { start(addMissing: true) }
-                    .buttonStyle(.borderedProminent)
+                    .shake(trigger: inputShake)
+            }
+            HStack(spacing: 8) {
+                LoadingButton("檢查並加入", systemImage: "plus.magnifyingglass", isLoading: isWorking && spinning == true,
+                              prominent: true, succeeded: { isDone }) { start(addMissing: true) }
                     .disabled(inputEmpty || isWorking)
-                Button("只檢查") { start(addMissing: false) }
+                LoadingButton("只檢查", systemImage: "magnifyingglass", isLoading: isWorking && spinning == false,
+                              succeeded: { isDone }) { start(addMissing: false) }
                     .disabled(inputEmpty || isWorking)
+                Spacer(minLength: 0)
             }
             Text("「檢查並加入」會查出主機的 IP，不在通道網段內的直接加入並重新連線（目前連線會中斷約數秒），再檢查是否走 VPN；「只檢查」不改設定。有填連接埠會一併測試能否連線。")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             content
+                .transition(DSMotion.transition(reduceMotion))
+                .id(phaseKey)
         }
         .padding(.top, 4)
+        .animation(DSMotion.standard(reduceMotion), value: phaseKey)
     }
+
+    private var isDone: Bool { if case .done = phase { return true }; return false }
 
     @ViewBuilder private var content: some View {
         switch phase {
         case .idle:
             EmptyView()
         case .working(let text):
-            HStack(spacing: 8) { ProgressView().controlSize(.small); Text(text).font(.callout) }
+            BusyIndicator(.spinner, text: text)
         case .failed(let text):
-            Label(text, systemImage: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange).font(.callout)
+            Label(text, systemImage: "exclamationmark.octagon.fill")
+                .foregroundStyle(.red).font(.callout)
                 .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
         case let .needConnect(target, ips, added, pending):
             VStack(alignment: .leading, spacing: 8) {
                 addedHeader(added)
@@ -113,11 +137,14 @@ struct HostCheckPanel: View {
         let report = HostCheck.report(target: target, results: results, added: added, vpnIP: vpnIP, pending: pending)
         return VStack(alignment: .leading, spacing: 6) {
             addedHeader(added)
-            ForEach(results, id: \.ip) { r in
-                row(r.viaTunnel, "\(r.ip) 路由：\(r.interface ?? "查不到")（\(r.viaTunnel ? "有走 VPN" : "沒走 VPN")）")
-                if let ok = r.portOK, let p = target.port {
-                    row(ok, "\(r.ip) 連接埠 \(p)：\(ok ? "可連線" : "連不上")")
+            ForEach(Array(results.enumerated()), id: \.element.ip) { index, r in
+                VStack(alignment: .leading, spacing: 6) {
+                    row(r.viaTunnel, "\(r.ip) 路由：\(r.interface ?? "查不到")（\(r.viaTunnel ? "有走 VPN" : "沒走 VPN")）")
+                    if let ok = r.portOK, let p = target.port {
+                        row(ok, "\(r.ip) 連接埠 \(p)：\(ok ? "可連線" : "連不上")")
+                    }
                 }
+                .staggeredAppear(index)
             }
             Group {
                 if let text = HostCheck.pendingText(pending, connected: vpn.state.isConnected) {
@@ -157,6 +184,7 @@ struct HostCheckPanel: View {
                 Button("複製結果") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(report, forType: .string)
+                    ToastCenter.shared.show("已複製檢查結果")
                 }
                 // 再檢查一次不改設定，避免使用者只是想重驗卻又觸發重連
                 Button("再檢查一次") { start(addMissing: false) }
@@ -182,8 +210,11 @@ struct HostCheckPanel: View {
     private func start(addMissing: Bool) {
         guard !isWorking else { return }
         guard let target = HostCheck.parseTarget(input) else {
-            phase = .failed("格式不正確：請輸入主機網域、IP、主機:連接埠或網址"); return
+            phase = .failed("格式不正確：請輸入主機網域、IP、主機:連接埠或網址")
+            inputShake += 1
+            return
         }
+        spinning = addMissing
         phase = .working("查詢 \(target.host) 的 IP…")
         Task {
             let ips = await HostCheckRunner.resolve(target.host)
@@ -226,6 +257,7 @@ struct HostCheckPanel: View {
     }
 
     private func connectAndVerify(target: HostCheck.Target, ips: [String], added: [String], pending: [String]) {
+        spinning = nil
         phase = .working("連線中…")
         vpn.connect("auto")
         Task {
@@ -260,6 +292,7 @@ struct HostCheckPanel: View {
 
     /// 網段已在通道內但路由沒走 VPN：重新連線（新版輔助程式連上後會檢查路由，必要時重啟 strongSwan），再驗證一次
     private func reconnectAndVerify(target: HostCheck.Target, ips: [String], added: [String]) {
+        spinning = nil
         phase = .working("重新連線中…")
         Task {
             guard vpn.reconnect(reason: "主機檢查：路由沒走 VPN") else {
