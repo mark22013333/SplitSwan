@@ -214,7 +214,7 @@ internal sealed class SettingsForm : ThemedForm
         {
             // 更新：目前版本、檢查更新、下載並安裝、每天自動檢查更新（切換即寫入）
             var upd = new PageGrid(SettingsPages.Title(SettingsPage.Updates));
-            upd.Span(new UpdatePanel(updates, ContentWidth, HasUnsavedChanges, e => ShowErrors([e])), 10);
+            upd.Span(new UpdatePanel(updates, ContentWidth, HasUnsavedChanges, e => ShowErrors([e]), ShowToast), 10);
             _pages[SettingsPage.Updates] = new ScrollPage(upd.Grid, PageInset);
             _banners[SettingsPage.Updates] = upd.Banner;
         }
