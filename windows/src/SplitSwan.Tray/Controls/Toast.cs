@@ -24,6 +24,7 @@ internal sealed class Toast : Form
     private double _alpha;
     private int _slide;
     private Animation? _anim;
+    private bool _loggedFailure;
 
     /// <summary>在 owner 底部顯示一則吐司（已有的話取代並重新計時）。</summary>
     public static void ShowFor(Form owner, string text, bool isError = false)
@@ -83,6 +84,8 @@ internal sealed class Toast : Form
         _anim?.Stop();
         var reduced = MotionPrefs.Reduced;
         var travel = reduced ? 0 : Px(10);
+        // 擁有者是最上層視窗時，吐司也要是最上層，否則會被擁有者蓋住
+        TopMost = _owner.TopMost;
         if (!Visible)
         {
             _alpha = 0;
@@ -211,7 +214,11 @@ internal sealed class Toast : Form
                 BlendOp = 0, BlendFlags = 0, AlphaFormat = 1,   // AC_SRC_OVER、AC_SRC_ALPHA
                 SourceConstantAlpha = (byte)Math.Clamp((int)Math.Round(_alpha * 255), 0, 255),
             };
-            _ = UpdateLayeredWindow(Handle, screenDc, ref dst, ref size, memDc, ref src, 0, ref blend, 2);   // ULW_ALPHA
+            if (!UpdateLayeredWindow(Handle, screenDc, ref dst, ref size, memDc, ref src, 0, ref blend, 2) && !_loggedFailure)   // ULW_ALPHA
+            {
+                _loggedFailure = true;
+                AppLog.Error($"吐司：UpdateLayeredWindow 失敗（{Marshal.GetLastWin32Error()}）");
+            }
         }
         finally
         {

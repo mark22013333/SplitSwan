@@ -35,6 +35,8 @@ internal sealed class SettingsForm : ThemedForm
     private readonly NavList _nav = new();
     private readonly IReadOnlyList<SettingsPage> _pageOrder;
     private readonly Dictionary<SettingsPage, ScrollPage> _pages = new();
+    /// <summary>各分頁頂端的錯誤說明（儲存失敗時顯示）。</summary>
+    private readonly Dictionary<SettingsPage, ErrorBanner> _banners = new();
     /// <summary>目前顯示的分頁（建構前為 null）。</summary>
     private SettingsPage? _currentPage;
 
@@ -199,12 +201,16 @@ internal sealed class SettingsForm : ThemedForm
         _pages[SettingsPage.Connection] = new ScrollPage(conn.Grid, PageInset);
         _pages[SettingsPage.Subnets] = new ScrollPage(nets.Grid, PageInset);
         _pages[SettingsPage.Appearance] = new ScrollPage(look.Grid, PageInset);
+        _banners[SettingsPage.Connection] = conn.Banner;
+        _banners[SettingsPage.Subnets] = nets.Banner;
+        _banners[SettingsPage.Appearance] = look.Banner;
         if (updates is not null)
         {
             // 更新：目前版本、檢查更新、下載並安裝、每天自動檢查更新（切換即寫入）
             var upd = new PageGrid(SettingsPages.Title(SettingsPage.Updates));
             upd.Span(new UpdatePanel(updates, ContentWidth, HasUnsavedChanges, e => ShowErrors([e])), 10);
             _pages[SettingsPage.Updates] = new ScrollPage(upd.Grid, PageInset);
+            _banners[SettingsPage.Updates] = upd.Banner;
         }
 
         // 右側：所有分頁疊在同一個容器，一次只顯示一頁
@@ -345,6 +351,8 @@ internal sealed class SettingsForm : ThemedForm
             _ => s.ShowSubnetList ? "狀態面板顯示完整網段清單：開啟" : "狀態面板顯示完整網段清單：關閉",
         });
         _displayApplied?.Invoke(s);
+        // 這幾個開關不經「儲存」，以吐司確認已寫入（同 Mac 設定頁儲存成功的吐司）
+        ShowToast("已儲存");
     }
 
     /// <summary>顯示設定控制項改成托盤當下的值（不觸發寫入）。</summary>
@@ -388,9 +396,14 @@ internal sealed class SettingsForm : ThemedForm
             Grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, HalfWidth + 12));
             Grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, HalfWidth));
             Span(new ThemedLabel(title, TextRole.Ink, Theme.Ui(12f, FontStyle.Bold)) { AccessibleRole = AccessibleRole.StaticText });
+            // 儲存失敗時頁面頂端的紅色說明（同 Mac 設定頁）；平常隱藏，仍佔有自己的列
+            Span(Banner, 10);
         }
 
         public TableLayoutPanel Grid { get; } = UiLayout.Table(2);
+
+        /// <summary>這一頁頂端的錯誤說明。</summary>
+        public ErrorBanner Banner { get; } = new(ContentWidth) { Visible = false };
 
         public void Span(Control c, int top = 0)
         {
@@ -1154,6 +1167,8 @@ internal sealed class SettingsForm : ThemedForm
     {
         _shortcutErrorShown = false;   // 捷徑的錯誤由 RunShortcutAction 在呼叫後自己標記
         _displayErrorShown = false;    // 顯示設定的錯誤由 ApplyDisplay 在呼叫後自己標記
+        // 頁面頂端的錯誤說明只屬於「儲存」失敗（OnSave 在呼叫後自己顯示）；底部卡片換內容時一律收起
+        foreach (var b in _banners.Values) b.Visible = false;
         if (errors.Count == 0)
         {
             _errors.Text = "";
@@ -1176,6 +1191,7 @@ internal sealed class SettingsForm : ThemedForm
         {
             ShowErrors(errors, validation);
             if (validation) FocusValidationErrors(errors);
+            ShowSaveBanner(errors, validation);
             return;
         }
         AppLog.Info("設定已儲存");
@@ -1183,6 +1199,31 @@ internal sealed class SettingsForm : ThemedForm
         DialogResult = DialogResult.OK;
         Close();
     }
+
+    /// <summary>
+    /// 儲存失敗：除了底部的錯誤卡片（完整清單），各分頁頂端也以紅色說明第一個問題與下一步，
+    /// 目前分頁（驗證錯誤時已切到第一個錯誤欄位所在的分頁）的說明搖晃一次；減少動態效果時不晃（Shake）。
+    /// </summary>
+    private void ShowSaveBanner(IReadOnlyList<string> errors, bool validation)
+    {
+        var message = errors.Count == 1 ? errors[0] : $"{errors[0]}（另有 {errors.Count - 1} 項）";
+        var next = validation
+            ? "修正紅框標示的欄位後再按「儲存」；所有問題列在視窗底部。"
+            : "再按一次「儲存」；仍然失敗時，從托盤選單的「開啟記錄資料夾」查看記錄。";
+        foreach (var b in _banners.Values)
+        {
+            b.Set(message, next);
+            b.Visible = true;
+        }
+        if (_currentPage is not { } page || !_banners.TryGetValue(page, out var current)) return;
+        _pages[page].PerformLayout();
+        // 說明在頁首：捲回最上面才看得到它晃動
+        _pages[page].ScrollControlIntoView(current);
+        Shake.Run(current);
+    }
+
+    /// <summary>短暫確認（已儲存、已拷貝）：浮在底部儲存列之上，約 2.5 秒後消失。</summary>
+    private void ShowToast(string text) => Toast.ShowFor(this, text);
 
     /// <summary>
     /// 「儲存」與一鍵檢查共用的存檔路徑：驗證（SettingsValidator、DnsOptions）通過才寫入 settings.json。
