@@ -269,6 +269,21 @@ struct ExternalVPNFailure: Codable, Equatable {
     let stage: Stage
     let message: String
     var dnsDifferences: [String]? = nil
+
+    static let maxDifferenceLines = 20
+    static let maxDifferenceScalars = 300
+
+    // 差異經 status JSON 交給 App，App 只讀 64 KB；新增或消失的項目會列整筆 DNS 字典，必須在這裡截短。
+    // 以 Unicode scalar 計長度，才能限制位元組數（一個 Character 可以由任意多個 scalar 組成）。
+    static func limited(_ lines: [String]) -> [String] {
+        func clip(_ line: String) -> String {
+            guard line.unicodeScalars.count > maxDifferenceScalars else { return line }
+            return String(String.UnicodeScalarView(line.unicodeScalars.prefix(maxDifferenceScalars - 1))) + "…"
+        }
+        guard lines.count > maxDifferenceLines else { return lines.map(clip) }
+        let shown = maxDifferenceLines - 1
+        return lines.prefix(shown).map(clip) + ["另有 \(lines.count - shown) 項差異未列出"]
+    }
 }
 
 struct ExternalVPNSession: Codable {
@@ -290,6 +305,12 @@ struct ExternalVPNSession: Codable {
     var autoRetried: Bool?
 
     var hasPendingMutations: Bool { !addedRoutes.isEmpty || !dnsChanges.isEmpty || company != nil }
+
+    func waitingMessage(_ text: String) -> String {
+        guard autoRetried == true, let reason = latestFailure?.message else { return text }
+        return text + "；自動重試中，第一次分流失敗：\(reason)"
+    }
+
     var canRetry: Bool {
         guard (phase == .failed || phase == .recoveryRequired), !hasPendingMutations,
               ExternalVPNPlanner.isPhysical(baseline.interface) else { return false }
@@ -702,7 +723,7 @@ final class ExternalVPNEngine {
 
     func failed(_ input: ExternalVPNSession, error: Error, stage: ExternalVPNFailure.Stage) throws -> ExternalVPNSession {
         var session = input
-        let failure = ExternalVPNFailure(stage: stage, message: error.localizedDescription, dnsDifferences: (error as? ExternalVPNDetailedError)?.dnsDifferences)
+        let failure = ExternalVPNFailure(stage: stage, message: error.localizedDescription, dnsDifferences: (error as? ExternalVPNDetailedError).map { ExternalVPNFailure.limited($0.dnsDifferences) })
         if session.firstFailure == nil { session.firstFailure = failure }
         session.latestFailure = failure
         session.phase = session.hasPendingMutations ? .recoveryRequired : .failed
@@ -722,8 +743,10 @@ final class ExternalVPNEngine {
             let current = try runtime.snapshot(baseline: session.baseline)
             if session.phase == .active {
                 stage = .verifying
-                guard try ExternalVPNPlanner.tunnel(in: current) == session.tunnel,
-                      let evidence = session.routingEvidence, session.journalVersion == 3 else {
+                guard try ExternalVPNPlanner.tunnel(in: current) == session.tunnel else {
+                    throw ExternalVPNError.invalid("外部 VPN 通道已中斷或改變，已撤回分流")
+                }
+                guard let evidence = session.routingEvidence, session.journalVersion == 3 else {
                     throw ExternalVPNError.invalid("VPN 路由紀錄缺少完整驗證證據，請停止後重新準備")
                 }
                 try evidence.validate(session, current: current)
@@ -755,7 +778,7 @@ final class ExternalVPNEngine {
             guard let tunnel = try ExternalVPNPlanner.tunnel(in: current) else {
                 guard session.settling != nil else { return session }
                 session.settling = nil
-                session.message = "已記住原本網路，等待外部 VPN 連線"
+                session.message = session.waitingMessage("已記住原本網路，等待外部 VPN 連線")
                 try runtime.save(session)
                 return session
             }
@@ -764,8 +787,7 @@ final class ExternalVPNEngine {
             let count = session.settling.map { $0.fingerprint.same(as: fingerprint) ? $0.count + 1 : 1 } ?? 1
             guard count >= ExternalSettlingObservation.required else {
                 session.settling = ExternalSettlingObservation(fingerprint: fingerprint, count: count)
-                session.message = "偵測到 VPN，等待設定穩定（\(count)/\(ExternalSettlingObservation.required)）"
-                    + (session.autoRetried == true ? "；這是第一次分流失敗後的自動重試" : "")
+                session.message = session.waitingMessage("偵測到 VPN，等待設定穩定（\(count)/\(ExternalSettlingObservation.required)）")
                 try runtime.save(session)
                 return session
             }

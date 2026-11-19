@@ -16,6 +16,22 @@ check("轉為待復原不屬於分流失敗紀錄", !ExternalFailureLog.shouldRe
 check("第一次失敗後自動重試也要記錄", ExternalFailureLog.shouldRecord(operation: "tick", previous: .active, next: .waiting, autoRetried: true))
 check("一般等待中的 tick 不記錄", !ExternalFailureLog.shouldRecord(operation: "tick", previous: .waiting, next: .waiting))
 
+func waitingStatus(autoRetried: Bool?) -> ExternalVPNStatus {
+    var status = ExternalVPNStatus(phase: .waiting, message: "等待", interface: "en0", tunnel: nil, routeCount: 0)
+    status.autoRetried = autoRetried
+    return status
+}
+var activeStatus = ExternalVPNStatus(phase: .active, message: "已套用", interface: "en0", tunnel: "ppp0", routeCount: 3)
+check("autoRetried 第一次轉成 true 的 tick 記錄一次", ExternalFailureLog.shouldRecord(operation: "tick", previous: activeStatus, next: waitingStatus(autoRetried: true)))
+check("autoRetried 維持 true 的後續 tick 不再記錄", !ExternalFailureLog.shouldRecord(operation: "tick", previous: waitingStatus(autoRetried: true), next: waitingStatus(autoRetried: true)))
+activeStatus.autoRetried = true
+var gaveUpStatus = ExternalVPNStatus(phase: .failed, message: "失敗", interface: "en0", tunnel: nil, routeCount: 0)
+gaveUpStatus.autoRetried = true
+check("自動重試後第二次失敗仍依 failed 轉變記錄", ExternalFailureLog.shouldRecord(operation: "tick", previous: activeStatus, next: gaveUpStatus))
+check("App 重啟後以 status 讀到已自動重試的狀態不記錄", !ExternalFailureLog.shouldRecord(operation: "status", previous: .idle, next: waitingStatus(autoRetried: true)))
+check("重啟讀過狀態後的第一次 tick 不補記", !ExternalFailureLog.shouldRecord(operation: "tick", previous: waitingStatus(autoRetried: true), next: waitingStatus(autoRetried: true)))
+check("手動重新等待後再次自動重試會再記錄", ExternalFailureLog.shouldRecord(operation: "tick", previous: waitingStatus(autoRetried: nil), next: waitingStatus(autoRetried: true)))
+
 let suite = "SplitSwan.ExternalFailureLog." + UUID().uuidString
 let preferences = UserDefaults(suiteName: suite)!
 check("預設資料夾在家目錄的 Library/Logs/SplitSwan", ExternalFailureLog.directory(preferences, home: "/Users/example").path == "/Users/example/Library/Logs/SplitSwan")

@@ -31,7 +31,7 @@ struct ExternalVPNTab: View {
                         LoadingButton(installing ? "正在安裝系統元件…" : "安裝／更新分流系統元件…", systemImage: "arrow.down.circle",
                                       isLoading: installing, prominent: true, succeeded: { helperReady }, action: install)
                             .disabled(installing)
-                        if installing { ProgressView().progressViewStyle(.linear) }
+                        if installing { BusyIndicator() }
                     }
                 }
 
@@ -109,7 +109,7 @@ struct ExternalVPNTab: View {
             VStack(alignment: .leading, spacing: 10) {
                 if phase == .waiting || phase == .applying || phase == .restoring {
                     // 等待外部 VPN 登入可能要一段時間，用不定長度的進度條表示仍在等候
-                    ProgressView().progressViewStyle(.linear)
+                    BusyIndicator()
                 }
                 HStack(spacing: 10) {
                     LoadingButton(model.canRetry ? "重新嘗試分流" : "開始等待 VPN 並自動分流", systemImage: "play.fill",
