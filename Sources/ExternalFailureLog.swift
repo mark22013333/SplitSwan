@@ -12,6 +12,12 @@ enum ExternalFailureLog {
         operation == "tick" && (autoRetried || (previous != .failed && next == .failed))
     }
 
+    // 只有 autoRetried 從無到有才算新的失敗。App 重啟後第一次讀到的是 status 操作，不記錄：失敗發生在上一次執行期間，當時已記過。
+    static func shouldRecord(operation: String, previous: ExternalVPNStatus, next: ExternalVPNStatus) -> Bool {
+        shouldRecord(operation: operation, previous: previous.phase, next: next.phase,
+                     autoRetried: next.autoRetried == true && previous.autoRetried != true)
+    }
+
     static func dnsDifferenceSection(statusJSON: String) -> (String, String)? {
         guard let status = try? JSONDecoder().decode(ExternalVPNStatus.self, from: Data(statusJSON.utf8)),
               let lines = status.latestFailure?.dnsDifferences, !lines.isEmpty else { return nil }

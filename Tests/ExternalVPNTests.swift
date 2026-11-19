@@ -345,7 +345,9 @@ dnsRouteDrift.state.routes.append(route("8.8.4.4/32"))
 check("DNS 值不變但路由被外部接管仍會復原", stopped(try! dnsRouteEngine.tick(dnsRouteActive)) && dnsRouteDrift.dnsWrites == 0 && dnsRouteDrift.state.routes.contains { $0.network == network("8.8.4.4/32") })
 let (lost, lostEngine, lostActive) = preserving()
 lost.state.routes.removeAll { $0.isTunnel }
-check("VPN 中斷時撤回自己路由且不改 DNS", stopped(try! lostEngine.tick(lostActive)) && !lost.state.routes.contains(where: \.isOwned) && lost.dnsWrites == 0)
+let lostResult = try! lostEngine.tick(lostActive)
+check("VPN 中斷時撤回自己路由且不改 DNS", stopped(lostResult) && !lost.state.routes.contains(where: \.isOwned) && lost.dnsWrites == 0)
+check("VPN 中斷的原因寫通道中斷，不叫使用者重新準備", lostResult.latestFailure?.message == "外部 VPN 通道已中斷或改變，已撤回分流" && !lostResult.message.contains("重新準備"))
 let (noEvidence, noEvidenceEngine, noEvidenceActive) = preserving()
 var missingEvidence = noEvidenceActive; missingEvidence.preservedDNS = nil
 check("保留模式缺少觀察紀錄時復原而不猜測", stopped(try! noEvidenceEngine.tick(missingEvidence)) && noEvidence.dnsWrites == 0)
@@ -867,6 +869,14 @@ check("自動重試沿用原本上網快照", autoRetry.baseline.routes == retry
 let autoRetryStatus = ExternalVPNStatus(session: autoRetry)
 check("狀態帶出自動重試與 DNS 差異", autoRetryStatus.autoRetried == true && autoRetryStatus.latestFailure?.dnsDifferences?.contains { $0.contains("198.51.100.53") && $0.contains("198.51.100.54") } == true)
 check("自動重試狀態可經 v3 journal 保存", (try! ExternalVPNJournal.decode(ExternalVPNJournal.encode(autoRetry))).autoRetried == true)
+let retrySettling = try! retryDNSEngine.tick(autoRetry)
+check("自動重試觀察期間仍寫出第一次失敗原因", retrySettling.message.contains("（1/3）") && retrySettling.message.contains("第一次分流失敗：保留的 VPN DNS 已改變"))
+let retryState = retryDNS.state
+retryDNS.state = baseline()
+let retryNoTunnel = try! retryDNSEngine.tick(retrySettling)
+check("自動重試中通道消失，等待訊息仍寫出第一次失敗原因", retryNoTunnel.message.hasPrefix("已記住原本網路，等待外部 VPN 連線") && retryNoTunnel.message.contains("第一次分流失敗：保留的 VPN DNS 已改變"))
+retryDNS.state = retryState
+check("沒有自動重試時等待訊息不附失敗原因", !settling.message.contains("第一次分流失敗") && !flicker.message.contains("第一次分流失敗"))
 let secondActive = attempt(retryDNSEngine, autoRetry)
 check("重試後設定穩定可再次套用", secondActive.phase == .active && secondActive.autoRetried == true && !secondActive.addedRoutes.isEmpty)
 changeDNS(retryDNS, "198.51.100.55")
@@ -899,6 +909,34 @@ var movedInterface = recordedDNS; movedInterface.dns[1] = ExternalDNSEntry(key: 
 check("差異列出介面改變", ExternalDNSState(movedInterface).differences(from: ExternalDNSState(recordedDNS)).contains { $0.contains("介面") && $0.contains("ppp0") && $0.contains("utun3") })
 check("相同設定沒有差異", ExternalDNSState(recordedDNS).differences(from: ExternalDNSState(recordedDNS)).isEmpty)
 check("plist 格式不同但語意相同沒有差異", ExternalDNSState(semanticState).differences(from: ExternalDNSState(noSuffix())).isEmpty)
+
+// 差異經 status JSON 給 App，App 只讀 64 KB：行數與每行長度都要有上限。
+let shortLines = ["改變 A", "消失 B"]
+check("差異不多時原樣保留", ExternalVPNFailure.limited(shortLines) == shortLines)
+let twentyLines = (1...20).map { "第 \($0) 項" }
+check("剛好 20 行不加摘要", ExternalVPNFailure.limited(twentyLines) == twentyLines)
+let manyLines = ExternalVPNFailure.limited((1...45).map { "第 \($0) 項" })
+check("超過 20 行時只留 20 行，最後一行寫出未列出的數量", manyLines.count == 20 && manyLines[18] == "第 19 項" && manyLines.last == "另有 26 項差異未列出")
+let longLine = ExternalVPNFailure.limited([String(repeating: "網", count: 1000)])[0]
+check("單行超過 300 字截短並標出省略", longLine.unicodeScalars.count == 300 && longLine.hasSuffix("…"))
+let combining = ExternalVPNFailure.limited(["e" + String(repeating: "\u{301}", count: 5000)])[0]
+check("以 scalar 計長度，組合字元不能讓單行無限長", combining.unicodeScalars.count == 300)
+
+var hugeDNS = lateDNS("198.51.100.53")
+for index in 0..<40 {
+    let domains = (0..<2000).map { "host\($0).zone\(index).internal.example.com" }
+    hugeDNS.dns.append(ExternalDNSEntry(key: "State:/Network/Service/huge\(index)/DNS", interface: "utun4", value: plist(["ServerAddresses": ["203.0.113.53"], "SupplementalMatchDomains": domains])))
+}
+let hugeDiff = ExternalDNSState(hugeDNS).differences(from: ExternalDNSState(lateDNS("198.51.100.53")))
+check("大量 SupplementalMatchDomains 的原始差異確實超過 64 KB", hugeDiff.joined().utf8.count > 65_536)
+let hugeRuntime = FakeRuntime(); hugeRuntime.state = baseline()
+let hugeEngine = ExternalVPNEngine(runtime: hugeRuntime)
+let hugeSession = try! hugeEngine.prepare(owner: 501, profile: preserveProfile)
+let hugeFailed = try! hugeEngine.failed(hugeSession, error: ExternalVPNDetailedError(message: "保留的 VPN DNS 已改變或缺少觀察紀錄，已停止分流並復原", dnsDifferences: hugeDiff), stage: .verifying)
+let hugeStatusBytes = try! JSONEncoder().encode(ExternalVPNStatus(session: hugeFailed)).count
+check("engine 記錄失敗時就截短差異", hugeFailed.latestFailure?.dnsDifferences?.count == 20 && hugeFailed.latestFailure?.dnsDifferences?.last == "另有 21 項差異未列出")
+check("status JSON 編碼後遠小於 64 KB（實際 \(hugeStatusBytes) bytes）", hugeStatusBytes < 16_384)
+check("截短後的 status 仍可解回", (try? JSONDecoder().decode(ExternalVPNStatus.self, from: JSONEncoder().encode(ExternalVPNStatus(session: hugeFailed)))) != nil)
 
 print("通過 \(pass)，失敗 \(fail)")
 exit(fail == 0 ? 0 : 1)
