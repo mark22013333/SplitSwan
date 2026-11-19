@@ -1,7 +1,10 @@
 namespace SplitSwan.Core;
 
-/// <summary>捷徑放在哪裡（目前使用者的桌面、開始選單程式集）。</summary>
-public enum ShortcutLocation { Desktop, StartMenu }
+/// <summary>
+/// 捷徑放在哪裡（目前使用者的桌面、開始選單程式集），或登入時自動啟動的工作排程器工作（見 <see cref="LogonTaskXml"/>）。
+/// 三者的歸屬規則相同：有 <see cref="ShortcutRules.Description"/> 標記、目標是 SplitSwan.exe 才是我們的。
+/// </summary>
+public enum ShortcutLocation { Desktop, StartMenu, Logon }
 
 /// <summary>同名捷徑（SplitSwan.lnk）的狀態，以檔案系統為準，不存進 settings.json。</summary>
 public enum ShortcutState
@@ -127,8 +130,13 @@ public static class ShortcutRules
     {
         ShortcutLocation.Desktop => "桌面捷徑",
         ShortcutLocation.StartMenu => "開始選單",
+        ShortcutLocation.Logon => "登入時自動啟動",
         _ => l.ToString(),
     };
+
+    /// <summary>同名項目的說法（「不是 SplitSwan 建立的」提示用）。</summary>
+    public static string ItemName(ShortcutLocation l) =>
+        l == ShortcutLocation.Logon ? $"工作排程器工作「{LogonTaskXml.TaskName}」" : FileName;
 
     /// <summary>拒絕變更時的提示（規格指定的文字）。</summary>
     public const string RefuseMessage = "已有同名捷徑，未變更";
@@ -136,7 +144,12 @@ public static class ShortcutRules
     /// <summary>精靈「建立」結果的一行文字。</summary>
     public static string ResultLine(ShortcutLocation l, ShortcutAction done, string? error = null)
     {
-        var name = l == ShortcutLocation.Desktop ? "桌面捷徑" : "開始選單捷徑";
+        var name = l switch
+        {
+            ShortcutLocation.Desktop => "桌面捷徑",
+            ShortcutLocation.StartMenu => "開始選單捷徑",
+            _ => "登入時自動啟動",
+        };
         if (error is not null) return $"✖ {name}建立失敗：{error}";
         return done switch
         {

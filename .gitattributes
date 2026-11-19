@@ -3,3 +3,4 @@ tools/windows/*.ps1 -text
 tools/windows/*.cmd -text
 tools/windows/*.ini -text
 tools/windows/*.sh text eol=lf
+windows/tools/*.ps1 -text

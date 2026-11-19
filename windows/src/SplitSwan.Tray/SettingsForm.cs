@@ -87,13 +87,15 @@ internal sealed class SettingsForm : ThemedForm
         (TrayState.Error, TrayIconState.Error),
     ];
     // 捷徑（桌面、開始選單）：狀態以檔案系統為準，開關切換時立即建立／移除，不經「儲存」、不寫 settings.json
-    private static readonly ShortcutLocation[] ShortcutLocations = [ShortcutLocation.Desktop, ShortcutLocation.StartMenu];
+    private static readonly ShortcutLocation[] ShortcutLocations = [ShortcutLocation.Desktop, ShortcutLocation.StartMenu, ShortcutLocation.Logon];
     private readonly ToggleSwitch[] _shortcut = [.. ShortcutLocations.Select(l => new ToggleSwitch(ShortcutRules.Title(l)))];
     private readonly ThemedLabel[] _shortcutNote = [.. ShortcutLocations.Select(_ => new ThemedLabel("", TextRole.Warn, Theme.Ui(8.25f)))];
     private readonly ThemedButton[] _shortcutUpdate = [.. ShortcutLocations.Select(_ => new ThemedButton("更新"))];
     private readonly FlowLayoutPanel[] _shortcutNoteRow = [.. ShortcutLocations.Select(_ => UiLayout.Flow())];
     /// <summary>程式同步開關（重新讀取實際狀態）時不觸發建立／移除。</summary>
     private bool _syncingShortcuts;
+    /// <summary>每個開關的讀取世代：每次讀取遞增，讀完時不同＝期間有更新的讀取或切換，結果作廢。</summary>
+    private readonly int[] _shortcutGeneration = new int[ShortcutLocations.Length];
     /// <summary>錯誤卡片目前顯示的是捷徑的錯誤（捷徑操作成功時才清掉，不清掉儲存的驗證錯誤）。</summary>
     private bool _shortcutErrorShown;
     /// <summary>捷徑提示的 tooltip（舊位置的完整路徑）。</summary>
@@ -919,7 +921,7 @@ internal sealed class SettingsForm : ThemedForm
     private Control BuildShortcutPanel()
     {
         // 每個控制項都指定 (欄, 列)：提示列隱藏時，TableLayoutPanel 自動排列會跳過它、讓後面的列往前遞補
-        var panel = UiLayout.Table(1, 5);
+        var panel = UiLayout.Table(1, ShortcutLocations.Length * 2 + 1);
         for (int i = 0; i < ShortcutLocations.Length; i++)
         {
             _shortcut[i].AccessibleName = ShortcutRules.Title(ShortcutLocations[i]);
@@ -936,8 +938,9 @@ internal sealed class SettingsForm : ThemedForm
             _shortcutNoteRow[i].Visible = false;
             panel.Controls.Add(_shortcutNoteRow[i], 0, i * 2 + 1);
         }
-        panel.Controls.Add(new ThemedLabel("開關切換後立即建立或移除，不必按「儲存」。從捷徑啟動一樣會跳出 UAC（App 需要系統管理員權限）。",
-            TextRole.Muted, Theme.Ui(8.25f)) { MaximumSize = new Size(ContentWidth, 0), Margin = new Padding(0, 2, 0, 0) }, 0, 4);
+        panel.Controls.Add(new ThemedLabel("開關切換後立即建立或移除，不必按「儲存」。從捷徑啟動一樣會跳出 UAC（App 需要系統管理員權限）；" +
+            "「登入時自動啟動」由工作排程器以最高權限啟動，不會跳出 UAC。",
+            TextRole.Muted, Theme.Ui(8.25f)) { MaximumSize = new Size(ContentWidth, 0), Margin = new Padding(0, 2, 0, 0) }, 0, ShortcutLocations.Length * 2);
         return panel;
     }
 
@@ -953,9 +956,17 @@ internal sealed class SettingsForm : ThemedForm
         var loc = ShortcutLocations[i];
         ShortcutState state;
         string? target;
+        // 登入時自動啟動的讀取要等 schtasks.exe；UI 執行緒等待時仍會處理跨程序送來的訊息（UI Automation、輔助工具），
+        // 期間可能有一次切換插進來改掉狀態。讀完發現世代變了，就丟掉這份已過期的結果（插進來的那次已顯示最新狀態）
+        var generation = ++_shortcutGeneration[i];
         try
         {
             (state, target) = Shortcuts.Inspect(loc);
+        }
+        catch (Exception ex) when (generation != _shortcutGeneration[i])
+        {
+            AppLog.Info($"{ShortcutRules.Title(loc)}：讀取期間狀態已變更，略過這次結果（{ex.GetType().Name}）");
+            return;
         }
         catch (Exception ex)
         {
@@ -965,16 +976,17 @@ internal sealed class SettingsForm : ThemedForm
             SetShortcutNote(i, ex.Message, update: false);
             return;
         }
+        if (generation != _shortcutGeneration[i]) return;
         SetShortcutSwitch(i, ShortcutRules.IsOn(state));
         switch (state)
         {
             case ShortcutState.Stale:
                 // 路徑另起一行並省略中段（長路徑沒有空白可斷行，整段會被截掉）；完整路徑放 tooltip
-                SetShortcutNote(i, "捷徑指向舊位置：\n" + ShortcutRules.CompactPath(target, ShortcutPathChars), update: true,
+                SetShortcutNote(i, (loc == ShortcutLocation.Logon ? "排程工作" : "捷徑") + "指向舊位置：\n" + ShortcutRules.CompactPath(target, ShortcutPathChars), update: true,
                     tooltip: target);
                 break;
             case ShortcutState.Foreign:
-                SetShortcutNote(i, $"{ShortcutRules.RefuseMessage}：已有同名的 {ShortcutRules.FileName}，但不是 SplitSwan 建立的（沒有 SplitSwan 標記），不會變更或刪除。", update: false);
+                SetShortcutNote(i, $"{ShortcutRules.RefuseMessage}：已有同名的 {ShortcutRules.ItemName(loc)}，但不是 SplitSwan 建立的（沒有 SplitSwan 標記），不會變更或刪除。", update: false);
                 break;
             default:
                 SetShortcutNote(i, "", update: false);
