@@ -16,45 +16,59 @@ struct PluginSettingsView: View {
 
     var body: some View {
         Group {
-            Toggle("啟用外掛", isOn: $enabled)
-                .toggleStyle(.switch)
-                .onChange(of: enabled) { _, on in runner.setEnabled(on); if !on { runner.scan() } }
-            PluginPackageImportView(model: packages)
-            Text("外掛安裝包可攜帶程式與資源；原有單檔腳本仍可放入外掛資料夾。外掛以你的使用者身分執行，請只安裝可信任的來源。")
-                .font(.callout).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 10) {
-                Button("開啟外掛資料夾") { runner.openFolder() }
-                Button("立即重新整理") { Task { await runner.refreshAll() } }
-                    .disabled(!enabled)
-                if !enabled {
-                    Button("掃描外掛設定…") { runner.scan() }
+            DSCard {
+                Toggle("啟用外掛", isOn: $enabled)
+                    .toggleStyle(.switch)
+                    .font(.body.weight(.medium))
+                    .onChange(of: enabled) { _, on in runner.setEnabled(on); if !on { runner.scan() } }
+                Text("外掛安裝包可攜帶程式與資源；原有單檔腳本仍可放入外掛資料夾。外掛以你的使用者身分執行，請只安裝可信任的來源。")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                PluginPackageImportView(model: packages)
+            }
+            DSCard("外掛資料夾", systemImage: "folder") {
+                Text(runner.directory.path.replacingOccurrences(of: PluginRunner.home, with: "~"))
+                    .font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+                HStack(spacing: 10) {
+                    Button("開啟外掛資料夾") { runner.openFolder() }
+                    Button("立即重新整理") { Task { await runner.refreshAll() } }
+                        .disabled(!enabled)
+                    if !enabled {
+                        Button("掃描外掛設定…") { runner.scan() }
+                    }
+                    Menu("診斷紀錄…") {
+                        Button("在 Finder 中顯示") { revealLog() }
+                        Button("匯出診斷報告…") { exportReport() }
+                    }.fixedSize()
+                    Spacer(minLength: 0)
                 }
-                Menu("診斷紀錄…") {
-                    Button("在 Finder 中顯示") { revealLog() }
-                    Button("匯出診斷報告…") { exportReport() }
-                }.fixedSize()
-                Spacer()
+                if let diagnosticsMessage {
+                    Text(diagnosticsMessage).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                }
             }
-            if let diagnosticsMessage {
-                Text(diagnosticsMessage).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-            }
-            Text(runner.directory.path.replacingOccurrences(of: PluginRunner.home, with: "~"))
-                .font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
-            if enabled {
-                if runner.folderMissing {
-                    Text("外掛資料夾還不存在，按「開啟外掛資料夾」建立")
-                        .font(.callout).foregroundStyle(.secondary)
+            DSCard("已安裝的外掛（\(runner.plugins.count)）", systemImage: "puzzlepiece.extension") {
+                if enabled {
+                    if runner.folderMissing {
+                        Text("外掛資料夾還不存在，按「開啟外掛資料夾」建立")
+                            .font(.callout).foregroundStyle(.secondary)
+                    } else if runner.plugins.isEmpty {
+                        Text("資料夾內沒有可執行的外掛").font(.callout).foregroundStyle(.secondary)
+                    }
+                    if !runner.skipped.isEmpty {
+                        Text("外掛最多 \(PluginLogic.maxPlugins) 個，已略過：\(runner.skipped.joined(separator: "、"))")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
                 } else if runner.plugins.isEmpty {
-                    Text("資料夾內沒有可執行的外掛").font(.callout).foregroundStyle(.secondary)
+                    Text("外掛區塊目前關閉；打開「啟用外掛」後會開始執行。").font(.callout).foregroundStyle(.secondary)
                 }
-                if !runner.skipped.isEmpty {
-                    Text("外掛最多 \(PluginLogic.maxPlugins) 個，已略過：\(runner.skipped.joined(separator: "、"))")
-                        .font(.caption).foregroundStyle(.orange)
+                ForEach(runner.packageErrors, id: \.self) {
+                    Text($0).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                }
+                ForEach(Array(runner.plugins.enumerated()), id: \.element.id) { index, p in
+                    if index > 0 { Divider() }
+                    row(p).staggeredAppear(index)
                 }
             }
-            ForEach(runner.packageErrors, id: \.self) { Text($0).font(.caption).foregroundStyle(.orange) }
-            ForEach(runner.plugins) { p in row(p) }
         }.onAppear { runner.scan() }
     }
 
@@ -82,6 +96,7 @@ struct PluginSettingsView: View {
                 do {
                     try await Task.detached(priority: .utility) { try PluginDiagnostics.writeReport(text, to: url) }.value
                     diagnosticsMessage = "已匯出 " + url.lastPathComponent
+                    ToastCenter.shared.show("已匯出外掛診斷報告")
                 } catch {
                     diagnosticsMessage = "無法匯出診斷報告：" + error.localizedDescription
                 }
