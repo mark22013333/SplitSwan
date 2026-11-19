@@ -305,6 +305,49 @@ public class SetupWizardStateTests
         Assert.Equal(WizardStep.InstallWsl, s.Current);
     }
 
+    private static SetupWizardState AtConfigure()
+    {
+        var s = new SetupWizardState();
+        while (s.Current != WizardStep.Configure)
+        {
+            s.Complete(s.Current, skipped: true);
+            s.GoNext();
+        }
+        return s;
+    }
+
+    [Fact]
+    public void SettingsSaved_WhileWaitingAtConfigure_Continues()
+    {
+        var s = AtConfigure();
+        Assert.Equal(WizardSettingsReaction.ContinueConfigure, s.OnSettingsSaved());
+        s.Fail(WizardStep.Configure, "設定不完整");
+        Assert.Equal(WizardSettingsReaction.ContinueConfigure, s.OnSettingsSaved());
+    }
+
+    [Fact]
+    public void SettingsSaved_AfterFailedTest_Retests()
+    {
+        var s = AtConfigure();
+        s.Complete(WizardStep.Configure, skipped: true);
+        s.GoNext();
+        s.Start(WizardStep.TestConnection);
+        Assert.Equal(WizardSettingsReaction.None, s.OnSettingsSaved());
+        s.Fail(WizardStep.TestConnection, "密碼錯誤");
+        Assert.Equal(WizardSettingsReaction.RetestConnection, s.OnSettingsSaved());
+        s.Complete(WizardStep.TestConnection, skipped: false);
+        Assert.Equal(WizardSettingsReaction.None, s.OnSettingsSaved());
+    }
+
+    [Fact]
+    public void SettingsSaved_BeforeConfigureOrWhileRunning_IsIgnored()
+    {
+        Assert.Equal(WizardSettingsReaction.None, new SetupWizardState().OnSettingsSaved());
+        var s = AtConfigure();
+        s.Start(WizardStep.Configure);
+        Assert.Equal(WizardSettingsReaction.None, s.OnSettingsSaved());
+    }
+
     [Fact]
     public void Fail_ThenReset_AllowsRetry()
     {

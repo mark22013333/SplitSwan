@@ -15,7 +15,7 @@ namespace SplitSwan.Tray;
 internal sealed class WizardForm : ThemedForm
 {
     private readonly VpnCoordinator _vpn;
-    private readonly Func<bool, Task<StoredSettings?>> _openSettings;
+    private readonly Action<bool> _openSettings;
     private readonly SetupWizardState _state;
     private readonly StatusDot _stepDot = new(10);
     private readonly ThemedLabel _title = new("", TextRole.Ink, Theme.Ui(11.5f, FontStyle.Bold));
@@ -47,9 +47,9 @@ internal sealed class WizardForm : ThemedForm
     /// <summary>6 步全部完成後觸發（TrayContext 用來更新提示）。</summary>
     public event Action? Finished;
 
-    /// <param name="openSettings">開設定視窗（參數＝是否直接開始匯入 .splitswan），回傳儲存後的設定；取消為 null。</param>
+    /// <param name="openSettings">開設定視窗（參數＝是否直接開始匯入 .splitswan）。儲存後由 TrayContext 呼叫 SettingsSaved。</param>
     /// <param name="autoStart">開窗就自動執行（重開機後繼續、命令列 --wizard）；否則等使用者按「開始」。</param>
-    public WizardForm(VpnCoordinator vpn, Func<bool, Task<StoredSettings?>> openSettings, bool autoStart)
+    public WizardForm(VpnCoordinator vpn, Action<bool> openSettings, bool autoStart)
     {
         _vpn = vpn;
         _openSettings = openSettings;
@@ -371,7 +371,7 @@ internal sealed class WizardForm : ThemedForm
                         // 測試連線失敗常是設定內容錯（例如密碼）：直接在精靈裡提供修改設定，存檔後重測
                         if (step == WizardStep.TestConnection)
                         {
-                            AddAction("修改設定…", () => _ = ReconfigureAsync());
+                            AddAction("修改設定…", () => _openSettings(false));
                             Out("若是帳號、密碼或閘道有誤，按「修改設定…」改完儲存後會自動重新測試；否則按「重試」。");
                         }
                         return;
@@ -482,8 +482,8 @@ internal sealed class WizardForm : ThemedForm
     private void ShowConfigureActions()
     {
         ClearActions();
-        AddAction("匯入 .splitswan…", () => _ = ConfigureAsync(importOnShow: true));
-        AddAction("手動填寫…", () => _ = ConfigureAsync(importOnShow: false));
+        AddAction("匯入 .splitswan…", () => _openSettings(true));
+        AddAction("手動填寫…", () => _openSettings(false));
         Out("請匯入公司提供的 .splitswan 設定檔，或手動填寫；儲存後精靈會自動繼續。");
         Render();
     }
@@ -498,29 +498,29 @@ internal sealed class WizardForm : ThemedForm
 
     private bool _configuredJustNow;
 
-    private async Task ConfigureAsync(bool importOnShow)
+    /// <summary>
+    /// 設定視窗按了儲存（不論是從精靈的按鈕還是托盤開的）。停在「設定」就重新偵測並繼續；
+    /// 測試連線失敗過就重測。
+    /// </summary>
+    public void SettingsSaved()
     {
-        if (_running) return;
-        var saved = await _openSettings(importOnShow);
-        if (IsDisposed) return;
-        if (saved is null) { Out("設定視窗已關閉（沒有儲存）。"); return; }
-        Out("設定已儲存。");
-        _configuredJustNow = true;
-        ClearActions();
-        _ = RunAsync(force: false);   // 回到「設定」步驟重新偵測，通過就繼續測試連線
-    }
-
-    /// <summary>測試連線失敗後修改設定：存檔就重新測試連線。</summary>
-    private async Task ReconfigureAsync()
-    {
-        if (_running) return;
-        var saved = await _openSettings(false);
-        if (IsDisposed || saved is null) return;
-        Out("設定已儲存，重新測試連線。");
-        ClearActions();
-        _state.Reset(WizardStep.TestConnection);
-        WizardStore.Save(_state);
-        _ = RunAsync(force: true);
+        if (_running || IsDisposed) return;
+        switch (_state.OnSettingsSaved())
+        {
+            case WizardSettingsReaction.ContinueConfigure:
+                Out("設定已儲存。");
+                _configuredJustNow = true;
+                ClearActions();
+                _ = RunAsync(force: false);
+                break;
+            case WizardSettingsReaction.RetestConnection:
+                Out("設定已儲存，重新測試連線。");
+                ClearActions();
+                _state.Reset(WizardStep.TestConnection);
+                WizardStore.Save(_state);
+                _ = RunAsync(force: true);
+                break;
+        }
     }
 
     private void OnAllDone()
