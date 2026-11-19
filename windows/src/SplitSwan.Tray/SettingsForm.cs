@@ -876,6 +876,8 @@ internal sealed class SettingsForm : ThemedForm
     {
         var routeOk = results.All(r => r.ViaTunnel);
         var portOk = results.All(r => r.PortOk ?? true);
+        // 沒走 VPN 或連接埠不通時，「檢查」按鈕不打勾（和橘色結果卡一致）
+        if (!(routeOk && portOk)) _hcFailed = true;
         if (!HcBegin(routeOk && portOk ? StatusTone.Idle : StatusTone.Warn)) return;
         var report = HostCheck.Report(target, results, added, HcConnected ? _vpn?.Vip : null);
         var rows = new List<ThemedLabel>();

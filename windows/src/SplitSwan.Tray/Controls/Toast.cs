@@ -84,8 +84,6 @@ internal sealed class Toast : Form
         _anim?.Stop();
         var reduced = MotionPrefs.Reduced;
         var travel = reduced ? 0 : Px(10);
-        // 擁有者是最上層視窗時，吐司也要是最上層，否則會被擁有者蓋住
-        TopMost = _owner.TopMost;
         if (!Visible)
         {
             _alpha = 0;
@@ -101,6 +99,7 @@ internal sealed class Toast : Form
             _slide = travel;
             Push();
         }
+        SyncTopMost();
         var startAlpha = _alpha;
         _anim = Animator.Start(this, Motion.TransitionSeconds(reduced), p =>
         {
@@ -193,6 +192,22 @@ internal sealed class Toast : Form
     }
 
     /// <summary>把點陣圖以目前的透明度與位置送到分層視窗。</summary>
+    /// <summary>
+    /// 擁有者是最上層視窗時，吐司也要是最上層，否則會被擁有者蓋住。
+    /// 不用 Form.TopMost：它呼叫的 SetWindowPos 沒帶 SWP_NOACTIVATE，可能把焦點從擁有者搶走。
+    /// </summary>
+    private void SyncTopMost()
+    {
+        if (!IsHandleCreated) return;
+        const uint SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_NOACTIVATE = 0x10;
+        var insertAfter = _owner.TopMost ? new IntPtr(-1) : new IntPtr(-2);   // HWND_TOPMOST／HWND_NOTOPMOST
+        _ = SetWindowPos(Handle, insertAfter, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+
     private void Push()
     {
         if (_bitmap is null || IsDisposed || _owner.IsDisposed) return;

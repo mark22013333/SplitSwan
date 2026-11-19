@@ -245,6 +245,12 @@ internal sealed class StatusFlyout : ThemedForm
         _tick.Stop();
         StopOutsideClickWatch();
         if (deactivated) _lastDeactivatedClose = DateTimeOffset.Now;
+        // 隱藏後 UpdateFromVpn 不再更新：先停掉轉圈，也不在下次開啟時補播打勾（仍在進行中的話開啟時會重新轉圈）
+        if (_primaryWasBusy)
+        {
+            _primaryWasBusy = false;
+            _primary.Finish(succeeded: false);
+        }
         Hide();
     }
 

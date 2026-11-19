@@ -30,11 +30,15 @@ internal class SectionCard : CardPanel
 
     private Color Back => Theme.OpaqueBack(this);
 
-    private Color TargetFill => ToneStyle.IsNeutral(Tone)
+    private Color FillFor(StatusTone t) => ToneStyle.IsNeutral(t)
         ? Theme.Mix(Theme.Muted, Back, ToneStyle.CardFill)
-        : Theme.Mix(Theme.Tone(Tone), Back, ToneStyle.TintFill);
+        : Theme.Mix(Theme.Tone(t), Back, ToneStyle.TintFill);
 
-    private Color TargetBorder => Theme.Mix(ToneStyle.IsNeutral(Tone) ? Theme.Muted : Theme.Tone(Tone), Back, ToneStyle.CardBorder);
+    private Color BorderFor(StatusTone t) => Theme.Mix(ToneStyle.IsNeutral(t) ? Theme.Muted : Theme.Tone(t), Back, ToneStyle.CardBorder);
+
+    private Color TargetFill => FillFor(Tone);
+
+    private Color TargetBorder => BorderFor(Tone);
 
     public override Color Fill => _fromFill is { } f && _mix < 1 ? Theme.Mix(TargetFill, f, _mix) : TargetFill;
 
@@ -46,8 +50,10 @@ internal class SectionCard : CardPanel
     {
         base.OnToneChanged(old);
         if (!IsHandleCreated || !Visible) return;
-        _fromFill = Fill;
-        _fromBorder = Border;
+        // Tone 已經是新值：起點要用舊色調的顏色（漸變中途再換時，從當下畫面上的混色開始）
+        var midway = _mix < 1;
+        _fromFill = midway && _fromFill is { } f ? Theme.Mix(FillFor(old), f, _mix) : FillFor(old);
+        _fromBorder = midway && _fromBorder is { } b ? Theme.Mix(BorderFor(old), b, _mix) : BorderFor(old);
         _anim?.Stop();
         _anim = Animator.Start(this, Motion.TransitionSeconds(MotionPrefs.Reduced), p =>
         {
@@ -162,6 +168,13 @@ internal sealed class StatusBadge : PaintedControl
         Font = Theme.Ui(8.25f, FontStyle.Bold);
         AccessibleRole = AccessibleRole.StaticText;
         Margin = Padding.Empty;
+        Size = GetPreferredSize(Size.Empty);
+    }
+
+    /// <summary>大小一律由 GetPreferredSize（已是裝置像素）決定；表單依 DPI 縮放時不再乘一次。</summary>
+    protected override void ScaleControl(SizeF factor, BoundsSpecified specified)
+    {
+        base.ScaleControl(factor, specified);
         Size = GetPreferredSize(Size.Empty);
     }
 
@@ -464,6 +477,15 @@ internal sealed class BusyIndicator : PaintedControl
         _timer.Tick += (_, _) => { _phase = (_phase + 0.03f) % 1f; Invalidate(); };
         _reduced = MotionPrefs.Reduced;
         Size = GetPreferredSize(Size.Empty);
+    }
+
+    /// <summary>高度（轉圈樣式連寬度）由 GetPreferredSize 決定，表單依 DPI 縮放時不再乘一次；進度條的寬度由呼叫端決定，照常縮放。</summary>
+    protected override void ScaleControl(SizeF factor, BoundsSpecified specified)
+    {
+        base.ScaleControl(factor, specified);
+        var p = GetPreferredSize(Size.Empty);
+        if (_reduced || _style == BusyStyle.Spinner) Size = p;
+        else Height = p.Height;
     }
 
     private string? Label => Text.Length > 0 ? Text : _reduced && _style == BusyStyle.Bar ? "處理中…" : null;
