@@ -80,6 +80,15 @@ internal class SectionCard : CardPanel
         foreach (Control c in Controls) PlaceContent(c);
     }
 
+    // 依 DPI 縮放時，卡片先把 Padding 放大（上面依新內距擺好內容），WinForms 接著又把子控制項的位置再乘一次比例，
+    // 內容被放大兩次（150% 時 14 px 內距變成 32 px 而非 21 px），沒有最大寬度的卡片因此被撐寬、右邊框被父層裁掉。
+    // 每次排版都依目前的內距重新擺放，縮放後也一樣。
+    protected override void OnLayout(LayoutEventArgs levent)
+    {
+        foreach (Control c in Controls) PlaceContent(c);
+        base.OnLayout(levent);
+    }
+
     private void PlaceContent(Control c)
     {
         if (c.Dock == DockStyle.None) c.Location = new Point(Padding.Left + c.Margin.Left, Padding.Top + c.Margin.Top);
