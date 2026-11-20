@@ -97,5 +97,5 @@ SplitSwan.app ──sudo -n──▶ /usr/local/libexec/splitswan-helper (root) 
 - 用 AppleScript（System Events）自動點按鈕時，SwiftUI 按鈕沒有可讀的標籤（name 為 missing value），要用 `position`／`size` 辨認，點之前先截圖確認是哪一顆。
 - **通知只在 App 位於 Applications 資料夾時有效**（ad-hoc 簽章也可以）；從 `build/` 或 `/tmp` 執行會直接回 `Notifications are not allowed`。測通知要用 `build.sh --install`。
 - `build.sh --install` 會結束執行中的 App，但 charon 的通道不會斷；新 App 啟動後依 `WantConnected` 決定要不要自動連線。
-- `Tests/run-tests.sh` 共 26 組（清單在腳本的 `ALL_GROUPS`），含時序判斷的組最後依序執行，完整跑一次約 2 分半；有其他程序同時改 Sources 時會出現「input file was modified during the build」，那不是測試失敗，重跑即可。
+- `Tests/run-tests.sh` 共 27 組（清單在腳本的 `ALL_GROUPS`），含時序判斷的組最後依序執行，完整跑一次約 2 分半；有其他程序同時改 Sources 時會出現「input file was modified during the build」，那不是測試失敗，重跑即可。
 - 狀態列的 `gitstatusd` 會在 `.git/` 留下 0 byte 的殘留 `index.lock`，git 寫入失敗時先用 stat 連續取樣確認 mtime 不動、已是過去式，再清除。

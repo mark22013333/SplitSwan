@@ -58,6 +58,50 @@ final class GlobalHotKey: ObservableObject {
         if let id = pluginForNumber[number] { onPress(id) }
     }
 
+    /// 只讀不寫：系統快捷鍵（plist 與 CopySymbolicHotKeys）、「服務」快捷鍵。只在錄製與開啟設定視窗時呼叫。
+    static func conflictSources() -> HotKeyConflicts.Sources {
+        let symbolic = CFPreferencesCopyAppValue("AppleSymbolicHotKeys" as CFString, "com.apple.symbolichotkeys" as CFString)
+        let services = CFPreferencesCopyAppValue("NSServicesStatus" as CFString, "pbs" as CFString)
+        var copied: Unmanaged<CFArray>?
+        let effective = CopySymbolicHotKeys(&copied) == noErr
+            ? (copied?.takeRetainedValue() as? [[String: Any]]).map(HotKeyConflicts.parseEffective) : nil
+        return HotKeyConflicts.Sources(symbolic: HotKeyConflicts.parseSymbolic(symbolic), effective: effective,
+                                       services: HotKeyConflicts.parseServices(services, layout: keyLayout()))
+    }
+
+    /// 目前鍵盤配置下每個鍵（不按與按住 Shift）打出的字元。注音等輸入法沒有 uchr，改用它對應的英數配置。
+    static func keyLayout() -> HotKeyConflicts.KeyLayout {
+        func layoutData(_ source: TISInputSource?) -> CFData? {
+            guard let source, let raw = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else { return nil }
+            return Unmanaged<CFData>.fromOpaque(raw).takeUnretainedValue()
+        }
+        let current = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue()
+        let ascii = TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue()
+        guard let data = layoutData(current) ?? layoutData(ascii) else { return [:] }
+        var layout: HotKeyConflicts.KeyLayout = [:]
+        let bytes = CFDataGetBytePtr(data)!
+        bytes.withMemoryRebound(to: UCKeyboardLayout.self, capacity: 1) { keyboard in
+            func translate(_ keyCode: UInt16, shift: Bool) -> String? {
+                var deadKeys: UInt32 = 0
+                var length = 0
+                var chars = [UniChar](repeating: 0, count: 4)
+                let state = shift ? UInt32(shiftKey >> 8) & 0xFF : 0
+                guard UCKeyTranslate(keyboard, keyCode, UInt16(kUCKeyActionDown), state, UInt32(LMGetKbdType()),
+                                     OptionBits(kUCKeyTranslateNoDeadKeysBit), &deadKeys, chars.count, &length, &chars) == noErr,
+                      length == 1 else { return nil }
+                return String(utf16CodeUnits: chars, count: length)
+            }
+            for keyCode in UInt16(0)..<128 {
+                let plain = translate(keyCode, shift: false)
+                let shifted = translate(keyCode, shift: true)
+                if let plain { layout[plain, default: []].append(.init(keyCode: UInt32(keyCode), shift: false)) }
+                // 數字鍵盤等按不按 Shift 都打出同一字元的鍵，只算不按 Shift
+                if let shifted, shifted != plain { layout[shifted, default: []].append(.init(keyCode: UInt32(keyCode), shift: true)) }
+            }
+        }
+        return layout
+    }
+
     private func installHandler() {
         guard handler == nil else { return }
         var type = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
