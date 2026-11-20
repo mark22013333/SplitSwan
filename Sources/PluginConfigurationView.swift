@@ -347,7 +347,11 @@ private struct HotKeyControl: View {
     @State private var testing: UUID?
     @State private var testPassed = false
     /// 測試逾時：這組沒送到，附上會攔截按鍵的 App
-    @State private var missed: (hotKey: PluginShortcuts.HotKey, apps: [String])?
+    @State private var missed: (hotKey: PluginShortcuts.HotKey, apps: [String], saved: Bool)?
+    /// 錄製時看實體鍵盤：鍵按住了卻沒收到 keyDown，就是被其他 App 攔走
+    @State private var watcher: Timer?
+    @State private var held: (code: UInt16, since: Date)?
+    @State private var delivered: UInt16?
     private static let testSeconds = 8
 
     var body: some View {
@@ -365,11 +369,15 @@ private struct HotKeyControl: View {
             }
             .controlSize(.small)
             .help("在任何 App 按下就開啟這個視窗。每支外掛可各設一組，變更立即生效，不需儲存。")
-            .alert("沒收到 \(missed?.hotKey.display ?? "")", isPresented: Binding(get: { missed != nil }, set: { if !$0 { missed = nil } })) {
+            .alert("收不到 \(missed?.hotKey.display ?? "")", isPresented: Binding(get: { missed != nil }, set: { if !$0 { missed = nil } })) {
                 Button("重新錄製") { missed = nil; startRecording() }
                     .keyboardShortcut(.defaultAction)
-                Button("再測一次") { missed = nil; startTest() }
-                Button("保留", role: .cancel) { missed = nil }
+                if missed?.saved == true {
+                    Button("再測一次") { missed = nil; startTest() }
+                    Button("保留", role: .cancel) { missed = nil }
+                } else {
+                    Button("取消", role: .cancel) { missed = nil }
+                }
             } message: {
                 Text(missedMessage)
             }
@@ -403,7 +411,8 @@ private struct HotKeyControl: View {
     private var missedMessage: String {
         let apps = missed?.apps ?? []
         let who = apps.isEmpty ? "" : "這台電腦上會先攔截按鍵的 App：\(apps.joined(separator: "、"))。"
-        return "\(Self.testSeconds) 秒內沒收到這組按鍵，多半是被其他 App 先攔走了。\(who)請換一組，或到那個 App 關掉同一組快捷鍵。"
+        let lead = missed?.saved == true ? "\(Self.testSeconds) 秒內沒收到這組按鍵" : "按下了但 SplitSwan 沒收到"
+        return "\(lead)，多半是被其他 App 先攔走了。\(who)請換一組，或到那個 App 關掉同一組快捷鍵。"
     }
 
     private var message: String? {
@@ -432,7 +441,7 @@ private struct HotKeyControl: View {
             try? await Task.sleep(for: .seconds(Self.testSeconds))
             guard testing == token else { return }
             stopTest()
-            missed = (hotKey, GlobalHotKey.keyInterceptors())
+            missed = (hotKey, GlobalHotKey.keyInterceptors(), true)
         }
     }
     private func stopTest() {
@@ -445,7 +454,13 @@ private struct HotKeyControl: View {
         stopTest()
         taken = nil
         hotKeys.suspended = true
+        held = nil
+        delivered = nil
+        watcher = Timer.scheduledTimer(withTimeInterval: 0.03, repeats: true) { _ in
+            MainActor.assumeIsolated { watchKeyboard() }
+        }
         recorder = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            delivered = event.keyCode
             if event.keyCode == 53 { stopRecording(); return nil }
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             typealias HK = PluginShortcuts.HotKey
@@ -472,7 +487,30 @@ private struct HotKeyControl: View {
             return nil
         }
     }
+    /// 修飾鍵與一般鍵都按住超過 0.25 秒、這個鍵的 keyDown 卻沒送到，就當成被攔走。不需輔助使用或輸入監控權限。
+    private func watchKeyboard() {
+        let modifierCodes: ClosedRange<UInt16> = 54...63
+        let down = (UInt16(0)..<128).first { !modifierCodes.contains($0) && $0 != 53
+            && CGEventSource.keyState(.hidSystemState, key: $0) }
+        guard let code = down, code != delivered else { held = nil; return }
+        guard let held, held.code == code else { held = (code, Date()); return }
+        guard Date().timeIntervalSince(held.since) > 0.25 else { return }
+        let flags = CGEventSource.flagsState(.hidSystemState)
+        typealias HK = PluginShortcuts.HotKey
+        let modifiers = (flags.contains(.maskControl) ? HK.control : 0) | (flags.contains(.maskAlternate) ? HK.option : 0)
+            | (flags.contains(.maskShift) ? HK.shift : 0) | (flags.contains(.maskCommand) ? HK.command : 0)
+        let key = GlobalHotKey.keyLayout().first { $0.value.contains { $0.keyCode == UInt32(code) && !$0.shift } }?.key ?? ""
+        let candidate = HK(keyCode: UInt32(code), modifiers: modifiers, key: key.uppercased())
+        guard candidate.isUsable else { return }
+        stopRecording()
+        NSSound.beep()
+        missed = (candidate, GlobalHotKey.keyInterceptors(), false)
+    }
+
     private func stopRecording() {
+        watcher?.invalidate()
+        watcher = nil
+        held = nil
         if let recorder { NSEvent.removeMonitor(recorder) }
         recorder = nil
         if hotKeys.suspended { hotKeys.suspended = false }
