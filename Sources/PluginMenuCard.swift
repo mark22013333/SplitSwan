@@ -85,11 +85,13 @@ struct PluginMenuCard: Equatable, Sendable {
         let label: String
         let value: String
 
-        /// 去控制字元後 label 1–20 字、value 1–200 字且原文不可多行；不合規回 nil，不截斷（截斷會複製到錯的內容）。
+        /// label 去控制字元後 1–20 字（只是顯示文字，清洗後照用）。value 原文不可含任何控制或格式字元（含換行、Tab），頭尾空白可去、1–200 字；不合規回 nil，不截斷也不默默改寫（會複製到錯的內容）。
         init?(label rawLabel: String, value rawValue: String) {
             guard !rawValue.unicodeScalars.contains(where: CharacterSet.newlines.contains) else { return nil }
             let label = PluginLogic.sanitize(rawLabel).trimmingCharacters(in: .whitespaces)
-            let value = PluginLogic.sanitize(rawValue).trimmingCharacters(in: .whitespaces)
+            let cleanValue = PluginLogic.sanitize(rawValue)
+            guard cleanValue == rawValue else { return nil }
+            let value = cleanValue.trimmingCharacters(in: .whitespaces)
             guard (1...Self.maxLabel).contains(label.count), (1...Self.maxValue).contains(value.count) else { return nil }
             self.label = label
             self.value = value

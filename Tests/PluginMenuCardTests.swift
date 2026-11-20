@@ -101,6 +101,8 @@ check("複製：有效 copy 解碼，value 去頭尾空白，其餘內容不變"
 let edgeCopy = copyCard(["label": "複製\u{202E}" + String(repeating: "鍵", count: 18), "value": String(repeating: "9", count: 200)])
 check("複製：剛好 20 字的 label 與 200 字的 value 可用，方向控制字元被移除",
       edgeCopy?.copy?.label == "複製" + String(repeating: "鍵", count: 18) && edgeCopy?.copy?.value.count == 200)
+check("複製：value 含 Tab 時整個 copy 為 nil，卡片其餘內容照常",
+      copyCard(["label": "複製 IP", "value": "203.0.113.\t7"]) == decoded && copyCard(["label": "複製 IP", "value": "203.0.113.7\t"])?.copy == nil)
 let invalidCopies: [(String, Any)] = [
     ("缺 label", ["value": "203.0.113.7"]),
     ("缺 value", ["label": "複製 IP"]),
