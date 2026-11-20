@@ -343,6 +343,12 @@ private struct HotKeyControl: View {
     @State private var savedConflicts: [String] = []
     /// 剛錄好但有衝突、等使用者決定的組合
     @State private var pending: (hotKey: PluginShortcuts.HotKey, conflicts: [String])?
+    /// 按一次測試：系統查不到其他 App 註冊了哪些熱鍵，只能實際按按看有沒有送到這裡
+    @State private var testing: UUID?
+    @State private var testPassed = false
+    /// 測試逾時：這組沒送到，附上會攔截按鍵的 App
+    @State private var missed: (hotKey: PluginShortcuts.HotKey, apps: [String])?
+    private static let testSeconds = 8
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 3) {
@@ -352,17 +358,34 @@ private struct HotKeyControl: View {
                     recorder == nil ? startRecording() : stopRecording()
                 }
                 .font(.body.monospaced())
-                if hotKey != nil, recorder == nil { Button("清除") { save(nil) } }
+                if hotKey != nil, recorder == nil {
+                    Button("測試") { startTest() }.disabled(testing != nil)
+                    Button("清除") { save(nil) }
+                }
             }
             .controlSize(.small)
             .help("在任何 App 按下就開啟這個視窗。每支外掛可各設一組，變更立即生效，不需儲存。")
+            .alert("沒收到 \(missed?.hotKey.display ?? "")", isPresented: Binding(get: { missed != nil }, set: { if !$0 { missed = nil } })) {
+                Button("重新錄製") { missed = nil; startRecording() }
+                    .keyboardShortcut(.defaultAction)
+                Button("再測一次") { missed = nil; startTest() }
+                Button("保留", role: .cancel) { missed = nil }
+            } message: {
+                Text(missedMessage)
+            }
             if let message {
                 Text(message).font(.caption).foregroundStyle(.orange)
             }
-            Text("按下沒反應時，多半是被其他 App 佔用，請換一組").font(.caption).foregroundStyle(.secondary)
+            if testing != nil, let hotKey {
+                Text("請按一次 \(hotKey.display) 測試（\(Self.testSeconds) 秒內）").font(.caption).foregroundStyle(.blue)
+            } else if testPassed {
+                Text("✓ 有收到，這組可以用").font(.caption).foregroundStyle(.green)
+            } else {
+                Text("錄好後會請你按一次，確認沒被其他 App 佔用").font(.caption).foregroundStyle(.secondary)
+            }
         }
         .onAppear { reload() }
-        .onDisappear { stopRecording() }
+        .onDisappear { stopRecording(); stopTest() }
         .alert("這組快捷鍵已有其他功能使用", isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } })) {
             Button("重新錄製") { pending = nil; startRecording() }
                 .keyboardShortcut(.defaultAction)
@@ -377,6 +400,12 @@ private struct HotKeyControl: View {
         }
     }
 
+    private var missedMessage: String {
+        let apps = missed?.apps ?? []
+        let who = apps.isEmpty ? "" : "這台電腦上會先攔截按鍵的 App：\(apps.joined(separator: "、"))。"
+        return "\(Self.testSeconds) 秒內沒收到這組按鍵，多半是被其他 App 先攔走了。\(who)請換一組，或到那個 App 關掉同一組快捷鍵。"
+    }
+
     private var message: String? {
         if let taken { return "這組已給「\(taken)」使用，請換一組。" }
         if hotKeys.conflicts.contains(pluginID) { return "系統不接受這組按鍵，請換一組。" }
@@ -389,7 +418,31 @@ private struct HotKeyControl: View {
         savedConflicts = hotKey.map { HotKeyConflicts.conflicts(of: $0, in: GlobalHotKey.conflictSources()) } ?? []
     }
 
+    private func startTest() {
+        stopTest()
+        guard let hotKey, !hotKeys.conflicts.contains(pluginID) else { return }
+        let token = UUID()
+        testing = token
+        hotKeys.expectPress(of: pluginID) {
+            guard testing == token else { return }
+            testing = nil
+            testPassed = true
+        }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(Self.testSeconds))
+            guard testing == token else { return }
+            stopTest()
+            missed = (hotKey, GlobalHotKey.keyInterceptors())
+        }
+    }
+    private func stopTest() {
+        hotKeys.cancelExpect(of: pluginID)
+        testing = nil
+        testPassed = false
+    }
+
     private func startRecording() {
+        stopTest()
         taken = nil
         hotKeys.suspended = true
         recorder = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -430,6 +483,7 @@ private struct HotKeyControl: View {
         reload()
         stopRecording()
         hotKeys.sync()
+        if value != nil { startTest() } else { stopTest() }
     }
 }
 

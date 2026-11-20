@@ -1,5 +1,6 @@
 // 系統全域熱鍵：Carbon RegisterEventHotKey 不需要輔助使用權限，App 不在前景時也收得到。
 // 每支有設定視窗的外掛各自註冊一組，按下就開啟那支外掛的設定視窗。
+import AppKit
 import Carbon.HIToolbox
 
 @MainActor
@@ -16,6 +17,11 @@ final class GlobalHotKey: ObservableObject {
     private var pluginForNumber: [UInt32: String] = [:]
     private var nextNumber: UInt32 = 1
     private var handler: EventHandlerRef?
+    /// 測試中的外掛：下一次按下改呼叫 done，不開視窗。
+    private var probe: (id: String, done: () -> Void)?
+
+    func expectPress(of id: String, _ done: @escaping () -> Void) { probe = (id, done) }
+    func cancelExpect(of id: String) { if probe?.id == id { probe = nil } }
 
     /// 有設定視窗且沒有載入問題的外掛。
     static func candidates(_ plugins: [PluginRunner.Plugin]) -> [PluginRunner.Plugin] {
@@ -55,7 +61,31 @@ final class GlobalHotKey: ObservableObject {
     }
 
     private func pressed(_ number: UInt32) {
-        if let id = pluginForNumber[number] { onPress(id) }
+        guard let id = pluginForNumber[number] else { return }
+        if let probe, probe.id == id {
+            self.probe = nil
+            probe.done()
+            return
+        }
+        onPress(id)
+    }
+
+    /// 會在按鍵送到其他程式之前攔下的 App（不含系統程序與只監聽的）。系統不提供它們攔哪幾組，只能列出可能的對象。
+    static func keyInterceptors() -> [String] {
+        var count: UInt32 = 0
+        guard CGGetEventTapList(0, nil, &count) == .success, count > 0 else { return [] }
+        var taps = [CGEventTapInformation](repeating: CGEventTapInformation(), count: Int(count))
+        guard CGGetEventTapList(count, &taps, &count) == .success else { return [] }
+        let keyDown = CGEventMask(1) << CGEventType.keyDown.rawValue
+        let me = ProcessInfo.processInfo.processIdentifier
+        let names = taps.prefix(Int(count)).compactMap { tap -> String? in
+            guard tap.enabled, tap.options != .listenOnly, tap.eventsOfInterest & keyDown != 0,
+                  pid_t(tap.tappingProcess) != me,
+                  let app = NSRunningApplication(processIdentifier: pid_t(tap.tappingProcess)),
+                  app.bundleURL?.path.hasPrefix("/System/") == false else { return nil }
+            return app.localizedName
+        }
+        return Array(Set(names)).sorted()
     }
 
     /// 只讀不寫：系統快捷鍵（plist 與 CopySymbolicHotKeys）、「服務」快捷鍵。只在錄製與開啟設定視窗時呼叫。
