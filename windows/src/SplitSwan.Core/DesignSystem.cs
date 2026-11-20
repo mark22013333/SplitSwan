@@ -139,3 +139,28 @@ public static class Motion
     public static double StaggerTotal(int count, bool reduced) =>
         count <= 0 ? 0 : StaggerDelay(count - 1, reduced) + TransitionSeconds(reduced);
 }
+
+/// <summary>
+/// 圓角卡片的幾何判斷（托盤端 CardPanel 畫背景時用）。座標與尺寸都是裝置像素。
+/// </summary>
+public static class CardGeometry
+{
+    /// <summary>框線與抗鋸齒邊緣佔用的寬度：離外緣這麼近的像素不算卡片內部。</summary>
+    public const int EdgeAllowance = 2;
+
+    /// <summary>
+    /// 重繪範圍是否完全落在卡片內部：不碰外緣的框線，也不碰四個角落 radius×radius 的圓角區。
+    /// 是的話整塊都是卡片底色，可以一次填色，不必先清成父層底色再畫圓角。
+    /// </summary>
+    public static bool ClipInsideBody(int x, int y, int width, int height, int cardWidth, int cardHeight, int radius)
+    {
+        if (width <= 0 || height <= 0) return true;
+        var right = x + width;
+        var bottom = y + height;
+        if (x < EdgeAllowance || y < EdgeAllowance || right > cardWidth - EdgeAllowance || bottom > cardHeight - EdgeAllowance)
+            return false;
+        var r = Math.Max(radius, EdgeAllowance);
+        bool Hits(int cx, int cy) => x < cx + r && right > cx && y < cy + r && bottom > cy;
+        return !(Hits(0, 0) || Hits(cardWidth - r, 0) || Hits(0, cardHeight - r) || Hits(cardWidth - r, cardHeight - r));
+    }
+}

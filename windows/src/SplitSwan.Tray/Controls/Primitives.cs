@@ -332,8 +332,17 @@ internal class CardPanel : Panel, IThemed
     protected override void OnPaintBackground(PaintEventArgs e)
     {
         var g = e.Graphics;
+        var radius = LogicalToDeviceUnits(Radius);
+        // 透明子控制項重繪時借用這裡畫背景，而且沒有雙重緩衝、直接畫到螢幕：
+        // 先清成父層底色再填卡片色的話，兩步之間會閃出父層底色。範圍碰不到圓角與框線時一次填卡片色。
+        var clip = Rectangle.Ceiling(g.VisibleClipBounds);
+        if (CardGeometry.ClipInsideBody(clip.X, clip.Y, clip.Width, clip.Height, Width, Height, radius))
+        {
+            g.Clear(Fill);
+            return;
+        }
         g.Clear(Theme.OpaqueBack(this));
-        Theme.FillRound(g, ClientRectangle, LogicalToDeviceUnits(Radius), Fill, Border);
+        Theme.FillRound(g, ClientRectangle, radius, Fill, Border);
     }
 
     protected override void OnPaint(PaintEventArgs e) { }

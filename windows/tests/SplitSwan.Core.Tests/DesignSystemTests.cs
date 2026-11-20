@@ -123,6 +123,25 @@ public class MotionTests
     public void ShakePadding_ReducedMotion_NeverMoves() =>
         Assert.All(Enumerable.Range(0, 101), i => Assert.Equal((14, 14), Motion.ShakePadding(14, 14, i / 100.0, true, 9)));
 
+    [Theory]
+    // 卡片 780×212、圓角 15：內部的子控制項範圍
+    [InlineData(36, 36, 732, 152, true)]
+    [InlineData(135, 36, 633, 37, true)]
+    [InlineData(36, 143, 114, 45, true)]
+    // 整張卡片、碰到框線、碰到圓角
+    [InlineData(0, 0, 780, 212, false)]
+    [InlineData(1, 30, 100, 20, false)]
+    [InlineData(100, 30, 679, 20, false)]
+    [InlineData(10, 10, 20, 20, false)]
+    [InlineData(760, 195, 10, 10, false)]
+    [InlineData(20, 205, 10, 10, false)]
+    // 貼著圓角區外側（x 從 15 開始）不算碰到
+    [InlineData(15, 2, 100, 10, true)]
+    [InlineData(14, 2, 100, 10, false)]
+    // 空範圍
+    [InlineData(0, 0, 0, 0, true)]
+    public void CardGeometry_ClipInsideBody(int x, int y, int w, int h, bool expected) =>
+        Assert.Equal(expected, CardGeometry.ClipInsideBody(x, y, w, h, 780, 212, 15));
 
     [Theory]
     [InlineData(0, 0)]
