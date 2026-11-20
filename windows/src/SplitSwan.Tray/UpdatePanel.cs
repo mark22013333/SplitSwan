@@ -131,13 +131,14 @@ internal sealed class UpdatePanel : TableLayoutPanel
         else _check.Finish(succeeded: !u.CheckFailed);
         _check.Enabled = !u.IsChecking && !u.IsInstalling;
 
+        var actions = UpdateActions.For(newer, hasAssets: u.Latest?.Assets is not null, u.InstallFailed);
         _newer.Text = newer is null ? "" : $"有新版本 {newer}";
-        _newer.Visible = newer is not null;
-        _install.Visible = newer is not null && u.Latest?.Assets is not null;
+        _newer.Visible = actions.ShowNewer;
+        _install.Visible = actions.ShowInstall;
         _install.Enabled = u.CanInstall;
         _install.Text = newer is null ? "下載並安裝" : $"下載並安裝 {newer}";
-        _open.Visible = newer is not null || u.InstallFailed;
-        _newerRow.Visible = _newer.Visible || _install.Visible || _open.Visible;
+        _open.Visible = actions.ShowOpen;
+        _newerRow.Visible = actions.ShowRow;
 
         // 進度、失敗原因與其他說明（例：新版本沒有附上可自動安裝的檔案）
         _progress.Visible = u.IsInstalling;

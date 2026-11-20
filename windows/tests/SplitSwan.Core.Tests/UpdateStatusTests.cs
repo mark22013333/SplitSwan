@@ -75,3 +75,66 @@ public class UpdateStatusTests
         }
     }
 }
+
+// 「檢查更新」卡片上「有新版本」那一列的項目（UpdatePanel 依此設定 Visible，不回頭讀子控制項）
+
+public class UpdateActionsTests
+{
+    [Fact]
+    public void NoNewerVersion_RowHidden()
+    {
+        var a = UpdateActions.For(null, hasAssets: false, installFailed: false);
+        Assert.Equal(new UpdateActions(false, false, false), a);
+        Assert.False(a.ShowRow);
+    }
+
+    [Fact]
+    public void NewerWithAssets_ShowsTextInstallAndOpen()
+    {
+        var a = UpdateActions.For("9.9.9", hasAssets: true, installFailed: false);
+        Assert.Equal(new UpdateActions(true, true, true), a);
+        Assert.True(a.ShowRow);
+    }
+
+    [Fact]
+    public void NewerWithoutAssets_NoInstallButtonButStillOpen()
+    {
+        var a = UpdateActions.For("9.9.9", hasAssets: false, installFailed: false);
+        Assert.Equal(new UpdateActions(true, false, true), a);
+        Assert.True(a.ShowRow);
+    }
+
+    [Fact]
+    public void InstallFailedWithoutNewer_OnlyOpen()
+    {
+        var a = UpdateActions.For(null, hasAssets: false, installFailed: true);
+        Assert.Equal(new UpdateActions(false, false, true), a);
+        Assert.True(a.ShowRow);
+    }
+
+    [Fact]
+    public void AssetsWithoutNewer_NeverShowInstall()
+    {
+        foreach (var failed in new[] { false, true })
+            Assert.False(UpdateActions.For(null, hasAssets: true, installFailed: failed).ShowInstall);
+    }
+
+    [Theory]
+    [InlineData(false, false, false, false)]
+    [InlineData(true, false, false, true)]
+    [InlineData(false, true, false, true)]
+    [InlineData(false, false, true, true)]
+    [InlineData(true, true, true, true)]
+    public void ShowRow_IsAnyItem(bool newer, bool install, bool open, bool row) =>
+        Assert.Equal(row, new UpdateActions(newer, install, open).ShowRow);
+
+    [Fact]
+    public void FromHiddenToNewer_RowBecomesVisible()
+    {
+        // 先前沒有新版本（整列隱藏），這次檢查找到新版：結果只取決於目前狀態，與先前顯示與否無關
+        var before = UpdateActions.For(null, hasAssets: false, installFailed: false);
+        var after = UpdateActions.For("9.9.9", hasAssets: true, installFailed: false);
+        Assert.False(before.ShowRow);
+        Assert.True(after.ShowRow && after.ShowInstall && after.ShowNewer);
+    }
+}
