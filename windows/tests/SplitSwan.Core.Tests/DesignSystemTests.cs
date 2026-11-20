@@ -144,6 +144,38 @@ public class MotionTests
         Assert.Equal(expected, CardGeometry.ClipInsideBody(x, y, w, h, 780, 212, 15));
 
     [Theory]
+    // 卡片 780×212、圓角 15、EdgeAllowance 2：四個邊都在中段取樣（遠離圓角），只測框線規則。
+    // 剛好貼邊（離外緣 2 px）算內部，再往外 1 px 就算碰到框線。
+    [InlineData(2, 100, 10, 10, true)]
+    [InlineData(1, 100, 10, 10, false)]
+    [InlineData(300, 2, 10, 10, true)]
+    [InlineData(300, 1, 10, 10, false)]
+    [InlineData(768, 100, 10, 10, true)]
+    [InlineData(769, 100, 10, 10, false)]
+    [InlineData(300, 200, 10, 10, true)]
+    [InlineData(300, 201, 10, 10, false)]
+    public void CardGeometry_ClipInsideBody_EdgeBoundaries(int x, int y, int w, int h, bool expected) =>
+        Assert.Equal(expected, CardGeometry.ClipInsideBody(x, y, w, h, 780, 212, 15));
+
+    [Theory]
+    // 框線規則放行（離四邊都 ≥ 2 px），只被圓角規則擋下：左上、右上、左下、右下各一
+    [InlineData(5, 5, 5, 5, false)]
+    [InlineData(770, 5, 5, 5, false)]
+    [InlineData(5, 200, 5, 5, false)]
+    [InlineData(770, 200, 5, 5, false)]
+    // 緊貼各圓角區外側（水平或垂直方向剛好不重疊）算內部
+    [InlineData(15, 2, 100, 10, true)]
+    [InlineData(2, 15, 10, 100, true)]
+    [InlineData(650, 2, 115, 10, true)]
+    [InlineData(768, 15, 10, 100, true)]
+    [InlineData(2, 97, 10, 100, true)]
+    [InlineData(15, 200, 100, 10, true)]
+    [InlineData(768, 97, 10, 100, true)]
+    [InlineData(650, 200, 115, 10, true)]
+    public void CardGeometry_ClipInsideBody_EachCornerOnly(int x, int y, int w, int h, bool expected) =>
+        Assert.Equal(expected, CardGeometry.ClipInsideBody(x, y, w, h, 780, 212, 15));
+
+    [Theory]
     [InlineData(0, 0)]
     [InlineData(1, 0.04)]
     [InlineData(5, 0.2)]
