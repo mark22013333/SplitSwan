@@ -18,11 +18,20 @@ enum HotKeyConflicts {
         let combo: Combo?
     }
 
+    /// 「服務」快捷鍵換算成的按鍵。同一個字元可能有好幾個鍵打得出來（例如數字鍵盤），任一組相同就算衝突。
     struct Service: Equatable {
         let name: String
-        let key: String
-        let modifiers: UInt32
+        let combos: Set<Combo>
     }
+
+    /// 目前鍵盤配置下打出某個字元的一個鍵；`shift` 表示要按住 Shift 才打得出來。
+    struct LayoutKey: Hashable {
+        let keyCode: UInt32
+        let shift: Bool
+    }
+
+    /// 字元 → 打得出它的鍵，由讀鍵盤配置的邊界（GlobalHotKey.swift）產生。
+    typealias KeyLayout = [String: [LayoutKey]]
 
     /// 錄製或開啟設定視窗時從系統讀一次。`effective` 是 CopySymbolicHotKeys 的結果（含沒被改過的系統預設、
     /// 只留啟用中的）；讀取失敗時為 nil，只比對 plist 裡改過的項目。
@@ -84,7 +93,7 @@ enum HotKeyConflicts {
         })
     }
 
-    /// 「服務」的按鍵格式：@＝⌘、$＝⇧、~＝⌥、^＝⌃，最後一個字元是按鍵。
+    /// 「服務」的按鍵格式：@＝⌘、$＝⇧、~＝⌥、^＝⌃，最後一個字元是按鍵，原樣保留大小寫。
     static func parseKeyEquivalent(_ text: String) -> (key: String, modifiers: UInt32)? {
         guard let last = text.last else { return nil }
         var modifiers: UInt32 = 0
@@ -97,18 +106,25 @@ enum HotKeyConflicts {
             default: return nil
             }
         }
-        return (String(last).uppercased(), modifiers)
+        return (String(last), modifiers)
+    }
+
+    /// 服務的字元換成按鍵：要按 Shift 才打得出的字元（大寫字母、⇧4 的「$」）本身就帶 ⇧，跟錄製時的 keyCode 比對。
+    static func combos(key: String, modifiers: UInt32, layout: KeyLayout) -> Set<Combo> {
+        Set((layout[key] ?? []).map { Combo(keyCode: $0.keyCode, modifiers: (modifiers | ($0.shift ? HK.shift : 0)) & modifierMask) })
     }
 
     /// `pbs` 網域的 NSServicesStatus：鍵是「Bundle ID - 選單名稱 - 訊息」，只取有 key_equivalent 且沒有停用的。
-    static func parseServices(_ raw: Any?) -> [Service] {
+    /// 目前鍵盤配置打不出的字元無從比對，略過。
+    static func parseServices(_ raw: Any?, layout: KeyLayout) -> [Service] {
         guard let dict = raw as? [String: Any] else { return [] }
         return dict.compactMap { key, value in
             guard let item = value as? [String: Any],
                   let text = item["key_equivalent"] as? String,
                   let parsed = parseKeyEquivalent(text) else { return nil }
             if let on = item["enabled_services_menu"] as? NSNumber, !on.boolValue { return nil }
-            return Service(name: serviceName(key), key: parsed.key, modifiers: parsed.modifiers)
+            let combos = combos(key: parsed.key, modifiers: parsed.modifiers, layout: layout)
+            return combos.isEmpty ? nil : Service(name: serviceName(key), combos: combos)
         }
         .sorted { $0.name < $1.name }
     }
@@ -144,7 +160,7 @@ enum HotKeyConflicts {
             }
             if !found && names.isEmpty { names.append("macOS 系統快捷鍵") }
         }
-        for s in sources.services where s.modifiers == target.modifiers && s.key == hotKey.key.uppercased() {
+        for s in sources.services where s.combos.contains(target) {
             names.append("服務「\(s.name)」")
         }
         var seen = Set<String>()

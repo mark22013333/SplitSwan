@@ -370,6 +370,8 @@ private struct HotKeyControl: View {
                 if let pending { save(pending.hotKey) }
                 pending = nil
             }
+            // 同一顆按鈕同時設 cancel 與 defaultAction 時只會綁 Return，Esc 要另一顆取消鈕
+            Button("取消", role: .cancel) { pending = nil }
         } message: {
             Text("\(pending?.hotKey.display ?? "") 與\(pending?.conflicts.joined(separator: "、") ?? "")相同，按下時可能先被它攔走。")
         }

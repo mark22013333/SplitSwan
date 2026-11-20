@@ -16,9 +16,17 @@ func symbolic(_ id: Int, enabled: Bool, _ params: [Int]? = nil) -> (String, Any)
     if let params { item["value"] = ["parameters": params.map { NSNumber(value: $0) }, "type": "standard"] }
     return (String(id), item)
 }
+/// 虛構的美式配置片段：O 鍵（31）、4 鍵（21）與數字鍵盤的 4（86）
+let usLayout: C.KeyLayout = [
+    "o": [.init(keyCode: 31, shift: false)], "O": [.init(keyCode: 31, shift: true)],
+    "4": [.init(keyCode: 21, shift: false), .init(keyCode: 86, shift: false)], "$": [.init(keyCode: 21, shift: true)],
+]
 func sources(symbolic items: [(String, Any)] = [], effective: [[String: Any]]? = nil, services: [String: Any] = [:]) -> C.Sources {
     C.Sources(symbolic: C.parseSymbolic(Dictionary(items, uniquingKeysWith: { a, _ in a })),
-              effective: effective.map(C.parseEffective), services: C.parseServices(services))
+              effective: effective.map(C.parseEffective), services: C.parseServices(services, layout: usLayout))
+}
+func service(_ keyEquivalent: String) -> [String: Any] {
+    ["com.example.tool - 範例服務 - run": ["key_equivalent": keyEquivalent]]
 }
 func effective(_ code: Int, _ mods: Int, enabled: Bool = true) -> [String: Any] {
     ["kHISymbolicHotKeyCode": NSNumber(value: code), "kHISymbolicHotKeyModifiers": NSNumber(value: mods),
@@ -30,8 +38,8 @@ check("NSEvent ⌘⇧（1179648）轉成 Carbon ⌘⇧", C.carbonModifiers(cocoa
 check("NSEvent ⌃⇧⌘（1441792）轉成 Carbon", C.carbonModifiers(cocoa: 1_441_792) == HK.command | HK.shift | HK.control)
 check("NSEvent ⌃⌥（786432）轉成 Carbon", C.carbonModifiers(cocoa: 786_432) == HK.control | HK.option)
 check("NSEvent fn 位元不轉成任何 Carbon 修飾鍵", C.carbonModifiers(cocoa: 0x80_0000) == 0)
-let service = C.parseKeyEquivalent("@$o")
-check("服務格式 @$o 是 ⌘⇧O", service?.key == "O" && service?.modifiers == HK.command | HK.shift)
+let parsedService = C.parseKeyEquivalent("@$o")
+check("服務格式 @$o 解析出 ⌘⇧ 與原樣的 o", parsedService?.key == "o" && parsedService?.modifiers == HK.command | HK.shift)
 let all4 = C.parseKeyEquivalent("^~$@K")
 check("服務格式 ^~$@K 四個修飾鍵都認得", all4?.modifiers == HK.command | HK.shift | HK.option | HK.control)
 check("服務格式含未知符號時不採用", C.parseKeyEquivalent("@#O") == nil && C.parseKeyEquivalent("") == nil)
@@ -46,6 +54,20 @@ check("⌘⇧O 撞到不認得編號的系統快捷鍵時寫出編號",
 check("⌘⇧O 沒有任何來源佔用時沒有衝突", C.conflicts(of: cmdShiftO, in: sources(effective: [effective(21, 768)])).isEmpty)
 let disabledService = ["com.example.reader - 開啟閱讀器 - openReader": ["key_equivalent": "@$O", "enabled_services_menu": NSNumber(value: false)]]
 check("停用的服務不算衝突", C.conflicts(of: cmdShiftO, in: sources(services: disabledService)).isEmpty)
+
+// 服務以鍵碼比對：錄製時 ⌘⇧4 的字元是「$」，大寫字母隱含 Shift
+let cmdShift4AsRecorded = HK(keyCode: 21, modifiers: HK.command | HK.shift, key: "$")
+let cmdO = HK(keyCode: 31, modifiers: HK.command, key: "O")
+check("⌘⇧4（錄到的字元是 $）撞到 @$4 的服務", C.conflicts(of: cmdShift4AsRecorded, in: sources(services: service("@$4"))) == ["服務「範例服務」"])
+check("⌘⇧4 也撞到寫成 @$ 的服務", C.conflicts(of: cmdShift4AsRecorded, in: sources(services: service("@$"))) == ["服務「範例服務」"])
+check("@O 的大寫字母隱含 Shift，撞到 ⌘⇧O", C.conflicts(of: cmdShiftO, in: sources(services: service("@O"))) == ["服務「範例服務」"])
+check("@O 不算 ⌘O 的衝突", C.conflicts(of: cmdO, in: sources(services: service("@O"))).isEmpty)
+check("小寫 @o 不等於 ⌘⇧O", C.conflicts(of: cmdShiftO, in: sources(services: service("@o"))).isEmpty)
+check("小寫 @o 撞到 ⌘O", C.conflicts(of: cmdO, in: sources(services: service("@o"))) == ["服務「範例服務」"])
+check("數字鍵盤也打得出的字元，兩個鍵都算",
+      C.parseServices(service("@4"), layout: usLayout).first?.combos
+          == [C.Combo(keyCode: 21, modifiers: HK.command), C.Combo(keyCode: 86, modifiers: HK.command)])
+check("目前配置打不出的字元略過", C.parseServices(service("@é"), layout: usLayout).isEmpty)
 check("服務名稱取中間段，含「 - 」也保留",
       C.serviceName("com.example - 甲 - 乙 - doIt") == "甲 - 乙" && C.serviceName("沒有分隔") == "沒有分隔")
 
