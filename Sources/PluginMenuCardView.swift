@@ -1,5 +1,5 @@
 // 外掛子選單頂端的資訊卡片畫面（SwiftUI，放在 NSMenuItem.view 的 NSHostingView 裡）。
-// 只依 PluginMenuCard 繪製；圖表用 Shape 手繪，不依賴 Swift Charts。卡片不可點。
+// 只依 PluginMenuCard 繪製；圖表用 Shape 手繪，不依賴 Swift Charts。卡片本身不可點，只有選填的複製按鈕可按。
 import AppKit
 import SwiftUI
 
@@ -44,15 +44,23 @@ struct PluginMenuCardView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                Circle().fill(card.tone.color).frame(width: 7, height: 7)
-                Text(card.headline)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 6) {
+                    Circle().fill(card.tone.color).frame(width: 7, height: 7)
+                    Text(card.headline)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(card.copy == nil ? nil : 1)
+                        .truncationMode(.tail)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(Capsule().fill(card.tone.color.opacity(0.18)))
+                if let copy = card.copy {
+                    Spacer(minLength: 0)
+                    CopyButton(copy: copy).frame(width: 22, height: 22).accessibilityHidden(true)
+                }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(Capsule().fill(card.tone.color.opacity(0.18)))
 
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 if let detail = card.detail {
@@ -72,6 +80,72 @@ struct PluginMenuCardView: View {
             .font(.system(size: 11))
         }
         .accessibilityElement(children: .combine)
+        .accessibilityActions {
+            if let copy = card.copy {
+                Button(copy.label) { CopyButton.write(copy.value) }
+            }
+        }
+    }
+}
+
+/// 標題列右側的複製按鈕；按下後圖示換成綠色打勾 1.5 秒。只寫剪貼簿，不執行外掛。
+private struct CopyButton: NSViewRepresentable {
+    let copy: PluginMenuCard.Copy
+
+    static func write(_ value: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+    }
+
+    func makeNSView(context: Context) -> CopyFeedbackButton { CopyFeedbackButton(copy: copy) }
+    func updateNSView(_ button: CopyFeedbackButton, context: Context) { button.copy = copy }
+}
+
+/// 用 AppKit 按鈕與 Core Animation 換圖示：選單追蹤滑鼠時 SwiftUI 動畫幾乎不前進，打勾會停在畫到一半。
+private final class CopyFeedbackButton: NSButton {
+    static let feedbackSeconds = 1.5
+
+    var copy: PluginMenuCard.Copy {
+        didSet { toolTip = copy.label }
+    }
+    private var presses = 0
+
+    init(copy: PluginMenuCard.Copy) {
+        self.copy = copy
+        super.init(frame: NSRect(x: 0, y: 0, width: 22, height: 22))
+        isBordered = false
+        imagePosition = .imageOnly
+        focusRingType = .none
+        wantsLayer = true
+        toolTip = copy.label
+        target = self
+        action = #selector(press)
+        show(copied: false, animated: false)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    @objc private func press() {
+        CopyButton.write(copy.value)
+        presses += 1
+        let press = presses
+        show(copied: true, animated: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.feedbackSeconds) { [weak self] in
+            guard let self, self.presses == press else { return }
+            self.show(copied: false, animated: true)
+        }
+    }
+
+    private func show(copied: Bool, animated: Bool) {
+        if animated, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            let fade = CATransition()
+            fade.type = .fade
+            fade.duration = 0.2
+            layer?.add(fade, forKey: "swap")
+        }
+        image = NSImage(systemSymbolName: copied ? "checkmark" : "doc.on.doc", accessibilityDescription: copy.label)?
+            .withSymbolConfiguration(.init(pointSize: 12, weight: .semibold))
+        contentTintColor = copied ? .systemGreen : .secondaryLabelColor
     }
 }
 

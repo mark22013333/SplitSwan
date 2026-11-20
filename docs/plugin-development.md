@@ -69,7 +69,7 @@ resources/           # 可選，須逐檔列出
 
 ## 執行與設定介面
 
-沿用 README 的 SwiftBar 文字輸出與 [設定協定 v1](plugin-settings.md)。`bash=` 只能指向外掛執行入口本身；使用環境變數組合入口絕對路徑。`settings: true` 讓管理列在外掛尚未執行時也能提供設定入口。
+沿用 README 的 SwiftBar 文字輸出與 [設定協定 v1](plugin-settings.md)。`bash=` 只能指向外掛執行入口本身；使用環境變數組合入口絕對路徑。`settings: true` 讓管理列在外掛尚未執行時也能提供設定入口。標題行的選單資訊卡片（`card=`）與它選填的複製按鈕見 [設定協定的「選單資訊卡片」](plugin-settings.md#選單資訊卡片選填)；複製按鈕由 App 直接寫入剪貼簿，不會執行外掛。
 
 | 環境變數 | 用途 |
 |---|---|

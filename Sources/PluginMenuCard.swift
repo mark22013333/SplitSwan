@@ -1,5 +1,5 @@
 // 外掛子選單頂端的資訊卡片：標題行 `card=<base64url JSON>` 的解碼與驗證（純邏輯）。
-// 外掛輸出不受信任：任何欄位不合規就整張卡片忽略，選單照舊只顯示文字列。畫面只依本型別繪製（PluginMenuCardView.swift）。
+// 外掛輸出不受信任：任何欄位不合規就整張卡片忽略，選單照舊只顯示文字列；唯一例外是選填的 copy，不合規只拿掉按鈕。畫面只依本型別繪製（PluginMenuCardView.swift）。
 import Foundation
 
 struct PluginMenuCard: Equatable, Sendable {
@@ -77,8 +77,28 @@ struct PluginMenuCard: Equatable, Sendable {
         }
     }
 
+    /// 標題列右側的複製按鈕：按下時由 App 把 value 寫進剪貼簿，不執行外掛。
+    struct Copy: Equatable, Sendable {
+        static let maxLabel = 20
+        static let maxValue = 200
+
+        let label: String
+        let value: String
+
+        /// 去控制字元後 label 1–20 字、value 1–200 字且原文不可多行；不合規回 nil，不截斷（截斷會複製到錯的內容）。
+        init?(label rawLabel: String, value rawValue: String) {
+            guard !rawValue.unicodeScalars.contains(where: CharacterSet.newlines.contains) else { return nil }
+            let label = PluginLogic.sanitize(rawLabel).trimmingCharacters(in: .whitespaces)
+            let value = PluginLogic.sanitize(rawValue).trimmingCharacters(in: .whitespaces)
+            guard (1...Self.maxLabel).contains(label.count), (1...Self.maxValue).contains(value.count) else { return nil }
+            self.label = label
+            self.value = value
+        }
+    }
+
     let headline: String
     let tone: Tone
+    let copy: Copy?
     let detail: String?
     let enabled: Bool
     let timeline: Timeline?
@@ -153,10 +173,19 @@ struct PluginMenuCard: Equatable, Sendable {
         }
         struct WireCondition: Decodable { let label, value: String; let tone: Tone }
         struct WireDay: Decodable { let date, weekday: String; let time: String?; let result: Result }
+        /// copy 是後來加的選填欄位：形狀不對只讓按鈕消失，不讓整張卡片解碼失敗。
+        struct WireCopy: Decodable {
+            let copy: Copy?
+            init(from decoder: Decoder) {
+                struct Raw: Decodable { let label, value: String }
+                copy = (try? Raw(from: decoder)).flatMap { Copy(label: $0.label, value: $0.value) }
+            }
+        }
 
         let version: Int
         let headline: String
         let tone: Tone
+        let copy: WireCopy?
         let detail: String?
         let enabled: Bool
         let timeline: WireTimeline?
@@ -205,7 +234,7 @@ struct PluginMenuCard: Equatable, Sendable {
             }
 
             return PluginMenuCard(
-                headline: headline, tone: tone,
+                headline: headline, tone: tone, copy: copy?.copy,
                 detail: detail.map { text($0, 80) }.flatMap { $0.isEmpty ? nil : $0 },
                 enabled: enabled, timeline: line, conditions: conds, history: days,
                 footnote: footnote.map { text($0, 120) }.flatMap { $0.isEmpty ? nil : $0 })
