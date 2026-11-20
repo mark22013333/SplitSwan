@@ -29,3 +29,22 @@ public sealed record UpdateStatus(StatusTone Tone, string Badge, string Summary)
         return new(StatusTone.Idle, "尚未檢查", "按「檢查更新」確認是否有新版本。");
     }
 }
+
+/// <summary>
+/// 「檢查更新」卡片上「有新版本」那一列要顯示哪些項目。整列是否顯示由這三項推得，
+/// 不可回頭讀子控制項的 Visible：WinForms 的 Visible 讀取值含父層，整列隱藏時子項一律讀到 false，整列就再也打不開。
+/// </summary>
+/// <param name="ShowNewer">「有新版本 X」文字。</param>
+/// <param name="ShowInstall">「下載並安裝 X」按鈕。</param>
+/// <param name="ShowOpen">「前往下載」按鈕。</param>
+public sealed record UpdateActions(bool ShowNewer, bool ShowInstall, bool ShowOpen)
+{
+    /// <summary>整列是否顯示：任一項要顯示就顯示。</summary>
+    public bool ShowRow => ShowNewer || ShowInstall || ShowOpen;
+
+    /// <param name="newerVersion">比目前新的版本；沒有為 null。</param>
+    /// <param name="hasAssets">新版本附有可自動安裝的檔案（zip 與簽章）。</param>
+    /// <param name="installFailed">上一次安裝失敗（可改用「前往下載」手動安裝）。</param>
+    public static UpdateActions For(string? newerVersion, bool hasAssets, bool installFailed) =>
+        new(newerVersion is not null, newerVersion is not null && hasAssets, newerVersion is not null || installFailed);
+}
