@@ -50,11 +50,19 @@ internal class ThemedButton : Button, IThemed
 
     private int Px(int logical) => LogicalToDeviceUnits(logical);
 
+    /// <summary>文字左側要不要留圖示位置（16×16，與文字相隔 6）；衍生類別在 <see cref="PaintIcon"/> 畫圖示。</summary>
+    protected virtual bool HasIcon => false;
+
+    /// <summary>畫文字左側的圖示（r 是 16×16 的圖示位置，ink 是目前的文字色）。</summary>
+    protected virtual void PaintIcon(Graphics g, Rectangle r, Color ink) { }
+
+    private int IconWidth => HasIcon ? Px(16) + Px(6) : 0;
+
     public override Size GetPreferredSize(Size proposedSize)
     {
         var text = Theme.Measure(Text, Font);
         var arrow = DropDownArrow ? Px(14) : 0;
-        return new Size(text.Width + Px(28) + arrow, Math.Max(Px(30), text.Height + Px(12)));
+        return new Size(text.Width + Px(28) + arrow + IconWidth, Math.Max(Px(30), text.Height + Px(12)));
     }
 
     protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
@@ -113,6 +121,17 @@ internal class ThemedButton : Button, IThemed
             var s = Px(3);
             using var pen = new Pen(ink, Math.Max(1f, Px(1) * 1.4f));
             g.DrawLines(pen, [new Point(cx - s, cy - s / 2), new Point(cx, cy + s / 2), new Point(cx + s, cy - s / 2)]);
+        }
+        if (HasIcon)
+        {
+            // 圖示＋文字整組置中（文字太長時圖示貼左、文字以省略號結尾）
+            var tw = Math.Min(Theme.Measure(Text, Font).Width, Math.Max(0, textRect.Width - IconWidth - Px(8)));
+            var left = textRect.X + Math.Max(Px(4), (textRect.Width - IconWidth - tw) / 2);
+            var icon = Px(16);
+            PaintIcon(g, new Rectangle(left, textRect.Y + (textRect.Height - icon) / 2, icon, icon), ink);
+            textRect = new Rectangle(left + IconWidth, textRect.Y, tw + Px(2), textRect.Height);
+            TextRenderer.DrawText(g, Text, Font, textRect, ink, Theme.TextFlags | TextFormatFlags.VerticalCenter);
+            return;
         }
         TextRenderer.DrawText(g, Text, Font, textRect, ink,
             Theme.TextFlags | TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);

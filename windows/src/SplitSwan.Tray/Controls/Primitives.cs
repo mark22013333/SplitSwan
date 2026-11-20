@@ -301,11 +301,27 @@ internal class CardPanel : Panel, IThemed
     public StatusTone Tone
     {
         get => _tone;
-        set { _tone = value; ApplyTheme(); }
+        set
+        {
+            if (_tone == value) return;
+            var old = _tone;
+            _tone = value;
+            OnToneChanged(old);
+            ApplyTheme();
+        }
     }
 
+    /// <summary>色調改變（ApplyTheme 之前）：衍生類別可在這裡開始顏色轉場。</summary>
+    protected virtual void OnToneChanged(StatusTone old) { }
+
     /// <summary>卡片內的底色（子控制項透明時沿用）。</summary>
-    public Color Fill => _tone == StatusTone.Idle ? Theme.Surface : Theme.Mix(Theme.Tone(_tone), Theme.Surface, 0.10);
+    public virtual Color Fill => _tone == StatusTone.Idle ? Theme.Surface : Theme.Mix(Theme.Tone(_tone), Theme.Surface, 0.10);
+
+    /// <summary>框線色。</summary>
+    protected virtual Color Border => _tone == StatusTone.Idle ? Theme.Line : Theme.Mix(Theme.Tone(_tone), Theme.Surface, 0.45);
+
+    /// <summary>圓角半徑（邏輯像素）。</summary>
+    protected virtual int Radius => 4;
 
     public virtual void ApplyTheme()
     {
@@ -317,8 +333,7 @@ internal class CardPanel : Panel, IThemed
     {
         var g = e.Graphics;
         g.Clear(Theme.OpaqueBack(this));
-        var border = _tone == StatusTone.Idle ? Theme.Line : Theme.Mix(Theme.Tone(_tone), Theme.Surface, 0.45);
-        Theme.FillRound(g, ClientRectangle, LogicalToDeviceUnits(4), Fill, border);
+        Theme.FillRound(g, ClientRectangle, LogicalToDeviceUnits(Radius), Fill, Border);
     }
 
     protected override void OnPaint(PaintEventArgs e) { }

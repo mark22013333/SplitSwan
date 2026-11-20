@@ -7,10 +7,19 @@ namespace SplitSwan.Tray.Controls;
 /// <summary>文字標籤的顏色角色。</summary>
 internal enum TextRole { Ink, Muted, Bad, Warn, Ok, Accent, HeroInk, HeroMuted }
 
-/// <summary>依角色上色的標籤（透明底、沿用父層底色）。</summary>
+/// <summary>依角色上色的標籤（透明底、沿用父層底色）。Reveal＜1 時文字往底色淡化（交錯出場用）。</summary>
 internal sealed class ThemedLabel : Label, IThemed
 {
     private TextRole _role;
+    private double _reveal = 1;
+
+    /// <summary>出場進度 0～1：文字色以這個比例疊在底色上（1＝原色）。</summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public double Reveal
+    {
+        get => _reveal;
+        set { _reveal = Math.Clamp(value, 0, 1); ApplyTheme(); }
+    }
 
     public ThemedLabel(string text = "", TextRole role = TextRole.Ink, Font? font = null)
     {
@@ -30,17 +39,21 @@ internal sealed class ThemedLabel : Label, IThemed
         set { _role = value; ApplyTheme(); }
     }
 
-    public void ApplyTheme() => ForeColor = _role switch
+    public void ApplyTheme()
     {
-        TextRole.Muted => Theme.Muted,
-        TextRole.Bad => Theme.Tone(StatusTone.Bad),
-        TextRole.Warn => Theme.Tone(StatusTone.Warn),
-        TextRole.Ok => Theme.Tone(StatusTone.Ok),
-        TextRole.Accent => Theme.Accent,
-        TextRole.HeroInk => Theme.C(Theme.Palette.HeroInk),
-        TextRole.HeroMuted => Theme.C(Theme.Palette.HeroMuted),
-        _ => Theme.Ink,
-    };
+        var color = _role switch
+        {
+            TextRole.Muted => Theme.Muted,
+            TextRole.Bad => Theme.Tone(StatusTone.Bad),
+            TextRole.Warn => Theme.Tone(StatusTone.Warn),
+            TextRole.Ok => Theme.Tone(StatusTone.Ok),
+            TextRole.Accent => Theme.Accent,
+            TextRole.HeroInk => Theme.C(Theme.Palette.HeroInk),
+            TextRole.HeroMuted => Theme.C(Theme.Palette.HeroMuted),
+            _ => Theme.Ink,
+        };
+        ForeColor = _reveal >= 1 ? color : Theme.Mix(color, Theme.OpaqueBack(this), _reveal);
+    }
 }
 
 /// <summary>
