@@ -194,7 +194,7 @@ snapshot 片段（日期與備註均為虛構）：
 
 ### 複製按鈕（選填）
 
-卡片 JSON 可加 `copy`，在 `headline` 那一列右側顯示複製按鈕：
+卡片 JSON 可加 `copy`，在 `headline` 那一列、緊接標題膠囊右側（隔 8pt）顯示複製按鈕：
 
 ```json
 {"version":1,"headline":"公網 IP 203.0.113.7","tone":"ok","enabled":true,"conditions":[],"history":[],

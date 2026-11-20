@@ -43,7 +43,7 @@ struct PluginMenuCardView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 HStack(spacing: 6) {
                     Circle().fill(card.tone.color).frame(width: 7, height: 7)
                     Text(card.headline)
@@ -57,8 +57,9 @@ struct PluginMenuCardView: View {
                 .padding(.vertical, 4)
                 .background(Capsule().fill(card.tone.color.opacity(0.18)))
                 if let copy = card.copy {
-                    Spacer(minLength: 0)
                     CopyButton(copy: copy).frame(width: 22, height: 22).accessibilityHidden(true)
+                        .layoutPriority(1)
+                    Spacer(minLength: 0)
                 }
             }
 
