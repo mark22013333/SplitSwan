@@ -109,6 +109,18 @@ public static class Motion
         return travel * Math.Sin(progress * Math.PI * shakes * 2);
     }
 
+    /// <summary>
+    /// 搖晃時內容的左右內距：以 ShakeOffset 位移，左加右減，總寬不變，外框與版面都不動。
+    /// 幅度不超過原本較小的一邊內距，內距永遠不會變成負的（負值會被版面配置當成 0）。
+    /// </summary>
+    public static (int Left, int Right) ShakePadding(int baseLeft, int baseRight, double progress, bool reduced, double travel = ShakeTravel)
+    {
+        var amplitude = Math.Min(travel, Math.Min(baseLeft, baseRight));
+        if (amplitude <= 0) return (baseLeft, baseRight);
+        var offset = (int)Math.Round(ShakeOffset(progress, reduced, amplitude));
+        return (baseLeft + offset, baseRight - offset);
+    }
+
     /// <summary>交錯出場第 index 項（0 起算）的延遲秒數：每項 0.04 秒、最多 0.25 秒；減少動態效果時不延遲。</summary>
     public static double StaggerDelay(int index, bool reduced) =>
         reduced || index <= 0 ? 0 : Math.Min(index * StaggerStep, StaggerMax);
