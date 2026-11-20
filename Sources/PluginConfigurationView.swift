@@ -339,6 +339,10 @@ private struct HotKeyControl: View {
     @State private var hotKey: PluginShortcuts.HotKey?
     @State private var recorder: Any?
     @State private var taken: String?
+    /// 已存熱鍵撞到的系統／服務快捷鍵，開啟視窗與存檔時重新比對
+    @State private var savedConflicts: [String] = []
+    /// 剛錄好但有衝突、等使用者決定的組合
+    @State private var pending: (hotKey: PluginShortcuts.HotKey, conflicts: [String])?
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 3) {
@@ -355,15 +359,32 @@ private struct HotKeyControl: View {
             if let message {
                 Text(message).font(.caption).foregroundStyle(.orange)
             }
+            Text("按下沒反應時，多半是被其他 App 佔用，請換一組").font(.caption).foregroundStyle(.secondary)
         }
-        .onAppear { hotKey = PluginShortcuts.hotKeys()[pluginID] }
+        .onAppear { reload() }
         .onDisappear { stopRecording() }
+        .alert("這組快捷鍵已有其他功能使用", isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } })) {
+            Button("重新錄製") { pending = nil; startRecording() }
+                .keyboardShortcut(.defaultAction)
+            Button("仍要使用") {
+                if let pending { save(pending.hotKey) }
+                pending = nil
+            }
+        } message: {
+            Text("\(pending?.hotKey.display ?? "") 與\(pending?.conflicts.joined(separator: "、") ?? "")相同，按下時可能先被它攔走。")
+        }
     }
 
     private var message: String? {
         if let taken { return "這組已給「\(taken)」使用，請換一組。" }
         if hotKeys.conflicts.contains(pluginID) { return "系統不接受這組按鍵，請換一組。" }
+        if !savedConflicts.isEmpty { return "⚠︎ 與\(savedConflicts.joined(separator: "、"))衝突" }
         return nil
+    }
+
+    private func reload() {
+        hotKey = PluginShortcuts.hotKeys()[pluginID]
+        savedConflicts = hotKey.map { HotKeyConflicts.conflicts(of: $0, in: GlobalHotKey.conflictSources()) } ?? []
     }
 
     private func startRecording() {
@@ -386,6 +407,12 @@ private struct HotKeyControl: View {
                 NSSound.beep()
                 return nil
             }
+            let conflicts = HotKeyConflicts.conflicts(of: candidate, in: GlobalHotKey.conflictSources())
+            if !conflicts.isEmpty {
+                stopRecording()
+                pending = (candidate, conflicts)
+                return nil
+            }
             save(candidate)
             return nil
         }
@@ -398,7 +425,7 @@ private struct HotKeyControl: View {
     private func save(_ value: PluginShortcuts.HotKey?) {
         taken = nil
         PluginShortcuts.setHotKey(value, for: pluginID)
-        hotKey = PluginShortcuts.hotKeys()[pluginID]
+        reload()
         stopRecording()
         hotKeys.sync()
     }

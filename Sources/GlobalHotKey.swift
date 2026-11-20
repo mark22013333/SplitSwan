@@ -58,6 +58,17 @@ final class GlobalHotKey: ObservableObject {
         if let id = pluginForNumber[number] { onPress(id) }
     }
 
+    /// 只讀不寫：系統快捷鍵（plist 與 CopySymbolicHotKeys）、「服務」快捷鍵。只在錄製與開啟設定視窗時呼叫。
+    static func conflictSources() -> HotKeyConflicts.Sources {
+        let symbolic = CFPreferencesCopyAppValue("AppleSymbolicHotKeys" as CFString, "com.apple.symbolichotkeys" as CFString)
+        let services = CFPreferencesCopyAppValue("NSServicesStatus" as CFString, "pbs" as CFString)
+        var copied: Unmanaged<CFArray>?
+        let effective = CopySymbolicHotKeys(&copied) == noErr
+            ? (copied?.takeRetainedValue() as? [[String: Any]]).map(HotKeyConflicts.parseEffective) : nil
+        return HotKeyConflicts.Sources(symbolic: HotKeyConflicts.parseSymbolic(symbolic), effective: effective,
+                                       services: HotKeyConflicts.parseServices(services))
+    }
+
     private func installHandler() {
         guard handler == nil else { return }
         var type = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
