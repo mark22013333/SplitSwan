@@ -109,6 +109,18 @@ public static class Motion
         return travel * Math.Sin(progress * Math.PI * shakes * 2);
     }
 
+    /// <summary>
+    /// 搖晃時內容的左右內距：以 ShakeOffset 位移，左加右減，總寬不變，外框與版面都不動。
+    /// 幅度不超過原本較小的一邊內距，內距永遠不會變成負的（負值會被版面配置當成 0）。
+    /// </summary>
+    public static (int Left, int Right) ShakePadding(int baseLeft, int baseRight, double progress, bool reduced, double travel = ShakeTravel)
+    {
+        var amplitude = Math.Min(travel, Math.Min(baseLeft, baseRight));
+        if (amplitude <= 0) return (baseLeft, baseRight);
+        var offset = (int)Math.Round(ShakeOffset(progress, reduced, amplitude));
+        return (baseLeft + offset, baseRight - offset);
+    }
+
     /// <summary>交錯出場第 index 項（0 起算）的延遲秒數：每項 0.04 秒、最多 0.25 秒；減少動態效果時不延遲。</summary>
     public static double StaggerDelay(int index, bool reduced) =>
         reduced || index <= 0 ? 0 : Math.Min(index * StaggerStep, StaggerMax);
@@ -126,4 +138,29 @@ public static class Motion
     /// <summary>整份清單全部出場完成要幾秒（最後一項的延遲＋轉場時間）。</summary>
     public static double StaggerTotal(int count, bool reduced) =>
         count <= 0 ? 0 : StaggerDelay(count - 1, reduced) + TransitionSeconds(reduced);
+}
+
+/// <summary>
+/// 圓角卡片的幾何判斷（托盤端 CardPanel 畫背景時用）。座標與尺寸都是裝置像素。
+/// </summary>
+public static class CardGeometry
+{
+    /// <summary>框線與抗鋸齒邊緣佔用的寬度：離外緣這麼近的像素不算卡片內部。</summary>
+    public const int EdgeAllowance = 2;
+
+    /// <summary>
+    /// 重繪範圍是否完全落在卡片內部：不碰外緣的框線，也不碰四個角落 radius×radius 的圓角區。
+    /// 是的話整塊都是卡片底色，可以一次填色，不必先清成父層底色再畫圓角。
+    /// </summary>
+    public static bool ClipInsideBody(int x, int y, int width, int height, int cardWidth, int cardHeight, int radius)
+    {
+        if (width <= 0 || height <= 0) return true;
+        var right = x + width;
+        var bottom = y + height;
+        if (x < EdgeAllowance || y < EdgeAllowance || right > cardWidth - EdgeAllowance || bottom > cardHeight - EdgeAllowance)
+            return false;
+        var r = Math.Max(radius, EdgeAllowance);
+        bool Hits(int cx, int cy) => x < cx + r && right > cx && y < cy + r && bottom > cy;
+        return !(Hits(0, 0) || Hits(cardWidth - r, 0) || Hits(0, cardHeight - r) || Hits(cardWidth - r, cardHeight - r));
+    }
 }

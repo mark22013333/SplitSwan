@@ -87,6 +87,94 @@ public class MotionTests
     [Fact]
     public void Shake_TotalIsPoint3Seconds() => Assert.Equal(0.3, Motion.ShakeDuration);
 
+    [Fact]
+    public void ShakePadding_ShiftsContentWithoutChangingTotalWidth()
+    {
+        // 150% DPI：內距 18／18、幅度 9 px
+        for (var i = 0; i <= 100; i++)
+        {
+            var (left, right) = Motion.ShakePadding(18, 18, i / 100.0, false, 9);
+            Assert.Equal(36, left + right);
+            Assert.InRange(left - 18, -9, 9);
+        }
+        Assert.Equal((27, 9), Motion.ShakePadding(18, 18, 1.0 / 12, false, 9));
+        Assert.Equal((9, 27), Motion.ShakePadding(18, 18, 3.0 / 12, false, 9));
+    }
+
+    [Fact]
+    public void ShakePadding_StartsAndEndsAtBase()
+    {
+        Assert.Equal((12, 12), Motion.ShakePadding(12, 12, 0, false, 9));
+        Assert.Equal((12, 12), Motion.ShakePadding(12, 12, 1, false, 9));
+    }
+
+    [Fact]
+    public void ShakePadding_ClampsAmplitudeSoPaddingNeverGoesNegative()
+    {
+        // 內距比幅度小（例：左 4、右 20、幅度 9）時只晃 4 px，任何時候兩邊都 ≥ 0
+        var frames = Enumerable.Range(0, 101).Select(i => Motion.ShakePadding(4, 20, i / 100.0, false, 9)).ToList();
+        Assert.All(frames, f => { Assert.True(f.Left >= 0); Assert.True(f.Right >= 0); Assert.Equal(24, f.Left + f.Right); });
+        Assert.Equal(0, frames.Min(f => f.Left));
+        Assert.Equal(8, frames.Max(f => f.Left));
+        Assert.Equal((0, 5), Motion.ShakePadding(0, 5, 0.1, false, 9));
+    }
+
+    [Fact]
+    public void ShakePadding_ReducedMotion_NeverMoves() =>
+        Assert.All(Enumerable.Range(0, 101), i => Assert.Equal((14, 14), Motion.ShakePadding(14, 14, i / 100.0, true, 9)));
+
+    [Theory]
+    // 卡片 780×212、圓角 15：內部的子控制項範圍
+    [InlineData(36, 36, 732, 152, true)]
+    [InlineData(135, 36, 633, 37, true)]
+    [InlineData(36, 143, 114, 45, true)]
+    // 整張卡片、碰到框線、碰到圓角
+    [InlineData(0, 0, 780, 212, false)]
+    [InlineData(1, 30, 100, 20, false)]
+    [InlineData(100, 30, 679, 20, false)]
+    [InlineData(10, 10, 20, 20, false)]
+    [InlineData(760, 195, 10, 10, false)]
+    [InlineData(20, 205, 10, 10, false)]
+    // 貼著圓角區外側（x 從 15 開始）不算碰到
+    [InlineData(15, 2, 100, 10, true)]
+    [InlineData(14, 2, 100, 10, false)]
+    // 空範圍
+    [InlineData(0, 0, 0, 0, true)]
+    public void CardGeometry_ClipInsideBody(int x, int y, int w, int h, bool expected) =>
+        Assert.Equal(expected, CardGeometry.ClipInsideBody(x, y, w, h, 780, 212, 15));
+
+    [Theory]
+    // 卡片 780×212、圓角 15、EdgeAllowance 2：四個邊都在中段取樣（遠離圓角），只測框線規則。
+    // 剛好貼邊（離外緣 2 px）算內部，再往外 1 px 就算碰到框線。
+    [InlineData(2, 100, 10, 10, true)]
+    [InlineData(1, 100, 10, 10, false)]
+    [InlineData(300, 2, 10, 10, true)]
+    [InlineData(300, 1, 10, 10, false)]
+    [InlineData(768, 100, 10, 10, true)]
+    [InlineData(769, 100, 10, 10, false)]
+    [InlineData(300, 200, 10, 10, true)]
+    [InlineData(300, 201, 10, 10, false)]
+    public void CardGeometry_ClipInsideBody_EdgeBoundaries(int x, int y, int w, int h, bool expected) =>
+        Assert.Equal(expected, CardGeometry.ClipInsideBody(x, y, w, h, 780, 212, 15));
+
+    [Theory]
+    // 框線規則放行（離四邊都 ≥ 2 px），只被圓角規則擋下：左上、右上、左下、右下各一
+    [InlineData(5, 5, 5, 5, false)]
+    [InlineData(770, 5, 5, 5, false)]
+    [InlineData(5, 200, 5, 5, false)]
+    [InlineData(770, 200, 5, 5, false)]
+    // 緊貼各圓角區外側（水平或垂直方向剛好不重疊）算內部
+    [InlineData(15, 2, 100, 10, true)]
+    [InlineData(2, 15, 10, 100, true)]
+    [InlineData(650, 2, 115, 10, true)]
+    [InlineData(768, 15, 10, 100, true)]
+    [InlineData(2, 97, 10, 100, true)]
+    [InlineData(15, 200, 100, 10, true)]
+    [InlineData(768, 97, 10, 100, true)]
+    [InlineData(650, 200, 115, 10, true)]
+    public void CardGeometry_ClipInsideBody_EachCornerOnly(int x, int y, int w, int h, bool expected) =>
+        Assert.Equal(expected, CardGeometry.ClipInsideBody(x, y, w, h, 780, 212, 15));
+
     [Theory]
     [InlineData(0, 0)]
     [InlineData(1, 0.04)]

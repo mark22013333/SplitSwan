@@ -48,7 +48,11 @@ internal sealed class Animation
     internal double Seconds { get; }
     internal Action<double> Frame { get; }
     internal Action? Done { get; }
-    internal Stopwatch Clock { get; } = Stopwatch.StartNew();
+    /// <summary>
+    /// 第一個計時器畫格才開始計時：開始動畫的同一輪常緊接著版面配置與第一次繪製（例如錯誤說明剛顯示），
+    /// 若從呼叫 Start 就計時，UI 執行緒忙完時動畫可能已經播完，使用者一格也看不到。
+    /// </summary>
+    internal Stopwatch Clock { get; } = new();
     public bool Stopped { get; private set; }
 
     public void Stop() => Stopped = true;
@@ -93,6 +97,7 @@ internal static class Animator
         foreach (var a in Active.ToList())
         {
             if (a.Stopped || a.Owner.IsDisposed) { Active.Remove(a); continue; }
+            if (!a.Clock.IsRunning) a.Clock.Start();
             var p = Motion.Progress(a.Clock.Elapsed.TotalSeconds, a.Seconds);
             a.Frame(p);
             if (p < 1) continue;
@@ -104,32 +109,40 @@ internal static class Animator
     }
 }
 
-/// <summary>驗證失敗時左右搖晃（6px、3 次、0.3 秒）；減少動態效果時不動，只靠紅字提示。</summary>
+/// <summary>
+/// 驗證失敗時左右搖晃（6px、3 次、0.3 秒）；減少動態效果時不動，只靠紅字提示。
+/// 搖的是控制項的左右內距（內容在外框裡位移），不是 Left：要搖的控制項都放在 TableLayoutPanel／FlowLayoutPanel 裡，
+/// 改 Left 會立刻被版面配置拉回；內距左加右減總寬不變，外框與周圍版面都不動。
+/// 只適用依 Padding 擺放內容的控制項（SectionCard 系列、InputFrame）。
+/// </summary>
 internal static class Shake
 {
-    private static readonly Dictionary<Control, (Animation Anim, int BaseLeft)> Running = new();
+    private static readonly Dictionary<Control, (Animation Anim, Padding Base)> Running = new();
 
     public static void Run(Control c)
     {
         if (c.IsDisposed || !c.Visible) return;
         var reduced = MotionPrefs.Reduced;
         if (reduced) return;
-        var baseLeft = c.Left;
+        var basePadding = c.Padding;
         if (Running.Remove(c, out var old))
         {
             old.Anim.Stop();
-            baseLeft = old.BaseLeft;
+            basePadding = old.Base;
         }
         var travel = c.LogicalToDeviceUnits((int)Motion.ShakeTravel);
         var anim = Animator.Start(c, Motion.ShakeDuration,
-            p => c.Left = baseLeft + (int)Math.Round(Motion.ShakeOffset(p, reduced, travel)),
+            p =>
+            {
+                var (left, right) = Motion.ShakePadding(basePadding.Left, basePadding.Right, p, reduced, travel);
+                c.Padding = new Padding(left, basePadding.Top, right, basePadding.Bottom);
+            },
             () =>
             {
                 Running.Remove(c);
-                c.Left = baseLeft;
-                c.Parent?.PerformLayout();
+                c.Padding = basePadding;
             });
-        Running[c] = (anim, baseLeft);
+        Running[c] = (anim, basePadding);
     }
 }
 
