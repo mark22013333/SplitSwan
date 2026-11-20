@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 import SwiftUI
-// 外掛資訊卡片：card= 解碼與驗證、選單投影順序、資訊列不可點，以及卡片截圖（只用去識別化範例）。
+// 外掛資訊卡片：card= 解碼與驗證（含選填的複製按鈕）、選單投影順序、資訊列不可點，以及卡片截圖（只用去識別化範例）。
 var pass = 0, fail = 0
 func check(_ n: String, _ ok: Bool) { print((ok ? "✅ " : "❌ ") + n); ok ? (pass += 1) : (fail += 1) }
 typealias Card = PluginMenuCard
@@ -90,6 +90,38 @@ let rejections: [(String, String)] = [
     ("空標題", encode(cardJSON { $0["headline"] = "\u{202E}" })),
 ]
 for (name, raw) in rejections { check("卡片：拒絕\(name)", Card.decode(raw) == nil) }
+
+// MARK: 複製按鈕
+func copyCard(_ copy: Any) -> Card? { Card.decode(encode(cardJSON { $0["copy"] = copy })) }
+check("複製：沒有 copy 時沒有按鈕", decoded?.copy == nil)
+let validCopy = copyCard(["label": "複製 IP", "value": " 203.0.113.7 "])
+check("複製：有效 copy 解碼，value 去頭尾空白，其餘內容不變",
+      validCopy?.copy?.label == "複製 IP" && validCopy?.copy?.value == "203.0.113.7" && validCopy?.headline == decoded?.headline
+      && validCopy?.history == decoded?.history && validCopy?.conditions == decoded?.conditions)
+let edgeCopy = copyCard(["label": "複製\u{202E}" + String(repeating: "鍵", count: 18), "value": String(repeating: "9", count: 200)])
+check("複製：剛好 20 字的 label 與 200 字的 value 可用，方向控制字元被移除",
+      edgeCopy?.copy?.label == "複製" + String(repeating: "鍵", count: 18) && edgeCopy?.copy?.value.count == 200)
+check("複製：value 含 Tab 時整個 copy 為 nil，卡片其餘內容照常",
+      copyCard(["label": "複製 IP", "value": "203.0.113.\t7"]) == decoded && copyCard(["label": "複製 IP", "value": "203.0.113.7\t"])?.copy == nil)
+let invalidCopies: [(String, Any)] = [
+    ("缺 label", ["value": "203.0.113.7"]),
+    ("缺 value", ["label": "複製 IP"]),
+    ("label 空字串", ["label": "", "value": "203.0.113.7"]),
+    ("label 超過 20 字", ["label": String(repeating: "長", count: 21), "value": "203.0.113.7"]),
+    ("value 空字串", ["label": "複製 IP", "value": ""]),
+    ("value 只有空白與控制字元", ["label": "複製 IP", "value": " \u{202E}\u{0007} "]),
+    ("value 超過 200 字", ["label": "複製 IP", "value": String(repeating: "9", count: 201)]),
+    ("value 含換行", ["label": "複製 IP", "value": "203.0.113.7\n198.51.100.1"]),
+    ("value 含 CR", ["label": "複製 IP", "value": "203.0.113.7\r"]),
+    ("value 含行分隔字元", ["label": "複製 IP", "value": "203.0.113.7\u{2028}198.51.100.1"]),
+    ("value 是數字", ["label": "複製 IP", "value": 7]),
+    ("copy 是字串", "203.0.113.7"),
+    ("copy 是陣列", ["複製 IP", "203.0.113.7"]),
+    ("copy 是 null", NSNull()),
+]
+for (name, raw) in invalidCopies {
+    check("複製：\(name)時沒有按鈕，卡片其餘內容照常", decoded != nil && copyCard(raw) == decoded)
+}
 
 // MARK: 輸出解析：卡片壞掉時文字列照舊
 let goodOutput = PluginLogic.parseOutput("外掛 | settings=true card=\(encode(cardJSON()))\n---\n補充資訊\n立即重新整理 | refresh=true\n")
@@ -183,6 +215,16 @@ MainActor.assumeIsolated {
             $0["timeline"] = ["start": "08:20", "end": "09:05", "check": "08:24", "windowStart": "08:30", "windowEnd": "09:00", "planned": "08:41", "now": "08:50"]
             $0["conditions"] = [["label": "App", "value": "開啟", "tone": "ok"], ["label": "電源", "value": "已接上", "tone": "ok"], ["label": "VPN", "value": "未連線", "tone": "warn"]]
         }),
+        ("copy", cardJSON {
+            $0["headline"] = "公網 IP 203.0.113.7"; $0["detail"] = "出口：公司 VPN"
+            $0["timeline"] = nil; $0["history"] = []
+            $0["copy"] = ["label": "複製 IP", "value": "203.0.113.7"]
+        }),
+        ("copy-long-headline", cardJSON {
+            $0["headline"] = "公網 IP 203.0.113.7 · 出口不是公司 VPN，請先確認連線狀態再繼續"; $0["tone"] = "warn"
+            $0["timeline"] = nil; $0["history"] = []
+            $0["copy"] = ["label": "複製 IP", "value": "203.0.113.7"]
+        }),
     ]
     var rendered = 0
     for (name, json) in scenarios {
@@ -205,6 +247,17 @@ MainActor.assumeIsolated {
         }
     }
     check("截圖：\(scenarios.count) 個情境 × 深淺色都已輸出", rendered == scenarios.count * 2)
+
+    // 複製按鈕：標題很長時截成一行，卡片不加寬也不長高，按鈕留在卡片內。
+    func cardSize(_ card: Card) -> NSSize { NSHostingView(rootView: PluginMenuCardView(card: card)).fittingSize }
+    let shortCopy = copyCard(["label": "複製 IP", "value": "203.0.113.7"])!
+    let longCopy = Card.decode(encode(cardJSON {
+        $0["headline"] = String(repeating: "很長的標題", count: 12); $0["copy"] = ["label": "複製 IP", "value": "203.0.113.7"]
+    }))!
+    let longPlain = Card.decode(encode(cardJSON { $0["headline"] = String(repeating: "很長的標題", count: 12) }))!
+    check("複製：長標題截成一行，卡片寬度 \(Int(cardSize(longCopy).width)) 不變、高度與短標題相同",
+          cardSize(longCopy).width == PluginMenuCardView.width && cardSize(longCopy).height == cardSize(shortCopy).height
+          && cardSize(longPlain).height > cardSize(longCopy).height)
 
     // 條件標籤：最長的合法文字（標籤 12 字、值 20 字，各再加省略號）也不超出卡片內容寬度，單行顯示。
     let longest = Card.decode(encode(cardJSON {
