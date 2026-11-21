@@ -189,7 +189,7 @@ snapshot 片段（日期與備註均為虛構）：
 ```
 
 - `tone`：`ok`、`info`、`warn`、`error`、`neutral`。`result`：`auto`（自動成功）、`manual`（人工處理）、`leave`（請假）、`missed`（未執行）、`skipped`（跳過）。
-- 時間一律是半形 `HH:mm`；`timeline` 的每個時刻都要落在 `start`…`end` 內，範圍最長 6 小時。`detail`、`timeline`、`time`、`footnote` 可省略。
+- 時間一律是半形 `HH:mm`；`timeline` 的每個時刻都要落在 `start`…`end` 內，範圍最長 6 小時。`detail`、`timeline`、`time`、`footnote` 可省略。`enabled` 也可省略（App 1.9.22 起可省略，舊版仍要求必填）：省略時卡片右上角不顯示「背景自動執行 開啟／關閉」，適合沒有背景自動執行狀態的外掛；存在時必須是布林值，否則整張卡片忽略。
 - 上限：解碼後 8 KB、`conditions` 4 個、`history` 10 筆（日期由舊到新、不可重複）。文字會去掉控制字元並截斷。
 - 任一欄位不合規時整張卡片忽略，選單照常顯示文字列。外掛若因有卡片而精簡文字列，應先自行檢查卡片是否合規。
 - 圖例與統計用語（自動成功、人工處理、請假、未執行、跳過）目前偏向打卡用途，外掛還不能自訂。
