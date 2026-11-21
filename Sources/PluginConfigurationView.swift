@@ -434,8 +434,27 @@ private struct HotKeyControl: View {
         testing = token
         hotKeys.expectPress(of: pluginID) {
             guard testing == token else { return }
-            testing = nil
+            stopTest()
             testPassed = true
+        }
+        // 被攔走時第一下收不到，按住後系統送出的重複按鍵才會到，所以要看實體鍵盤：按住超過 0.25 秒還沒收到就算失敗。
+        // 錄製時按的那一下可能還沒放開，先等它放開一次才開始算。
+        var released = false
+        var since: Date?
+        watcher = Timer.scheduledTimer(withTimeInterval: 0.03, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                guard testing == token else { return }
+                guard CGEventSource.keyState(.hidSystemState, key: CGKeyCode(hotKey.keyCode)) else {
+                    released = true
+                    since = nil
+                    return
+                }
+                guard released else { return }
+                guard let start = since else { since = Date(); return }
+                guard Date().timeIntervalSince(start) > 0.25 else { return }
+                stopTest()
+                missed = (hotKey, GlobalHotKey.keyInterceptors(), true)
+            }
         }
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(Self.testSeconds))
@@ -445,6 +464,8 @@ private struct HotKeyControl: View {
         }
     }
     private func stopTest() {
+        watcher?.invalidate()
+        watcher = nil
         hotKeys.cancelExpect(of: pluginID)
         testing = nil
         testPassed = false
