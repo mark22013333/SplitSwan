@@ -508,6 +508,30 @@ final class PluginRunner: ObservableObject {
         await run(id, refresh: nil)
     }
 
+    // MARK: VPN 事件
+
+    private(set) var vpn: PluginVPNContext = .disconnected
+    private var vpnReceived = false
+
+    /// 單檔看上次輸出的標題參數（外掛至少要先跑過一次），套件看 manifest
+    nonisolated static func subscribesToVPN(_ p: Plugin) -> Bool {
+        if let manifest = p.package?.record.manifest { return manifest.events?.contains("vpn") == true }
+        return p.output?.events.contains("vpn") == true
+    }
+
+    /// 第一次只記錄現況。之後狀態有實質變化時，讓訂閱的外掛立刻多跑一次；
+    /// 停用、暫停、疊跑由 run 內既有的檢查處理，關閉區塊時 run 直接返回，不持有任何資源
+    func updateVPN(_ new: PluginVPNContext) {
+        let old = vpn
+        vpn = new
+        guard vpnReceived else { vpnReceived = true; return }
+        guard PluginVPNContext.shouldNotify(from: old, to: new) else { return }
+        for p in plugins where p.problem == nil && Self.subscribesToVPN(p) {
+            let id = p.id
+            Task { await run(id) }
+        }
+    }
+
     private func run(_ id: String, refresh: RefreshGeneration?) async {
         guard canSchedule(id), let p = plugins.first(where: { $0.id == id }) else { return }
         if let refresh, refresh.epoch(for: p) != scheduledEpoch(id) { return }
@@ -522,9 +546,9 @@ final class PluginRunner: ObservableObject {
             setInFlight(id, false)
             return
         }
-        let r = await Task.detached(priority: .utility) { [stateRoot, directory, timeout] in
+        let r = await Task.detached(priority: .utility) { [stateRoot, directory, timeout, vpnEnvironment = vpn.environment] in
             await Self.execute(path: p.path, id: p.id, pluginDir: directory.path, stateRoot: stateRoot.path,
-                               args: [], timeout: timeout, parse: true, package: p.package)
+                               args: [], timeout: timeout, parse: true, package: p.package, vpn: vpnEnvironment)
         }.value
         releaseSlot()
         setInFlight(id, false)
@@ -549,7 +573,8 @@ final class PluginRunner: ObservableObject {
     /// 在背景執行：完整檢查（掃描後可能被改過）→ 建立狀態資料夾 → 限時執行 → 解析輸出。
     /// 直接執行外掛檔案本身（不經 shell），環境變數整組換掉，stderr 另外收集且有上限
     nonisolated static func execute(path: String, id: String, pluginDir: String, stateRoot: String,
-                                    args: [String], timeout: TimeInterval, parse: Bool, package: PluginPackageStore.Installed? = nil) async -> ExecResult {
+                                    args: [String], timeout: TimeInterval, parse: Bool, package: PluginPackageStore.Installed? = nil,
+                                    vpn: [String: String] = [:]) async -> ExecResult {
         let check = executionCheck(path: path, pluginDir: pluginDir, package: package)
         if let why = check.problem { return ExecResult(problem: why) }
         guard let exe = check.resolved else { return ExecResult(problem: "找不到檔案") }
@@ -559,6 +584,7 @@ final class PluginRunner: ObservableObject {
         var env = ["PATH": pluginPATH, "HOME": home, "SPLITSWAN_PLUGIN_STATE": state, "SPLITSWAN": "1",
                    "SPLITSWAN_PLUGIN_SETTINGS_PROTOCOL": "1", "SPLITSWAN_APP_PID": String(getpid())]
         env.merge(package?.environment ?? [:]) { _, new in new }
+        env.merge(vpn) { _, new in new }
         let r = await ProcessRunner.execute(exe, args, env: env, timeout: timeout, maxBytes: readLimit,
                                             qos: .utility, stderrLimit: stderrLimit)
         var out = ExecResult(code: r.code, timedOut: r.timedOut)
@@ -872,6 +898,7 @@ final class PluginRunner: ObservableObject {
               plugins.contains(where: { $0.id == p.id && $0.resolved == p.resolved }) else {
             throw PluginSettingsProtocol.Problem(message: "外掛狀態已變更，請重新開啟設定")
         }
+        let vpnEnvironment = vpn.environment
         let result = try await Task.detached(priority: .utility) { [directory, stateRoot, timeout] in
             let check = Self.executionCheck(path: p.path, pluginDir: directory.path, package: p.package)
             if let why = check.problem { throw PluginSettingsProtocol.Problem(message: why) }
@@ -882,6 +909,7 @@ final class PluginRunner: ObservableObject {
             var environment = ["PATH": Self.pluginPATH, "HOME": Self.home, "SPLITSWAN": "1",
                       "SPLITSWAN_PLUGIN_STATE": state, "SPLITSWAN_PLUGIN_SETTINGS_PROTOCOL": "1", "SPLITSWAN_APP_PID": String(getpid())]
             environment.merge(p.package?.environment ?? [:]) { _, new in new }
+            environment.merge(vpnEnvironment) { _, new in new }
             return await ProcessRunner.execute(exe, ["--splitswan-settings", operation], env: environment,
                 timeout: timeout, maxBytes: PluginSettingsProtocol.maxBytes + 1, qos: .utility,
                 stderrLimit: Self.stderrLimit, input: input)
@@ -929,9 +957,9 @@ final class PluginRunner: ObservableObject {
                 return
             }
             // execute 會在取得名額之後重新做完整檢查，並確認仍是外掛本身
-            let r = await Task.detached(priority: .utility) { [stateRoot, directory, timeout] in
+            let r = await Task.detached(priority: .utility) { [stateRoot, directory, timeout, vpnEnvironment = vpn.environment] in
                 await Self.execute(path: p.path, id: p.id, pluginDir: directory.path, stateRoot: stateRoot.path,
-                                   args: item.bashArgs, timeout: timeout, parse: false, package: p.package)
+                                   args: item.bashArgs, timeout: timeout, parse: false, package: p.package, vpn: vpnEnvironment)
             }.value
             releaseSlot()
             setInFlight(pluginID, false)

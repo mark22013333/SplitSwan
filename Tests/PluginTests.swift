@@ -349,6 +349,63 @@ check("上層資料夾：自己或 root、不可被他人寫入（sticky 例外�
       && L.ancestorProblem(FS(uid: 502, mode: 0o040700), path: "x", uid: me) != nil
       && L.ancestorProblem(nil, path: "x", uid: me) != nil)
 
+// MARK: VPN 狀態與事件訂閱（純邏輯）
+let vpnConn = PluginVPNContext(state: .connected, gateway: "vpn2", ip: "10.20.30.40")
+let vpnConnecting = PluginVPNContext(state: .connecting, gateway: "vpn1")
+check("VPN 環境變數：connected 三個都有",
+      vpnConn.environment == ["SPLITSWAN_VPN_STATE": "connected", "SPLITSWAN_VPN_GATEWAY": "vpn2", "SPLITSWAN_VPN_IP": "10.20.30.40"])
+check("VPN 環境變數：connecting 只有狀態與閘道，不放 IP",
+      PluginVPNContext(state: .connecting, gateway: "vpn1", ip: "10.0.0.1").environment == ["SPLITSWAN_VPN_STATE": "connecting", "SPLITSWAN_VPN_GATEWAY": "vpn1"])
+check("VPN 環境變數：disconnected 只有狀態，即使帶了閘道與 IP",
+      PluginVPNContext(state: .disconnected, gateway: "vpn1", ip: "10.0.0.1").environment == ["SPLITSWAN_VPN_STATE": "disconnected"]
+      && PluginVPNContext.disconnected.environment == ["SPLITSWAN_VPN_STATE": "disconnected"])
+for bad in ["vpn4", "vpn0", "vpn", "vpn12", "VPN1", "vpn1;ls", "vpn1\n", ""] {
+    check("VPN 環境變數：非法閘道被擋「\(bad.debugDescription)」",
+          PluginVPNContext(state: .connected, gateway: bad, ip: "10.0.0.1").environment["SPLITSWAN_VPN_GATEWAY"] == nil)
+}
+for bad in ["10.0.0", "10.0.0.256", "10.0.0.1.2", "a.b.c.d", "10.0.0.01", "１０.0.0.1", "10.0.0.1 ", "$(id)", "::1", ""] {
+    check("VPN 環境變數：非法 IP 被擋「\(bad.debugDescription)」",
+          PluginVPNContext(state: .connected, gateway: "vpn1", ip: bad).environment["SPLITSWAN_VPN_IP"] == nil)
+}
+let vpnDown = PluginVPNContext.disconnected
+let vpnOther = PluginVPNContext(state: .connected, gateway: "vpn3", ip: "10.20.30.40")
+let vpnOtherIP = PluginVPNContext(state: .connected, gateway: "vpn2", ip: "10.20.30.41")
+check("shouldNotify：斷線→連上、連上→斷線觸發",
+      PluginVPNContext.shouldNotify(from: vpnDown, to: vpnConn) && PluginVPNContext.shouldNotify(from: vpnConn, to: vpnDown))
+check("shouldNotify：新狀態是連線中一律不觸發",
+      !PluginVPNContext.shouldNotify(from: vpnDown, to: vpnConnecting) && !PluginVPNContext.shouldNotify(from: vpnConn, to: vpnConnecting))
+check("shouldNotify：連線中→連上／斷線觸發",
+      PluginVPNContext.shouldNotify(from: vpnConnecting, to: vpnConn) && PluginVPNContext.shouldNotify(from: vpnConnecting, to: vpnDown))
+check("shouldNotify：已連上換閘道或換 IP 觸發",
+      PluginVPNContext.shouldNotify(from: vpnConn, to: vpnOther) && PluginVPNContext.shouldNotify(from: vpnConn, to: vpnOtherIP))
+check("shouldNotify：完全相同不觸發", !PluginVPNContext.shouldNotify(from: vpnConn, to: vpnConn)
+      && !PluginVPNContext.shouldNotify(from: vpnDown, to: vpnDown) && !PluginVPNContext.shouldNotify(from: vpnConnecting, to: vpnConnecting))
+check("shouldNotify：斷線狀態下閘道欄位不同不觸發",
+      !PluginVPNContext.shouldNotify(from: PluginVPNContext(state: .disconnected, gateway: "vpn1"), to: PluginVPNContext(state: .disconnected, gateway: "vpn2")))
+check("標題 events=vpn 解析", L.parseOutput("標題 | events=vpn\n---\n項目").events == ["vpn"])
+check("標題 events：逗號分隔、未知值忽略", L.parseOutput("標題 | events=foo,vpn,bar").events == ["vpn"]
+      && L.parseOutput("標題 | events=foo").events.isEmpty)
+check("標題沒有 events 或在項目列上都不訂閱", L.parseOutput("標題\n---\n項目 | events=vpn").events.isEmpty
+      && L.parseOutput("標題").events.isEmpty)
+
+func manifestJSON(events: String?) -> Data {
+    let extra = events.map { ",\"events\":\($0)" } ?? ""
+    let sha = String(repeating: "a", count: 64)
+    return Data("""
+    {"formatVersion":1,"id":"example.vpn-events","name":"n","author":"a","description":"d","version":"1.0.0","minimumAppVersion":"1.0.0",
+    "entrypoint":"run.sh","interval":60,"runtime":"sh","dependencies":[],"settings":false,
+    "files":[{"path":"run.sh","sha256":"\(sha)","executable":true}]\(extra)}
+    """.utf8)
+}
+func decodedEvents(_ events: String?) -> [String]?? {
+    (try? PluginPackage.decode(manifestJSON(events: events), appVersion: "1.9.20")).map { $0.events }
+}
+check("manifest events：沒宣告解碼成 nil", decodedEvents(nil) == .some(nil))
+check("manifest events：[\"vpn\"] 合法", decodedEvents("[\"vpn\"]") == .some(["vpn"]))
+check("manifest events：未知值、非陣列、非字串一律拒絕",
+      decodedEvents("[\"foo\"]") == nil && decodedEvents("[\"vpn\",\"foo\"]") == nil
+      && decodedEvents("\"vpn\"") == nil && decodedEvents("[1]") == nil && decodedEvents("null") == nil)
+
 // MARK: 整合測試：實跑假外掛
 // 時序原則（本機常有防毒掃描新執行檔、Spotlight 索引，負載平均可達上百）：
 // - 「某事應該發生」一律用 eventually 輪詢到成立為止，期限寬鬆；正常負載下條件一成立就往下走，不增加耗時。
@@ -1684,6 +1741,39 @@ check("設定基準世代：外掛世代在檢查途中改變時不發提醒（�
       && generationRunner.plugins.first { $0.id == triggerID }?.runWhenLocked == true)
 generationBump.cancel()
 generationRunner.setEnabled(false)
+
+// VPN 狀態環境變數與事件訂閱
+let vdir = root + "/vpn-plugins", vstate = root + "/vpn-state"
+try! fm.createDirectory(atPath: vdir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+let vpnBody = { (header: String) in
+    "#!/bin/bash\necho \"\(header)\"\necho \"---\"\necho \"s=$SPLITSWAN_VPN_STATE g=${SPLITSWAN_VPN_GATEWAY:-none} i=${SPLITSWAN_VPN_IP:-none}\"\necho x >> \"$SPLITSWAN_PLUGIN_STATE/runs\"\n"
+}
+put("sub.1m.sh", vpnBody("訂閱 | events=vpn"), dir: vdir)
+put("plain.1m.sh", vpnBody("未訂閱"), dir: vdir)
+let vpnRunner = PluginRunner(directory: URL(fileURLWithPath: vdir), stateRoot: URL(fileURLWithPath: vstate), allowInactiveExecution: true)
+vpnRunner.timeout = roomyTimeout
+await vpnRunner.refreshAll()
+func runCount(_ name: String) -> Int {
+    ((try? String(contentsOfFile: vstate + "/" + name + "/runs", encoding: .utf8)) ?? "").split(separator: "\n").count
+}
+@MainActor func vpnItems(_ id: String) -> [String] { vpnRunner.plugins.first { $0.id == id }?.output?.items.map(\.text) ?? [] }
+check("VPN 外掛：初次執行讀到 disconnected、沒有閘道與 IP", vpnItems("sub.1m.sh") == ["s=disconnected g=none i=none"])
+check("VPN 外掛：標題 events=vpn 解析成訂閱", vpnRunner.plugins.first { $0.id == "sub.1m.sh" }.map(PluginRunner.subscribesToVPN) == true
+      && vpnRunner.plugins.first { $0.id == "plain.1m.sh" }.map(PluginRunner.subscribesToVPN) == false)
+vpnRunner.updateVPN(.disconnected)
+try? await Task.sleep(nanoseconds: 800_000_000)
+check("VPN 外掛：第一次收到狀態只記錄、不觸發（執行次數 \(runCount("sub.1m.sh"))）", runCount("sub.1m.sh") == 1 && runCount("plain.1m.sh") == 1)
+vpnRunner.updateVPN(PluginVPNContext(state: .connecting, gateway: "vpn2"))
+try? await Task.sleep(nanoseconds: 800_000_000)
+check("VPN 外掛：連線中不觸發", runCount("sub.1m.sh") == 1)
+vpnRunner.updateVPN(PluginVPNContext(state: .connected, gateway: "vpn2", ip: "10.20.30.40"))
+check("VPN 外掛：連上後訂閱的外掛多跑一次並讀到新環境變數",
+      await eventually { runCount("sub.1m.sh") == 2 && vpnItems("sub.1m.sh") == ["s=connected g=vpn2 i=10.20.30.40"] })
+try? await Task.sleep(nanoseconds: 800_000_000)
+check("VPN 外掛：未訂閱的外掛不跑（\(runCount("plain.1m.sh")) 次）", runCount("plain.1m.sh") == 1)
+vpnRunner.updateVPN(.disconnected)
+check("VPN 外掛：斷線後訂閱的外掛再跑一次並讀到 disconnected",
+      await eventually { runCount("sub.1m.sh") == 3 && vpnItems("sub.1m.sh") == ["s=disconnected g=none i=none"] })
 
 print("整合測試目錄：\(root)")
 

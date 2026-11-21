@@ -42,8 +42,9 @@ def sensitive(path):
 def manifest(data):
     require(len(data)<=MANIFEST_LIMIT, 'Manifest 超過 64 KiB')
     m=json.loads(data)
-    require(isinstance(m,dict) and FIELDS<=set(m)<=FIELDS|{'legacyReplacement','runWhenLocked'}, 'Manifest 欄位不完整或含不支援欄位')
+    require(isinstance(m,dict) and FIELDS<=set(m)<=FIELDS|{'legacyReplacement','runWhenLocked','events'}, 'Manifest 欄位不完整或含不支援欄位')
     require(type(m.get('runWhenLocked',False)) is bool, 'runWhenLocked 須為布林值')
+    require(isinstance(m.get('events',[]),list) and all(type(e) is str and e in {'vpn'} for e in m.get('events',[])), 'events 只能是字串陣列，目前只支援 "vpn"')
     require(type(m['formatVersion']) is int and m['formatVersion']==1, '不支援格式版本')
     require(isinstance(m['id'],str) and len(m['id'])<=120 and re.fullmatch(r'[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+',m['id']), '識別碼須為小寫反向網域格式')
     require(valid_version(m['version']) and valid_version(m['minimumAppVersion']), '版本須遵守 SemVer')
