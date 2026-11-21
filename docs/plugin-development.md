@@ -61,6 +61,7 @@ resources/           # 可選，須逐檔列出
 | `dependencies` | 其他必要環境名稱，使用相同白名單，最多 5 個，不重複 |
 | `settings` | 是否提供原生設定協定 v1，布林值 |
 | `files` | 每檔 `path`、小寫 SHA-256 `sha256`、布林 `executable`；不含 Manifest 本身 |
+| `events` | 可選字串陣列，目前只允許 `["vpn"]`：VPN 連上或斷線時立即多跑一次，見下方「訂閱 VPN 事件」 |
 | `runWhenLocked` | 可選布林值。排程必須在螢幕鎖定、關閉或螢幕保護程式時照常執行才設 `true`；安裝或更新到首次宣告的版本時，App 會開啟該外掛的「鎖定時持續執行」，之後使用者關掉不會被更新改回。電腦睡眠時仍會暫停。需要 `minimumAppVersion` 1.9.10 以上 |
 
 入口第一行必須與 runtime 相符且沒有附加參數，例如 `#!/bin/sh`、`#!/usr/bin/env python3`、`#!/usr/bin/env node`。程式直接執行，不將命令與參數拼成 shell 指令。多檔資源透過 `SPLITSWAN_PLUGIN_ROOT` 定位，不依賴目前工作目錄。
@@ -80,6 +81,20 @@ resources/           # 可選，須逐檔列出
 | `SPLITSWAN_PLUGIN_STATE` | 固定私人狀態目錄，更新不變 |
 | `SPLITSWAN_PLUGIN_SETTINGS_PROTOCOL` | `1` |
 | `SPLITSWAN_APP_PID` | 啟動工作的 App 程序識別碼；需要自行管理子程序的外掛應在提交動作前確認此程序仍存在，不以任意同名 App 代替 |
+| `SPLITSWAN_VPN_STATE` | 每次都有：`connected`、`connecting` 或 `disconnected`（找不到系統元件也視為 `disconnected`） |
+| `SPLITSWAN_VPN_GATEWAY` | 連線中或已連上才有：`vpn1`、`vpn2` 或 `vpn3` |
+| `SPLITSWAN_VPN_IP` | 已連上才有：VPN 虛擬 IP（IPv4）。格式不合就不提供 |
+
+VPN 三個變數只描述狀態，不含閘道位址、帳密或任何 VPN 設定。
+
+### 訂閱 VPN 事件
+
+預設外掛只依間隔執行。訂閱 `vpn` 事件後，VPN 連上、斷線，或已連上時換閘道或虛擬 IP，App 會立刻多跑一次該外掛（連線中不觸發）。App 剛啟動時收到的第一個狀態只記錄，不觸發。停用、暫停（睡眠、鎖定）與正在執行中的外掛沿用既有規則：暫停時不跑，執行中的會等結束後補跑一次。
+
+- 單檔外掛：標題行加 `events=vpn`，例如 `服務健康 | events=vpn`。多個事件以逗號分隔，未知值忽略。
+- 套件外掛：Manifest 加選填的 `events`，值為字串陣列，目前只允許 `["vpn"]`，其他值整份 Manifest 會被拒絕。
+
+已知限制：單檔外掛的訂閱以上一次輸出的標題為準，所以外掛必須至少成功跑過一次才會被通知。
 
 另提供既有 `SPLITSWAN=1`、`HOME` 與固定 PATH。不得將執行時產物、快取、設定寫入程式目錄，否則完整性檢查會阻擋後續執行與匯出。Python 外掛應停用 bytecode 快取（例如程式開頭設定 `sys.dont_write_bytecode = True`）；依賴模組匯入前完成設定。私人狀態目錄 700、設定檔 600，權杖使用鑰匙圈，診斷不記錄機密。
 
