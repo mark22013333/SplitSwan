@@ -39,6 +39,8 @@ final class PluginConfigurationModel: ObservableObject {
     @Published private(set) var baselineMissing: [PluginSettingsBaseline.Missing] = []
     @Published private(set) var baselineHint: String?
     private let baselineStore: BaselineStore
+    /// 儲存或動作成功後呼叫；預設讓外掛立刻重跑，選單不必等下一輪排程才反映新設定。
+    private let afterChange: @MainActor () -> Void
     struct Notice: Equatable { let origin: JobOrigin?; let job: P.Job }
     private let command: @MainActor (String, P.Request?) async throws -> P.Snapshot
     private let now: () -> Date
@@ -53,12 +55,14 @@ final class PluginConfigurationModel: ObservableObject {
     private var enteredTabID: String?
 
     init(pluginID: String, command: (@MainActor (String, P.Request?) async throws -> P.Snapshot)? = nil,
-         now: @escaping () -> Date = Date.init, pollInterval: Duration = .seconds(2), baselineStore: BaselineStore? = nil) {
+         now: @escaping () -> Date = Date.init, pollInterval: Duration = .seconds(2), baselineStore: BaselineStore? = nil,
+         afterChange: (@MainActor () -> Void)? = nil) {
         self.pluginID = pluginID
         self.now = now
         self.pollInterval = pollInterval
         // 換掉命令的模型不連真正的外掛，基準也不讀寫真正的 plugin-state。
         self.baselineStore = baselineStore ?? (command == nil ? .runner(PluginRunner.shared, pluginID: pluginID) : .detached)
+        self.afterChange = afterChange ?? (command == nil ? { Task { await PluginRunner.shared.run(pluginID) } } : {})
         self.command = command ?? { operation, request in
             try await PluginRunner.shared.settingsCommand(pluginID: pluginID, operation: operation, request: request)
         }
@@ -124,6 +128,7 @@ final class PluginConfigurationModel: ObservableObject {
         }.map(\.id)
         let editable = Set(s.fields.filter { $0.type != "readonly" }.map(\.id))
         if await execute("save", request: P.Request(revision: s.revision, values: draft.filter { editable.contains($0.key) })) {
+            afterChange()
             for id in changedGuides { pendingChecks[id] = true }
             await drainCheck()
         }
@@ -137,8 +142,9 @@ final class PluginConfigurationModel: ObservableObject {
         }
         guard !dirty else { return }
         if a.opensExternal == true { externalTab = a.tab }
-        if await execute("action", request: P.Request(revision: s.revision, id: a.id, input: input), origin: a.title),
-           a.recheckAfter == true {
+        let succeeded = await execute("action", request: P.Request(revision: s.revision, id: a.id, input: input), origin: a.title)
+        if succeeded { afterChange() }
+        if succeeded, a.recheckAfter == true {
             if let job = snapshot?.job, job.state == "running" {
                 postJobCheck = (job.id, a.tab)
             } else if snapshot?.job?.state != "failed" {

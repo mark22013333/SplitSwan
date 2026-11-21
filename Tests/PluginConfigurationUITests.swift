@@ -39,10 +39,13 @@ func runConfigurationTests() async throws -> Int {
         } else if operation == "action" { testedSecret = storedSecret }
         return saved
     }
-    let model = PluginConfigurationModel(pluginID: "fixture", command: command)
+    var reruns = 0
+    let model = PluginConfigurationModel(pluginID: "fixture", command: command, afterChange: { reruns += 1 })
     await model.load()
+    check("載入設定不觸發外掛重跑", reruns == 0)
     model.draft["url"] = .text("https://example.com/first.ics")
     await model.save()
+    check("儲存成功後外掛立即重跑一次", reruns == 1)
     check("首次儲存後清空輸入框，機密仍保留於提供者", !model.dirty && model.draft["url"] == .text("") && storedSecret.hasSuffix("first.ics"))
     model.draft["url"] = .text("https://example.com/cancelled.ics")
     await model.action(saved.actions[0])
@@ -57,10 +60,12 @@ func runConfigurationTests() async throws -> Int {
     let reopened = PluginConfigurationModel(pluginID: "fixture", command: command)
     await reopened.load()
     check("重新開啟保留已儲存設定，機密不回顯且可再次編輯", reopened.snapshot?.revision == saved.revision && reopened.draft["url"] == .text(""))
+    check("未執行的動作不觸發重跑，成功的儲存與動作各一次", reruns == 3)
     rejectSave = true
     model.draft["url"] = .text("https://example.com/rejected.ics")
     await model.save()
     check("儲存失敗保留草稿與既有值", model.dirty && model.error != nil && storedSecret.hasSuffix("replacement.ics"))
+    check("儲存失敗不觸發重跑", reruns == 3)
     model.cancelEdits()
     rejectSave = false
     var closeRequests = 0, confirmations = 0, discard = false
