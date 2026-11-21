@@ -1742,6 +1742,39 @@ check("設定基準世代：外掛世代在檢查途中改變時不發提醒（�
 generationBump.cancel()
 generationRunner.setEnabled(false)
 
+// VPN 狀態環境變數與事件訂閱
+let vdir = root + "/vpn-plugins", vstate = root + "/vpn-state"
+try! fm.createDirectory(atPath: vdir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+let vpnBody = { (header: String) in
+    "#!/bin/bash\necho \"\(header)\"\necho \"---\"\necho \"s=$SPLITSWAN_VPN_STATE g=${SPLITSWAN_VPN_GATEWAY:-none} i=${SPLITSWAN_VPN_IP:-none}\"\necho x >> \"$SPLITSWAN_PLUGIN_STATE/runs\"\n"
+}
+put("sub.1m.sh", vpnBody("訂閱 | events=vpn"), dir: vdir)
+put("plain.1m.sh", vpnBody("未訂閱"), dir: vdir)
+let vpnRunner = PluginRunner(directory: URL(fileURLWithPath: vdir), stateRoot: URL(fileURLWithPath: vstate), allowInactiveExecution: true)
+vpnRunner.timeout = roomyTimeout
+await vpnRunner.refreshAll()
+func runCount(_ name: String) -> Int {
+    ((try? String(contentsOfFile: vstate + "/" + name + "/runs", encoding: .utf8)) ?? "").split(separator: "\n").count
+}
+@MainActor func vpnItems(_ id: String) -> [String] { vpnRunner.plugins.first { $0.id == id }?.output?.items.map(\.text) ?? [] }
+check("VPN 外掛：初次執行讀到 disconnected、沒有閘道與 IP", vpnItems("sub.1m.sh") == ["s=disconnected g=none i=none"])
+check("VPN 外掛：標題 events=vpn 解析成訂閱", vpnRunner.plugins.first { $0.id == "sub.1m.sh" }.map(PluginRunner.subscribesToVPN) == true
+      && vpnRunner.plugins.first { $0.id == "plain.1m.sh" }.map(PluginRunner.subscribesToVPN) == false)
+vpnRunner.updateVPN(.disconnected)
+try? await Task.sleep(nanoseconds: 800_000_000)
+check("VPN 外掛：第一次收到狀態只記錄、不觸發（執行次數 \(runCount("sub.1m.sh"))）", runCount("sub.1m.sh") == 1 && runCount("plain.1m.sh") == 1)
+vpnRunner.updateVPN(PluginVPNContext(state: .connecting, gateway: "vpn2"))
+try? await Task.sleep(nanoseconds: 800_000_000)
+check("VPN 外掛：連線中不觸發", runCount("sub.1m.sh") == 1)
+vpnRunner.updateVPN(PluginVPNContext(state: .connected, gateway: "vpn2", ip: "10.20.30.40"))
+check("VPN 外掛：連上後訂閱的外掛多跑一次並讀到新環境變數",
+      await eventually { runCount("sub.1m.sh") == 2 && vpnItems("sub.1m.sh") == ["s=connected g=vpn2 i=10.20.30.40"] })
+try? await Task.sleep(nanoseconds: 800_000_000)
+check("VPN 外掛：未訂閱的外掛不跑（\(runCount("plain.1m.sh")) 次）", runCount("plain.1m.sh") == 1)
+vpnRunner.updateVPN(.disconnected)
+check("VPN 外掛：斷線後訂閱的外掛再跑一次並讀到 disconnected",
+      await eventually { runCount("sub.1m.sh") == 3 && vpnItems("sub.1m.sh") == ["s=disconnected g=none i=none"] })
+
 print("整合測試目錄：\(root)")
 
 print("通過 \(pass)，失敗 \(fail)")

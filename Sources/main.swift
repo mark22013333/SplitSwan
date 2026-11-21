@@ -5,6 +5,17 @@ import SwiftUI
 import Combine
 
 
+extension VPNState {
+    /// 給外掛的 VPN 狀態；helperMissing 視為沒連線
+    var pluginContext: PluginVPNContext {
+        switch self {
+        case .connected(let name, let ip): return PluginVPNContext(state: .connected, gateway: name, ip: ip)
+        case .connecting(let name): return PluginVPNContext(state: .connecting, gateway: name)
+        case .disconnected, .helperMissing: return .disconnected
+        }
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let vpn = VPNController()
@@ -49,6 +60,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         vpn.$state.combineLatest(vpn.$busy, vpn.$settings, vpn.$retryNote)
             .receive(on: RunLoop.main)
             .sink { [weak self] _, _, _, _ in self?.renderMenu() }
+            .store(in: &bag)
+        vpn.$state.map(\.pluginContext).removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { PluginRunner.shared.updateVPN($0) }
             .store(in: &bag)
         vpn.$wantConnected.receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.renderMenu() }
