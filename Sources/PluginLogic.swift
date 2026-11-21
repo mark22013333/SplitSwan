@@ -95,6 +95,58 @@ enum PluginLogic {
         var truncated = false     // 輸出超過 64 KB 或項目超過 30 個
         var settingsAvailable = false
         var card: PluginMenuCard? = nil   // 標題行 card= 的資訊卡片；不合規時為 nil，文字列照常顯示
+        var events: Set<String> = []      // 標題行 events= 訂閱的事件（只收 knownEvents 內的值）
+    }
+
+    /// 外掛可訂閱的事件名稱；未知值一律忽略
+    static let knownEvents: Set<String> = ["vpn"]
+
+    /// 傳給外掛的 VPN 狀態。值會進外掛的環境變數，所以閘道與 IP 只接受固定格式
+    struct PluginVPNContext: Equatable, Sendable {
+        enum State: String, Sendable { case connected, connecting, disconnected }
+        var state: State
+        var gateway: String?
+        var ip: String?
+
+        static let disconnected = PluginVPNContext(state: .disconnected)
+
+        init(state: State, gateway: String? = nil, ip: String? = nil) {
+            self.state = state
+            self.gateway = gateway
+            self.ip = ip
+        }
+
+        var environment: [String: String] {
+            var env = ["SPLITSWAN_VPN_STATE": state.rawValue]
+            if state != .disconnected, let g = gateway, Self.validGateway(g) { env["SPLITSWAN_VPN_GATEWAY"] = g }
+            if state == .connected, let i = ip, Self.validIPv4(i) { env["SPLITSWAN_VPN_IP"] = i }
+            return env
+        }
+
+        /// 連上或斷線才通知；連線中不通知，已連上換閘道或虛擬 IP 也通知
+        static func shouldNotify(from old: PluginVPNContext, to new: PluginVPNContext) -> Bool {
+            if new.state == .connecting { return false }
+            if old.state != new.state { return true }
+            return new.state == .connected && (old.gateway != new.gateway || old.ip != new.ip)
+        }
+
+        static func validGateway(_ s: String) -> Bool {
+            s.count == 4 && s.hasPrefix("vpn") && ["1", "2", "3"].contains(s.suffix(1))
+        }
+
+        static func validIPv4(_ s: String) -> Bool {
+            let parts = s.split(separator: ".", omittingEmptySubsequences: false)
+            return parts.count == 4 && parts.allSatisfy { p in
+                (1...3).contains(p.count) && p.allSatisfy { ("0"..."9").contains($0) }
+                    && (p.count == 1 || p.first != "0") && Int(p).map { $0 <= 255 } == true
+            }
+        }
+    }
+
+    /// 標題行 events=vpn,…（逗號分隔）→ 已知事件集合
+    static func parseEvents(_ raw: String?) -> Set<String> {
+        guard let raw else { return [] }
+        return Set(raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }).intersection(knownEvents)
     }
 
     /// 解析外掛的 stdout。第一個 `---` 之前的第一行是標題，其餘 header 行忽略；
@@ -115,6 +167,7 @@ enum PluginLogic {
         var title = ""
         var settingsAvailable = false
         var card: PluginMenuCard?
+        var events: Set<String> = []
         var items: [Item] = []
         var inBody = false
         var count = 0
@@ -129,6 +182,7 @@ enum PluginLogic {
                     title = header.text
                     settingsAvailable = header.params["settings"] == "true"
                     card = header.params["card"].flatMap(PluginMenuCard.decode)
+                    events = parseEvents(header.params["events"])
                 }
                 continue
             }
@@ -176,7 +230,7 @@ enum PluginLogic {
             count += 1
             pendingSeparator = false
         }
-        return Output(title: title, items: items, truncated: truncated, settingsAvailable: settingsAvailable, card: card)
+        return Output(title: title, items: items, truncated: truncated, settingsAvailable: settingsAvailable, card: card, events: events)
     }
 
     /// 一行：`文字 | key=value key2="有 空白"`
@@ -364,3 +418,5 @@ enum PluginLogic {
         return nil
     }
 }
+
+typealias PluginVPNContext = PluginLogic.PluginVPNContext

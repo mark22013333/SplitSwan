@@ -349,6 +349,45 @@ check("上層資料夾：自己或 root、不可被他人寫入（sticky 例外�
       && L.ancestorProblem(FS(uid: 502, mode: 0o040700), path: "x", uid: me) != nil
       && L.ancestorProblem(nil, path: "x", uid: me) != nil)
 
+// MARK: VPN 狀態與事件訂閱（純邏輯）
+let vpnConn = PluginVPNContext(state: .connected, gateway: "vpn2", ip: "10.20.30.40")
+let vpnConnecting = PluginVPNContext(state: .connecting, gateway: "vpn1")
+check("VPN 環境變數：connected 三個都有",
+      vpnConn.environment == ["SPLITSWAN_VPN_STATE": "connected", "SPLITSWAN_VPN_GATEWAY": "vpn2", "SPLITSWAN_VPN_IP": "10.20.30.40"])
+check("VPN 環境變數：connecting 只有狀態與閘道，不放 IP",
+      PluginVPNContext(state: .connecting, gateway: "vpn1", ip: "10.0.0.1").environment == ["SPLITSWAN_VPN_STATE": "connecting", "SPLITSWAN_VPN_GATEWAY": "vpn1"])
+check("VPN 環境變數：disconnected 只有狀態，即使帶了閘道與 IP",
+      PluginVPNContext(state: .disconnected, gateway: "vpn1", ip: "10.0.0.1").environment == ["SPLITSWAN_VPN_STATE": "disconnected"]
+      && PluginVPNContext.disconnected.environment == ["SPLITSWAN_VPN_STATE": "disconnected"])
+for bad in ["vpn4", "vpn0", "vpn", "vpn12", "VPN1", "vpn1;ls", "vpn1\n", ""] {
+    check("VPN 環境變數：非法閘道被擋「\(bad.debugDescription)」",
+          PluginVPNContext(state: .connected, gateway: bad, ip: "10.0.0.1").environment["SPLITSWAN_VPN_GATEWAY"] == nil)
+}
+for bad in ["10.0.0", "10.0.0.256", "10.0.0.1.2", "a.b.c.d", "10.0.0.01", "１０.0.0.1", "10.0.0.1 ", "$(id)", "::1", ""] {
+    check("VPN 環境變數：非法 IP 被擋「\(bad.debugDescription)」",
+          PluginVPNContext(state: .connected, gateway: "vpn1", ip: bad).environment["SPLITSWAN_VPN_IP"] == nil)
+}
+let vpnDown = PluginVPNContext.disconnected
+let vpnOther = PluginVPNContext(state: .connected, gateway: "vpn3", ip: "10.20.30.40")
+let vpnOtherIP = PluginVPNContext(state: .connected, gateway: "vpn2", ip: "10.20.30.41")
+check("shouldNotify：斷線→連上、連上→斷線觸發",
+      PluginVPNContext.shouldNotify(from: vpnDown, to: vpnConn) && PluginVPNContext.shouldNotify(from: vpnConn, to: vpnDown))
+check("shouldNotify：新狀態是連線中一律不觸發",
+      !PluginVPNContext.shouldNotify(from: vpnDown, to: vpnConnecting) && !PluginVPNContext.shouldNotify(from: vpnConn, to: vpnConnecting))
+check("shouldNotify：連線中→連上／斷線觸發",
+      PluginVPNContext.shouldNotify(from: vpnConnecting, to: vpnConn) && PluginVPNContext.shouldNotify(from: vpnConnecting, to: vpnDown))
+check("shouldNotify：已連上換閘道或換 IP 觸發",
+      PluginVPNContext.shouldNotify(from: vpnConn, to: vpnOther) && PluginVPNContext.shouldNotify(from: vpnConn, to: vpnOtherIP))
+check("shouldNotify：完全相同不觸發", !PluginVPNContext.shouldNotify(from: vpnConn, to: vpnConn)
+      && !PluginVPNContext.shouldNotify(from: vpnDown, to: vpnDown) && !PluginVPNContext.shouldNotify(from: vpnConnecting, to: vpnConnecting))
+check("shouldNotify：斷線狀態下閘道欄位不同不觸發",
+      !PluginVPNContext.shouldNotify(from: PluginVPNContext(state: .disconnected, gateway: "vpn1"), to: PluginVPNContext(state: .disconnected, gateway: "vpn2")))
+check("標題 events=vpn 解析", L.parseOutput("標題 | events=vpn\n---\n項目").events == ["vpn"])
+check("標題 events：逗號分隔、未知值忽略", L.parseOutput("標題 | events=foo,vpn,bar").events == ["vpn"]
+      && L.parseOutput("標題 | events=foo").events.isEmpty)
+check("標題沒有 events 或在項目列上都不訂閱", L.parseOutput("標題\n---\n項目 | events=vpn").events.isEmpty
+      && L.parseOutput("標題").events.isEmpty)
+
 // MARK: 整合測試：實跑假外掛
 // 時序原則（本機常有防毒掃描新執行檔、Spotlight 索引，負載平均可達上百）：
 // - 「某事應該發生」一律用 eventually 輪詢到成立為止，期限寬鬆；正常負載下條件一成立就往下走，不增加耗時。
