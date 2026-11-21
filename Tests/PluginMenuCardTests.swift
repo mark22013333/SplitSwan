@@ -62,6 +62,10 @@ check("卡片：近期統計與圖例", decoded?.historySummary == "自動打卡
       && decoded?.legend == [.auto, .manual, .leave, .missed] && Card.Result.manual.label == "人工處理")
 let minimal = Card.decode(encode(["version": 1, "headline": "簡短", "tone": "neutral", "enabled": false, "conditions": [], "history": []]))
 check("卡片：選填欄位可省略", minimal != nil && minimal?.timeline == nil && minimal?.detail == nil && minimal?.historySummary == nil)
+let noEnabled = Card.decode(encode(cardJSON { $0["enabled"] = nil }))
+check("卡片：省略 enabled 解碼成功且為 nil", noEnabled != nil && noEnabled?.enabled == nil && noEnabled?.headline == decoded?.headline
+      && noEnabled?.conditions == decoded?.conditions && noEnabled?.history == decoded?.history)
+check("卡片：enabled 為 true 或 false 時照舊保留", decoded?.enabled == true && minimal?.enabled == false)
 let padded = try! JSONSerialization.data(withJSONObject: cardJSON()).base64EncodedString()
     .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
 check("卡片：接受帶補位的 base64url", Card.decode(padded) == decoded)
@@ -85,8 +89,10 @@ let rejections: [(String, String)] = [
     ("日期未遞增", encode(cardJSON { $0["history"] = history([("2026-10-09", "五", nil, "leave"), ("2026-10-08", "四", nil, "leave")]) })),
     ("條件超過 4 個", encode(cardJSON { $0["conditions"] = Array(repeating: ["label": "A", "value": "B", "tone": "ok"], count: 5) })),
     ("歷史超過 10 筆", encode(cardJSON { $0["history"] = (1...11).map { ["date": String(format: "2026-09-%02d", $0), "weekday": "一", "result": "auto", "time": "08:40"] } })),
-    ("缺少必要欄位", encode(cardJSON { $0["enabled"] = nil })),
+    ("缺少必要欄位", encode(cardJSON { $0["tone"] = nil })),
     ("型別錯誤", encode(cardJSON { $0["enabled"] = "true" })),
+    ("enabled 為字串 \"false\"", encode(cardJSON { $0["enabled"] = "false" })),
+    ("enabled 為陣列", encode(cardJSON { $0["enabled"] = [true] })),
     ("空標題", encode(cardJSON { $0["headline"] = "\u{202E}" })),
 ]
 for (name, raw) in rejections { check("卡片：拒絕\(name)", Card.decode(raw) == nil) }
@@ -214,6 +220,10 @@ MainActor.assumeIsolated {
             $0["detail"] = "已過預定時間 08:41；條件恢復後立即打卡"
             $0["timeline"] = ["start": "08:20", "end": "09:05", "check": "08:24", "windowStart": "08:30", "windowEnd": "09:00", "planned": "08:41", "now": "08:50"]
             $0["conditions"] = [["label": "App", "value": "開啟", "tone": "ok"], ["label": "電源", "value": "已接上", "tone": "ok"], ["label": "VPN", "value": "未連線", "tone": "warn"]]
+        }),
+        ("no-enabled", cardJSON {
+            $0["headline"] = "本週工時 32.5 小時"; $0["tone"] = "info"; $0["enabled"] = nil
+            $0["detail"] = "今天已填 6 小時"; $0["timeline"] = nil; $0["conditions"] = []; $0["history"] = []
         }),
         ("copy", cardJSON {
             $0["headline"] = "公網 IP 203.0.113.7"; $0["detail"] = "出口：公司 VPN"

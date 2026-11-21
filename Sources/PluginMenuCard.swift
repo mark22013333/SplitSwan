@@ -102,7 +102,7 @@ struct PluginMenuCard: Equatable, Sendable {
     let tone: Tone
     let copy: Copy?
     let detail: String?
-    let enabled: Bool
+    let enabled: Bool?
     let timeline: Timeline?
     let conditions: [Condition]
     let history: [Day]
@@ -189,7 +189,7 @@ struct PluginMenuCard: Equatable, Sendable {
         let tone: Tone
         let copy: WireCopy?
         let detail: String?
-        let enabled: Bool
+        let enabled: Bool?
         let timeline: WireTimeline?
         let conditions: [WireCondition]
         let history: [WireDay]
