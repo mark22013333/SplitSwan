@@ -388,6 +388,24 @@ check("標題 events：逗號分隔、未知值忽略", L.parseOutput("標題 | 
 check("標題沒有 events 或在項目列上都不訂閱", L.parseOutput("標題\n---\n項目 | events=vpn").events.isEmpty
       && L.parseOutput("標題").events.isEmpty)
 
+func manifestJSON(events: String?) -> Data {
+    let extra = events.map { ",\"events\":\($0)" } ?? ""
+    let sha = String(repeating: "a", count: 64)
+    return Data("""
+    {"formatVersion":1,"id":"example.vpn-events","name":"n","author":"a","description":"d","version":"1.0.0","minimumAppVersion":"1.0.0",
+    "entrypoint":"run.sh","interval":60,"runtime":"sh","dependencies":[],"settings":false,
+    "files":[{"path":"run.sh","sha256":"\(sha)","executable":true}]\(extra)}
+    """.utf8)
+}
+func decodedEvents(_ events: String?) -> [String]?? {
+    (try? PluginPackage.decode(manifestJSON(events: events), appVersion: "1.9.20")).map { $0.events }
+}
+check("manifest events：沒宣告解碼成 nil", decodedEvents(nil) == .some(nil))
+check("manifest events：[\"vpn\"] 合法", decodedEvents("[\"vpn\"]") == .some(["vpn"]))
+check("manifest events：未知值、非陣列、非字串一律拒絕",
+      decodedEvents("[\"foo\"]") == nil && decodedEvents("[\"vpn\",\"foo\"]") == nil
+      && decodedEvents("\"vpn\"") == nil && decodedEvents("[1]") == nil && decodedEvents("null") == nil)
+
 // MARK: 整合測試：實跑假外掛
 // 時序原則（本機常有防毒掃描新執行檔、Spotlight 索引，負載平均可達上百）：
 // - 「某事應該發生」一律用 eventually 輪詢到成立為止，期限寬鬆；正常負載下條件一成立就往下走，不增加耗時。
