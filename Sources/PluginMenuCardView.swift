@@ -63,22 +63,26 @@ struct PluginMenuCardView: View {
                 }
             }
 
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                if let detail = card.detail {
-                    Text(detail)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+            if card.detail != nil || card.enabled != nil {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    if let detail = card.detail {
+                        Text(detail)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                    if let enabled = card.enabled {
+                        HStack(spacing: 4) {
+                            Text("背景自動執行").foregroundStyle(.secondary)
+                            Text(enabled ? "開啟" : "關閉")
+                                .fontWeight(.semibold)
+                                .foregroundStyle(enabled ? PluginMenuCard.Tone.ok.color : .secondary)
+                        }
+                        .fixedSize()
+                    }
                 }
-                Spacer(minLength: 0)
-                HStack(spacing: 4) {
-                    Text("背景自動執行").foregroundStyle(.secondary)
-                    Text(card.enabled ? "開啟" : "關閉")
-                        .fontWeight(.semibold)
-                        .foregroundStyle(card.enabled ? PluginMenuCard.Tone.ok.color : .secondary)
-                }
-                .fixedSize()
+                .font(.system(size: 11))
             }
-            .font(.system(size: 11))
         }
         .accessibilityElement(children: .combine)
         .accessibilityActions {
