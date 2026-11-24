@@ -234,9 +234,69 @@ let manyChildSeparators = "T\n---\nParent\n" + (1...40)
     .joined(separator: "\n")
 let childSeparatorLimit = L.parseOutput(manyChildSeparators)
 let childSeparatorNodeCount = outputNodeCount(childSeparatorLimit.items)
-check("大量子分隔線：遞迴節點受 30 項上限約束且標記截斷",
-      childSeparatorNodeCount <= L.maxItems && childSeparatorLimit.truncated
+check("大量子分隔線：子層（含分隔線）受 50 項上限約束且標記截斷",
+      childSeparatorNodeCount - 1 <= L.maxChildItems && childSeparatorLimit.truncated
       && childSeparatorLimit.items.first?.children.last?.isSeparator == false)
+
+// 1.9.23 起子項目不計入頂層 30 項，另有每個父項目 50、整體 150 的上限
+func childLines(_ n: Int, _ prefix: String) -> [String] { (1...n).map { "--\(prefix)\($0)" } }
+let fortyChildren = L.parseOutput((["T", "---", "今日"] + childLines(40, "今") + ["明日"] + childLines(40, "明")).joined(separator: "\n"))
+check("子項目 40＋40：全部保留、不算截斷",
+      fortyChildren.items.map(\.text) == ["今日", "明日"]
+      && fortyChildren.items.map(\.children.count) == [40, 40] && !fortyChildren.truncated)
+let exactlyFifty = L.parseOutput((["T", "---", "P"] + childLines(50, "子")).joined(separator: "\n"))
+check("剛好 50 個子項目不算截斷", exactlyFifty.items[0].children.count == 50 && !exactlyFifty.truncated)
+let overFifty = L.parseOutput((["T", "---", "P"] + childLines(60, "子") + ["Q"] + childLines(2, "後")).joined(separator: "\n"))
+check("子項目超過 50：只留前 50、標記截斷，後面的頂層項目照常顯示",
+      overFifty.items[0].children.count == L.maxChildItems && overFifty.items[0].children.last?.text == "子50"
+      && overFifty.truncated && overFifty.items.map(\.text) == ["P", "Q"]
+      && overFifty.items[1].children.map(\.text) == ["後1", "後2"])
+let topWithChildren = L.parseOutput((["T", "---"] + (1...30).flatMap { ["頂\($0)", "--子\($0)"] }).joined(separator: "\n"))
+check("頂層 30 項不受子項目影響：30 個頂層各帶一個子項目全部保留",
+      topWithChildren.items.count == 30 && topWithChildren.items.allSatisfy { $0.children.count == 1 } && !topWithChildren.truncated)
+let topOverflow = L.parseOutput((["T", "---"] + (1...31).flatMap { ["頂\($0)", "--子\($0)"] }).joined(separator: "\n"))
+check("頂層第 31 項截斷", topOverflow.items.count == 30 && topOverflow.items.last?.text == "頂30" && topOverflow.truncated)
+let totalFlood = L.parseOutput((["T", "---"] + (1...5).flatMap { ["P\($0)"] + childLines(40, "子\($0)-") }).joined(separator: "\n"))
+check("總數 150 上限：節點總數不超過 150 且標記截斷",
+      outputNodeCount(totalFlood.items) == L.maxTotalItems && totalFlood.truncated
+      && totalFlood.items.map(\.children.count) == [40, 40, 40, 26])
+let exactlyTotal = L.parseOutput((["T", "---"] + (1...3).flatMap { ["P\($0)"] + childLines(49, "子\($0)-") }).joined(separator: "\n"))
+check("剛好 150 個節點不算截斷", outputNodeCount(exactlyTotal.items) == 150 && !exactlyTotal.truncated)
+
+// bg= 底色：規則與 color= 相同
+check("bg：具名色", L.parseLine("A | bg=orange").background == "orange")
+check("bg：#rrggbb 轉小寫", L.parseLine("A | bg=#FFD60A").background == "#ffd60a")
+check("bg：grey → gray", L.parseLine("A | bg=grey").background == "gray")
+check("bg：不合法的值忽略", ["A | bg=purple", "A | bg=#fff", "A | bg=#12345g", "A | bg=", "A"].allSatisfy { L.parseLine($0).background == nil })
+check("bg 與 color 互不影響", L.parseLine("A | color=red bg=green").color == "red" && L.parseLine("A | color=red bg=green").background == "green")
+let bgMenu = M.project(isActive: true, plugins: [M.PluginSnapshot(id: "bg", title: "底色", output: .init(items: L.parseOutput("""
+T
+---
+資訊 | bg=orange
+動作 | bg=#00ff00 color=red href=https://example.com/a
+父 | bg=gray
+--子資訊 | bg=green
+--子動作 | bg=red refresh=true
+""").items))])
+let bgKids = bgMenu.root.children?.first?.children ?? []
+check("投影：資訊列與動作列帶 bg，子選單項目也帶",
+      bgKids.count == 3
+      && bgKids[0].style == .info(color: nil, background: "orange")
+      && bgKids[1].style == .text(color: "red", background: "#00ff00")
+      && bgKids[2].children?.map(\.style) == [.info(color: nil, background: "green"), .text(color: nil, background: "red")])
+#if canImport(AppKit)
+let bgAdapter = MainActor.assumeIsolated {
+    let rows = M.rootItem(bgMenu, target: NSObject(), action: Selector(("pluginAction:"))).submenu?.items.first?.submenu?.items ?? []
+    guard rows.count >= 3, let info = rows[0].view as? M.InfoRowView, let button = rows[1].view as? M.StickyActionButton,
+          let sub = rows[2].submenu?.items, sub.count == 2,
+          let subInfo = sub[0].view as? M.InfoRowView, let subButton = sub[1].view as? M.StickyActionButton else { return false }
+    return info.background?.isEqual(NSColor.systemOrange) == true
+        && button.background != nil && button.normalTitleColor.isEqual(NSColor.systemRed)
+        && subInfo.background?.isEqual(NSColor.systemGreen) == true
+        && subButton.background?.isEqual(NSColor.systemRed) == true
+}
+check("AppKit：bg 傳到資訊列與動作列（含子選單）", bgAdapter)
+#endif
 let longText = String(repeating: "長", count: 500)
 check("單一項目文字過長截短", (L.parseOutput("T\n---\n" + longText).items.first?.text.count ?? 0) <= L.maxTextLength + 1)
 // 64 KB 截斷不能切壞多位元組字元：每行 3 bytes 的中文

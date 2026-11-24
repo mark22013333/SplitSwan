@@ -61,9 +61,9 @@ enum PluginMenu {
     struct Tree: Equatable, Sendable {
         struct Item: Equatable, Sendable {
             enum Style: Equatable, Sendable {
-                case text(color: String?)
+                case text(color: String?, background: String? = nil)
                 /// 外掛輸出中沒有任何動作的文字列：不可點、不反白，但維持可讀的文字顏色。
-                case info(color: String?)
+                case info(color: String?, background: String? = nil)
                 /// 子選單頂端的資訊卡片（不可點）。
                 case card(pluginID: String, PluginMenuCard)
                 case separator
@@ -166,12 +166,12 @@ enum PluginMenu {
             ? nil
             : item.children.filter { $0.params["menu"] != "false" }.map { outputItem($0, pluginID: pluginID) }
         if command == nil, children == nil {
-            return Tree.Item(title: item.text, isEnabled: false, style: .info(color: item.color))
+            return Tree.Item(title: item.text, isEnabled: false, style: .info(color: item.color, background: item.background))
         }
         return Tree.Item(
             title: item.text,
             isEnabled: true,
-            style: .text(color: item.color),
+            style: .text(color: item.color, background: item.background),
             command: command,
             children: children
         )
@@ -194,14 +194,16 @@ enum PluginMenu {
 
         let command: Command
         let normalTitleColor: NSColor
+        let background: NSColor?
         private var hoverTrackingArea: NSTrackingArea?
         private var isHovered = false {
             didSet { needsDisplay = true }
         }
 
-        init(title: String, color: NSColor?, command: Command, target: AnyObject, action: Selector) {
+        init(title: String, color: NSColor?, background: NSColor? = nil, command: Command, target: AnyObject, action: Selector) {
             self.command = command
             normalTitleColor = color ?? .labelColor
+            self.background = background
             super.init(frame: .zero)
             self.title = title
             self.target = target
@@ -244,6 +246,8 @@ enum PluginMenu {
             if isHovered && isEnabled {
                 NSColor.selectedContentBackgroundColor.setFill()
                 NSBezierPath(roundedRect: bounds.insetBy(dx: 4, dy: 1), xRadius: 5, yRadius: 5).fill()
+            } else if let background {
+                PluginMenu.drawRowBackground(background, in: bounds)
             }
 
             let titleColor: NSColor
@@ -276,6 +280,15 @@ enum PluginMenu {
                    min(520, titleWidth + StickyActionButton.leadingInset + StickyActionButton.trailingInset))
     }
 
+    /// bg= 底色：只取低透明度疊在選單背景上，淺色與深色模式下原本的文字色都還清楚。
+    static let rowBackgroundAlpha: CGFloat = 0.3
+
+    @MainActor
+    static func drawRowBackground(_ color: NSColor, in bounds: NSRect) {
+        color.withAlphaComponent(rowBackgroundAlpha).setFill()
+        NSBezierPath(roundedRect: bounds.insetBy(dx: 4, dy: 1), xRadius: 5, yRadius: 5).fill()
+    }
+
     @MainActor
     static func drawRowText(_ title: String, color: NSColor, font: NSFont, in bounds: NSRect) {
         let paragraph = NSMutableParagraphStyle()
@@ -299,10 +312,12 @@ enum PluginMenu {
     final class InfoRowView: NSView {
         let title: String
         let textColor: NSColor
+        let background: NSColor?
 
-        init(title: String, color: NSColor?) {
+        init(title: String, color: NSColor?, background: NSColor? = nil) {
             self.title = title
             textColor = color ?? .labelColor
+            self.background = background
             super.init(frame: .zero)
             frame.size = NSSize(width: PluginMenu.rowWidth(title, font: .menuFont(ofSize: 0)), height: 22)
             setAccessibilityElement(true)
@@ -313,6 +328,7 @@ enum PluginMenu {
         required init?(coder: NSCoder) { nil }
 
         override func draw(_ dirtyRect: NSRect) {
+            if let background { PluginMenu.drawRowBackground(background, in: bounds) }
             PluginMenu.drawRowText(title, color: textColor, font: .menuFont(ofSize: 0), in: bounds)
         }
     }
@@ -371,9 +387,10 @@ enum PluginMenu {
             result.view = cards.host(pluginID: pluginID, card: card, owner: result)
             result.isEnabled = false
             return result
-        case .info(let colorName):
+        case .info(let colorName, let backgroundName):
             let result = NSMenuItem(title: item.title, action: nil, keyEquivalent: "")
-            result.view = InfoRowView(title: item.title, color: colorName.flatMap(nsColor))
+            result.view = InfoRowView(title: item.title, color: colorName.flatMap(nsColor),
+                                      background: backgroundName.flatMap(nsColor))
             result.isEnabled = false
             return result
         case .text:
@@ -381,7 +398,7 @@ enum PluginMenu {
         }
 
         let result = NSMenuItem(title: item.title, action: nil, keyEquivalent: "")
-        if case .text(let colorName) = item.style,
+        if case .text(let colorName, _) = item.style,
            let color = colorName.flatMap(nsColor) {
             result.attributedTitle = NSAttributedString(string: item.title, attributes: [
                 .foregroundColor: color,
@@ -391,10 +408,13 @@ enum PluginMenu {
         if let command = item.command {
             result.representedObject = command
             if item.children == nil, case .pluginAction = command {
-                let color: NSColor?
-                if case .text(let name) = item.style { color = name.flatMap(nsColor) } else { color = nil }
-                result.view = StickyActionButton(title: item.title, color: color, command: command,
-                                                 target: target, action: action)
+                var color: NSColor?, background: NSColor?
+                if case .text(let name, let bg) = item.style {
+                    color = name.flatMap(nsColor)
+                    background = bg.flatMap(nsColor)
+                }
+                result.view = StickyActionButton(title: item.title, color: color, background: background,
+                                                 command: command, target: target, action: action)
             } else {
                 result.action = action
                 result.target = target

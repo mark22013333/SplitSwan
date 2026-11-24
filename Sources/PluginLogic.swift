@@ -10,7 +10,9 @@ enum PluginLogic {
     static let defaultInterval: TimeInterval = 300   // 檔名沒有間隔段時用 5 分鐘
     static let maxPlugins = 10                       // 外掛數量上限
     static let maxOutputBytes = 64 * 1024            // 輸出上限，超過截斷
-    static let maxItems = 30                         // 每個外掛最多顯示的項目數（含子選單項目）
+    static let maxItems = 30                         // 每個外掛最多幾個頂層項目（含頂層分隔線，不含子選單項目）
+    static let maxChildItems = 50                    // 每個父項目最多幾個子項目（含子層分隔線）
+    static let maxTotalItems = 150                   // 每個外掛的項目總數上限（頂層＋所有子項目），防爆量
     static let maxTextLength = 200                   // 單一項目文字上限（字元），避免整個選單被撐爆
     static let maxTextBytes = 600                    // 單一項目文字上限（UTF-8 bytes），擋住帶大量組合字元的單一字
     static let maxNotifyIDLength = 64                // notify_id 超過就改用雜湊
@@ -87,12 +89,14 @@ enum PluginLogic {
             return "#" + hex.prefix(32)
         }
         var color: String? { params["color"].flatMap(PluginLogic.normalizedColor) }
+        /// bg= 底色，規則與 color= 相同
+        var background: String? { params["bg"].flatMap(PluginLogic.normalizedColor) }
     }
 
     struct Output: Equatable, Sendable {
         var title: String
         var items: [Item]
-        var truncated = false     // 輸出超過 64 KB 或項目超過 30 個
+        var truncated = false     // 輸出超過 64 KB，或觸發頂層、子層、總數任一項目上限
         var settingsAvailable = false
         var card: PluginMenuCard? = nil   // 標題行 card= 的資訊卡片；不合規時為 nil，文字列照常顯示
         var events: Set<String> = []      // 標題行 events= 訂閱的事件（只收 knownEvents 內的值）
@@ -170,7 +174,8 @@ enum PluginLogic {
         var events: Set<String> = []
         var items: [Item] = []
         var inBody = false
-        var count = 0
+        var topCount = 0
+        var totalCount = 0
         var pendingSeparator = false
         var pendingChildSeparatorFor: Int?
         for line in lines {
@@ -207,13 +212,12 @@ enum PluginLogic {
                 guard !child.text.isEmpty else { continue }
                 let needsSeparator = pendingChildSeparatorFor == i
                 let needed = needsSeparator ? 2 : 1
-                if count + needed > maxItems { truncated = true; break }
-                if needsSeparator {
-                    items[i].children.append(.separator)
-                    count += 1
-                }
+                if totalCount + needed > maxTotalItems { truncated = true; break }
+                // 單一父項目滿了只略過它其餘的子項目，後面的頂層項目照常顯示
+                if items[i].children.count + needed > maxChildItems { truncated = true; continue }
+                if needsSeparator { items[i].children.append(.separator) }
                 items[i].children.append(child)
-                count += 1
+                totalCount += needed
                 pendingChildSeparatorFor = nil
                 continue
             }
@@ -221,13 +225,11 @@ enum PluginLogic {
             guard !item.text.isEmpty else { continue }   // 空字串項目略過
             pendingChildSeparatorFor = nil
             let needed = pendingSeparator ? 2 : 1
-            if count + needed > maxItems { truncated = true; break }
-            if pendingSeparator {
-                items.append(.separator)
-                count += 1
-            }
+            if topCount + needed > maxItems || totalCount + needed > maxTotalItems { truncated = true; break }
+            if pendingSeparator { items.append(.separator) }
             items.append(item)
-            count += 1
+            topCount += needed
+            totalCount += needed
             pendingSeparator = false
         }
         return Output(title: title, items: items, truncated: truncated, settingsAvailable: settingsAvailable, card: card, events: events)
