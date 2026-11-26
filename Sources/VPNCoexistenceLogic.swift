@@ -140,7 +140,7 @@ enum CompanyVPNPlanner {
         try validateExternal(session, current)
         let reserved = try session.profile.protectedNetworks.map(ExternalIPv4Network.init)
         let direct = try session.profile.directIPv4.map { ExternalIPv4Network(address: try ExternalIPv4($0), prefix: 32) }
-        let dns = try current.dns.flatMap(\.servers).map { ExternalIPv4Network(address: try ExternalIPv4($0), prefix: 32) }
+        let dns = current.dns.flatMap(\.servers).compactMap { try? ExternalIPv4($0) }.map { ExternalIPv4Network(address: $0, prefix: 32) }
         for selector in policy.selectors {
             guard !([current.localNetwork] + reserved + dns + direct).contains(where: { overlaps(selector, $0) }) else {
                 throw CompanyVPNError.admission("公司網段與本機、保留的 F5 網段或 DNS 重疊")
