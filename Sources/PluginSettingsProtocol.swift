@@ -128,6 +128,8 @@ enum PluginSettingsProtocol {
         var opensTab: String? = nil
         /// 單一小寫字母或數字；設定視窗在任何頁籤按 ⌘ 加此鍵就等同按下按鈕（需確認的動作仍會先確認）。
         var shortcut: String? = nil
+        /// 需要公司 VPN；使用者在設定視窗親手按下時，App 先確認已連上（沒連上就自動連線）才執行。舊版 App 忽略此鍵。
+        var requiresVPN: Bool? = nil
     }
     struct Job: Codable, Equatable { let id: String; let state: String; let message: String }
     struct Snapshot: Codable, Equatable {
@@ -266,7 +268,8 @@ enum PluginSettingsProtocol {
         for action in s.actions {
             guard let target = action.opensTab else { continue }
             guard hiddenTabs.contains(target), action.input == nil, action.destructive != true,
-                  action.opensExternal != true, action.recheckAfter != true, action.signsIn != true else { throw fail }
+                  action.opensExternal != true, action.recheckAfter != true, action.signsIn != true,
+                  action.requiresVPN != true else { throw fail }
         }
         for tab in s.tabs {
             let fields = Dictionary(uniqueKeysWithValues: s.fields.filter { $0.tab == tab.id }.map { ($0.id, $0) })

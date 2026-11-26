@@ -196,6 +196,29 @@ struct CompanyAdmissionFailure {
     }
 }
 
+/// 一次連線沒有連上時是怎麼結束的。外掛 requiresVPN 只把「協調器真的放棄」當失敗（failureGeneration）。
+enum ConnectEnd: Equatable {
+    case admissionRefused(message: String, retryable: Bool)
+    case noGateway
+    case noNetwork
+    /// 一輪閘道全部失敗；retrySoon＝跑的途中網路才恢復，會在 1 秒後重試
+    case allGatewaysFailed(message: String, retrySoon: Bool)
+
+    static let noGatewayMessage = "尚未設定閘道"
+    static let noNetworkMessage = "沒有網路，恢復後自動重連"
+
+    /// 算終局失敗時回原因文字；只是排了短重試（准入 busy、retrySoon）時回 nil。
+    /// retrySoon 那輪多半是斷網造成，1 秒後的重試才算數。
+    var terminalFailureReason: String? {
+        switch self {
+        case .admissionRefused(let message, let retryable): retryable ? nil : message
+        case .noGateway: Self.noGatewayMessage
+        case .noNetwork: Self.noNetworkMessage
+        case .allGatewaysFailed(let message, let retrySoon): retrySoon ? nil : message
+        }
+    }
+}
+
 enum HelperRun {
     /// 逾時時 run 回傳的結束代碼（跟 coreutils timeout 相同）
     static let timeoutCode: Int32 = 124
@@ -343,7 +366,21 @@ final class VPNController: ObservableObject {
 
     /// 使用者的連線意圖。只有按「斷線」才會變成 false（規格 §3.2）
     @Published private(set) var wantConnected: Bool = UserDefaults.standard.bool(forKey: "WantConnected") {
-        didSet { UserDefaults.standard.set(wantConnected, forKey: "WantConnected") }
+        didSet {
+            UserDefaults.standard.set(wantConnected, forKey: "WantConnected")
+            intentGeneration += 1
+        }
+    }
+    /// 連線意圖每被設定一次就遞增（值沒變也算），讓外掛 requiresVPN 分辨意圖是不是還停在它設的那一次。
+    @Published private(set) var intentGeneration = 0
+    /// 協調器真正放棄這次連線時遞增（哪些結束方式算放棄見 `ConnectEnd.terminalFailureReason`）。
+    /// 外掛 requiresVPN 看這個判斷失敗，不從 retryNote 文字推斷。
+    @Published private(set) var failureGeneration = 0
+    private(set) var failureReason: String?
+    private func reportConnectEnd(_ end: ConnectEnd) {
+        guard let reason = end.terminalFailureReason else { return }
+        failureReason = reason
+        failureGeneration += 1
     }
     /// F4 閘道連線紀錄。「上次成功的閘道」也由它推得（取代舊的 LastGoodGateway），只有一個來源
     @Published private(set) var history: GatewayHistory = {
@@ -637,7 +674,9 @@ final class VPNController: ObservableObject {
         guard wantConnected else { return }
         if !satisfied {
             cancelRetry()
-            retryNote = "沒有網路，恢復後自動重連"
+            retryNote = ConnectEnd.noNetworkMessage
+            // 連線動作執行中時由它結束後回報，避免同一次斷網回報兩次
+            if opTask == nil, !state.isConnected { reportConnectEnd(.noNetwork) }
             return
         }
         if !wasUp {
@@ -705,10 +744,19 @@ final class VPNController: ObservableObject {
         if let refusal = companyAdmission() {
             cancelConnectionIntent()
             lastError = refusal
+            reportConnectEnd(.admissionRefused(message: refusal, retryable: false))
             return
         }
-        guard !order.isEmpty else { lastError = "尚未設定閘道"; return }
-        guard networkUp else { retryNote = "沒有網路，恢復後自動重連"; return }
+        guard !order.isEmpty else {
+            lastError = ConnectEnd.noGatewayMessage
+            reportConnectEnd(.noGateway)
+            return
+        }
+        guard networkUp else {
+            retryNote = ConnectEnd.noNetworkMessage
+            reportConnectEnd(.noNetwork)
+            return
+        }
         busy = true
         retryNote = nil
         note("開始連線（\(reason)）：依序嘗試 \(order.map { "VPN\($0)" }.joined(separator: " → "))")
@@ -758,6 +806,7 @@ final class VPNController: ObservableObject {
                     self.cancelConnectionIntent()
                     self.lastError = admission.message
                 }
+                self.reportConnectEnd(.admissionRefused(message: admission.message, retryable: admission.retryable))
                 self.refresh()
                 return
             }
@@ -773,10 +822,13 @@ final class VPNController: ObservableObject {
                 // 路由仍沒走 VPN 時只提示，不當成斷線（狀態與 F2 斷線通知仍依 status 判斷）
                 self.lastError = routeWarning
             } else if !self.networkUp {
-                self.retryNote = "沒有網路，恢復後自動重連"
+                self.retryNote = ConnectEnd.noNetworkMessage
+                self.reportConnectEnd(.noNetwork)
             } else {
-                self.lastError = ConnectFailReason.message(order: order, reasons: reasons, isSingle: isSingle)
+                let message = ConnectFailReason.message(order: order, reasons: reasons, isSingle: isSingle)
+                self.lastError = message
                 if soon { self.scheduleRetry(after: 1) } else { self.scheduleRetry() }
+                self.reportConnectEnd(.allGatewaysFailed(message: message, retrySoon: soon))
             }
             self.afterOpRecheck()
             self.refresh()

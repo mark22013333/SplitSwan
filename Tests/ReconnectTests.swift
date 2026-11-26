@@ -16,6 +16,21 @@ check("connecting", HelperStatus.parse("connecting vpn3").state == .connecting("
 check("disconnected", HelperStatus.parse("disconnected").state == .disconnected)
 check("無法辨識 → helperMissing", HelperStatus.parse("sudo: a password is required").state == .helperMissing)
 
+// 連線沒連上時，哪些算終局失敗（外掛 requiresVPN 的 failureGeneration 只看這些）
+check("准入 busy：只是短重試，不算失敗",
+      ConnectEnd.admissionRefused(message: "忙碌中", retryable: true).terminalFailureReason == nil)
+check("准入其他拒絕：失敗，原因是拒絕訊息",
+      ConnectEnd.admissionRefused(message: "分流尚未允許", retryable: false).terminalFailureReason == "分流尚未允許")
+check("准入 busy 以外的代碼都不可重試",
+      CompanyAdmissionFailure(code: "busy", message: "").retryable && !CompanyAdmissionFailure(code: "denied", message: "").retryable)
+check("未設定閘道：失敗", ConnectEnd.noGateway.terminalFailureReason == "尚未設定閘道")
+check("沒有網路：失敗", ConnectEnd.noNetwork.terminalFailureReason == "沒有網路，恢復後自動重連")
+check("一輪全部失敗：失敗，原因是那輪的訊息",
+      ConnectEnd.allGatewaysFailed(message: "所有閘道都連不上，將自動重試", retrySoon: false).terminalFailureReason
+      == "所有閘道都連不上，將自動重試")
+check("一輪全部失敗但網路剛恢復（retrySoon）：不算失敗",
+      ConnectEnd.allGatewaysFailed(message: "所有閘道都連不上，將自動重試", retrySoon: true).terminalFailureReason == nil)
+
 // 退避
 check("退避 5→15→30→60→60", (0...5).map(ReconnectPolicy.backoff) == [5, 15, 30, 60, 60, 60])
 

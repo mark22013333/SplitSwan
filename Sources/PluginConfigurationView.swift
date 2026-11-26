@@ -16,6 +16,11 @@ final class PluginConfigurationModel: ObservableObject {
     @Published private(set) var returnTabID: String?
     @Published private(set) var jobOrigin: JobOrigin?
     @Published private(set) var dismissedJobID: String?
+    /// 正在等公司 VPN 連上的動作識別；等待期間 `busy` 為 true，但仍可取消。
+    @Published private(set) var vpnWaitingAction: String?
+    private let vpn: PluginActionVPN?
+    private let vpnTimeout: Duration
+    private var vpnWait: Task<PluginVPNGate.Outcome, Never>?
     /// 由視窗管理者設定；取消時關閉所在視窗。
     var requestClose: (() -> Void)?
     /// 有未儲存變更時詢問是否捨棄；回傳 true 表示捨棄。測試可替換。
@@ -56,8 +61,11 @@ final class PluginConfigurationModel: ObservableObject {
 
     init(pluginID: String, command: (@MainActor (String, P.Request?) async throws -> P.Snapshot)? = nil,
          now: @escaping () -> Date = Date.init, pollInterval: Duration = .seconds(2), baselineStore: BaselineStore? = nil,
-         afterChange: (@MainActor () -> Void)? = nil) {
+         afterChange: (@MainActor () -> Void)? = nil, vpn: PluginActionVPN? = nil,
+         vpnTimeout: Duration = PluginVPNGate.timeout) {
         self.pluginID = pluginID
+        self.vpn = vpn
+        self.vpnTimeout = vpnTimeout
         self.now = now
         self.pollInterval = pollInterval
         // 換掉命令的模型不連真正的外掛，基準也不讀寫真正的 plugin-state。
@@ -75,9 +83,10 @@ final class PluginConfigurationModel: ObservableObject {
         error = nil
         Task { await drainCheck() }
     }
-    var canCancel: Bool { !busy }
+    var canCancel: Bool { !busy || vpnWaitingAction != nil }
     /// 取消（含 Esc）即關閉視窗；有未儲存變更時先確認，與關閉鈕一致。草稿已捨棄，關閉時不會再問一次。
     func cancelAndClose() {
+        cancelVPNWait()
         if dirty {
             guard confirmDiscard() else { return }
             cancelEdits()
@@ -86,6 +95,7 @@ final class PluginConfigurationModel: ObservableObject {
     }
     func stop() {
         visible = false
+        cancelVPNWait()
         polling?.cancel()
         polling = nil
         pendingChecks.removeAll()
@@ -153,6 +163,36 @@ final class PluginConfigurationModel: ObservableObject {
             }
         }
     }
+    /// 使用者在視窗內按下動作（按鈕或 ⌘ 快捷鍵）。宣告 `requiresVPN` 的動作先等公司 VPN 連上；
+    /// 精靈自動檢查、排程與選單不走這裡，不會因此連線。
+    func userAction(_ a: P.Action, input: String? = nil) async {
+        guard let vpn, a.requiresVPN == true, a.opensTab == nil else { await action(a, input: input); return }
+        guard let s = snapshot, s.actions.contains(where: { $0 == a }), !dirty, !busy, visible,
+              s.job?.state != "running" else { return }
+        if !PluginVPNGate.needsConnection(a, status: vpn.gateStatus) {
+            vpn.publishToPlugins()
+            await action(a, input: input)
+            return
+        }
+        busy = true
+        error = nil
+        vpnWaitingAction = a.id
+        let timeout = vpnTimeout
+        let wait = Task { await PluginVPNGate.ensureConnected(vpn, timeout: timeout) }
+        vpnWait = wait
+        let outcome = await wait.value
+        vpnWait = nil
+        vpnWaitingAction = nil
+        busy = false
+        switch outcome {
+        // 停止等待與連上同時發生時，等待可能已回 ready 才被取消；取消過就不執行，意圖照一般取消還原。
+        case .ready(let claim):
+            if wait.isCancelled { claim?.restoreIfOwned(vpn) } else if visible { await action(a, input: input) }
+        case .failed(let message): if visible { error = message }
+        case .cancelled: break
+        }
+    }
+    func cancelVPNWait() { vpnWait?.cancel() }
     /// 每次取得 snapshot 都評估一次，並把新設定好的欄位併入基準。
     private func evaluateBaseline() async {
         guard visible, let s = snapshot else { return }
@@ -244,6 +284,8 @@ final class PluginConfigurationWindows: NSObject, NSWindowDelegate {
     static let shared = PluginConfigurationWindows()
     private var windows: [String: NSWindow] = [:]
     private var models: [String: PluginConfigurationModel] = [:]
+    /// 由 AppDelegate 設定；`requiresVPN` 動作經由它確認公司 VPN。
+    var vpn: PluginActionVPN?
 
     func open(pluginID: String) {
         if let window = windows[pluginID] {
@@ -251,7 +293,7 @@ final class PluginConfigurationWindows: NSObject, NSWindowDelegate {
             window.makeKeyAndOrderFront(nil)
             return
         }
-        let model = PluginConfigurationModel(pluginID: pluginID)
+        let model = PluginConfigurationModel(pluginID: pluginID, vpn: vpn)
         let view = PluginConfigurationView(model: model, runner: PluginRunner.shared)
         let window = NSWindow(contentViewController: NSHostingController(rootView: view))
         window.title = "外掛設定：\(pluginID)"
@@ -993,11 +1035,17 @@ struct PluginConfigurationView: View {
         if action.destructive == true, !inline { Divider() }
         HStack(spacing: 6) {
             if action.signsIn == true { badge("會登入", .error) }
+            if action.requiresVPN == true { badge("需公司 VPN", .info) }
             let button = Button(label(action.title), role: action.destructive == true ? .destructive : nil) { trigger(action) }
                 .disabled(!enabled(action))
             if primary { button.buttonStyle(.borderedProminent) }
             else { button }
             if let key = action.shortcut { Text("⌘" + key.uppercased()).font(.caption.monospaced()).foregroundStyle(.secondary) }
+            if model.vpnWaitingAction == action.id {
+                ProgressView().controlSize(.small)
+                Text(PluginVPNGate.connectingText).font(.caption).foregroundStyle(.secondary)
+                Button("停止等待") { model.cancelVPNWait() }.controlSize(.small)
+            }
         }
     }
     // 切換到隱藏頁籤本身不呼叫外掛，草稿與執行中的工作都不影響按鈕。
@@ -1117,10 +1165,10 @@ struct PluginConfigurationView: View {
                     throw P.Problem(message: "匯入檔案過大或不是 UTF-8 JSON")
                 }
                 _ = try JSONSerialization.jsonObject(with: data)
-                Task { await model.action(action, input: input) }
+                Task { await model.userAction(action, input: input) }
             } catch { model.error = error.localizedDescription }
         } else {
-            Task { await model.action(action) }
+            Task { await model.userAction(action) }
         }
     }
 }
