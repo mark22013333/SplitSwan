@@ -110,6 +110,18 @@ check("拒絕 owned 更細路由", rejects { try CompanyVPNPlanner.admit(policy(
 for range in ["192.0.2.0/24", "198.51.100.53/32"] {
     check("拒絕 LAN 或 F5 DNS 重疊", rejects { try CompanyVPNPlanner.admit(policy([range]), session: session(), current: fixtureSnapshot()) })
 }
+func tailscaleSession() -> (ExternalVPNSession, ExternalNetworkSnapshot) {
+    var state = fixtureSnapshot()
+    state.dns.append(ExternalDNSEntry(key: "State:/Network/Service/tailscale/DNS", interface: "utun6", value: try! PropertyListSerialization.data(fromPropertyList: ["ServerAddresses": ["100.100.100.100", "fd7a:115c:a1e0::53"]], format: .binary, options: 0)))
+    let base = session()
+    var record = ExternalVPNSession(owner: 501, baseline: state, profile: base.profile)
+    record.phase = .active; record.tunnel = base.tunnel; record.addedRoutes = base.addedRoutes
+    record.preservedDNS = ExternalDNSState(state); record.journalVersion = 3; record.routingEvidence = base.routingEvidence
+    return (record, state)
+}
+let (tsRecord, tsState) = tailscaleSession()
+check("Tailscale 另有 IPv6 DNS 時仍接納公司連線", !rejects { try CompanyVPNPlanner.admit(policy(), session: tsRecord, current: tsState) })
+check("Tailscale 的 IPv4 DNS 與公司網段重疊仍拒絕", rejects { try CompanyVPNPlanner.admit(policy(["100.100.100.0/24"]), session: tsRecord, current: tsState) })
 var reserved = session(); reserved = ExternalVPNSession(owner: 501, baseline: reserved.baseline, profile: ExternalVPNProfile(protectedNetworks: ["10.10.10.0/24"], dnsMode: .preserveVPN), phase: .active, tunnel: "utun5", addedRoutes: reserved.addedRoutes, preservedDNS: reserved.preservedDNS)
 check("拒絕明確外部 VPN 保留範圍", rejects { try CompanyVPNPlanner.admit(policy(), session: reserved, current: fixtureSnapshot()) })
 var wrongPeer = fixtureSnapshot(); wrongPeer.routes.removeAll { $0.network == net("198.51.100.8/32") }
