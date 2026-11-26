@@ -17,6 +17,23 @@ extension VPNState {
 }
 
 @MainActor
+final class VPNControllerPluginGate: PluginActionVPN {
+    private let vpn: VPNController
+    init(_ vpn: VPNController) { self.vpn = vpn }
+    var gateStatus: PluginVPNGate.Status {
+        .init(connected: vpn.state.isConnected, busy: vpn.busy, wantConnected: vpn.wantConnected,
+              lastError: vpn.lastError, retryNote: vpn.retryNote)
+    }
+    func connectAuto() { vpn.connect("auto") }
+    func cancelConnectionIntent() { vpn.cancelConnectionIntent() }
+    func observeChanges(_ onChange: @escaping () -> Void) -> AnyCancellable {
+        vpn.objectWillChange.sink { _ in onChange() }
+    }
+    /// 平常 PluginRunner 經 RunLoop 延後一輪才收到狀態，連上後立刻執行的外掛會讀到舊值，所以這裡直接同步。
+    func publishToPlugins() { PluginRunner.shared.updateVPN(vpn.state.pluginContext) }
+}
+
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let vpn = VPNController()
     private let env = EnvChecker()
@@ -51,6 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ExternalVPNController.shared.willStop = { [weak self] in self?.vpn.cancelConnectionIntent() }
         buildMainMenu()
         buildMenu()
+        PluginConfigurationWindows.shared.vpn = VPNControllerPluginGate(vpn)
         GlobalHotKey.shared.onPress = { PluginConfigurationWindows.shared.open(pluginID: $0) }
         PluginRunner.shared.$isActive.removeDuplicates()
             .combineLatest(PluginRunner.shared.$plugins.map { GlobalHotKey.candidates($0).map(\.id) }.removeDuplicates())
