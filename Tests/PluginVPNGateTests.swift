@@ -13,24 +13,42 @@ func check(_ name: String, _ ok: Bool) {
 final class FakeVPN: PluginActionVPN {
     private let changes = PassthroughSubject<Void, Never>()
     var status: G.Status { willSet { changes.send() } }
+    /// 只給選單顯示的重試提示；gate 讀不到，用來確認它不再從這段文字推斷失敗。
+    var retryNote: String? { willSet { changes.send() } }
     var connects = 0, cancels = 0
     var published: [Bool] = []
     var onConnect: (FakeVPN) -> Void = { _ in }
     init(connected: Bool = false, wantConnected: Bool = false) {
-        status = G.Status(connected: connected, busy: false, wantConnected: wantConnected, lastError: nil, retryNote: nil)
+        status = G.Status(connected: connected, busy: false, wantConnected: wantConnected, lastError: nil)
     }
     var gateStatus: G.Status { status }
     // 與 VPNController.connect 相同：設定連線意圖、清掉舊錯誤，再由協調器決定要不要開始
     func connectAuto() {
         connects += 1
         status.wantConnected = true
+        status.intentGeneration += 1
         status.lastError = nil
         onConnect(self)
     }
     func cancelConnectionIntent() {
         cancels += 1
         status.wantConnected = false
-        status.retryNote = nil
+        status.intentGeneration += 1
+        self.retryNote = nil
+    }
+    /// 使用者自己在選單或主視窗按「連線」
+    func userConnect() {
+        status.wantConnected = true
+        status.intentGeneration += 1
+        status.lastError = nil
+    }
+    /// 協調器真正放棄這次連線（一輪全部失敗、未設定閘道、准入拒絕、沒有網路）
+    func fail(_ reason: String?, retryNote: String? = nil) {
+        status.busy = false
+        status.lastError = reason
+        self.retryNote = retryNote
+        status.failureReason = reason
+        status.failureGeneration += 1
     }
     func observeChanges(_ onChange: @escaping () -> Void) -> AnyCancellable { changes.sink { _ in onChange() } }
     func publishToPlugins() { published.append(status.connected) }
@@ -71,20 +89,24 @@ func runTests() async throws {
     check("只切換頁籤的動作不宣告時照常可用", (try? P.decode(try formData(requiresVPN: nil, opensTab: true))) != nil)
 
     // 判斷與訊息
-    func s(connected: Bool = false, busy: Bool = false, want: Bool = true, error: String? = nil, note: String? = nil) -> G.Status {
-        G.Status(connected: connected, busy: busy, wantConnected: want, lastError: error, retryNote: note)
+    func s(connected: Bool = false, busy: Bool = false, want: Bool = true, error: String? = nil,
+           failures: Int = 0, reason: String? = nil) -> G.Status {
+        G.Status(connected: connected, busy: busy, wantConnected: want, lastError: error,
+                 failureGeneration: failures, failureReason: reason)
     }
-    check("連上即成功", G.judge(s(connected: true), sawBusy: true) == .connected)
-    check("協調器執行中繼續等", G.judge(s(busy: true), sawBusy: true) == .waiting)
-    check("排定重試＝這輪失敗，原因取 lastError",
-          G.judge(s(error: "三台都連不上", note: "連線中斷，15 秒後重試"), sawBusy: true) == .failed(reason: "三台都連不上"))
-    check("沒網路只有 retryNote 時以它為原因", G.judge(s(note: "沒有網路，恢復後自動重連"), sawBusy: false) == .failed(reason: "沒有網路，恢復後自動重連"))
-    check("連線意圖被取消即失敗", G.judge(s(want: false, error: "分流尚未允許"), sawBusy: true) == .failed(reason: "分流尚未允許"))
-    check("沒執行就有錯誤（未設定閘道）即失敗", G.judge(s(error: "尚未設定閘道"), sawBusy: false) == .failed(reason: "尚未設定閘道"))
-    check("連上後的路由提示不當失敗，等狀態更新", G.judge(s(error: "路由仍未走 VPN"), sawBusy: true) == .waiting)
+    check("連上即成功", G.judge(s(connected: true, failures: 1), failuresBefore: 0) == .connected)
+    check("協調器執行中繼續等", G.judge(s(busy: true), failuresBefore: 0) == .waiting)
+    check("失敗訊號遞增＝放棄，原因取訊號附帶的原因",
+          G.judge(s(error: "三台都連不上", failures: 3, reason: "三台都連不上"), failuresBefore: 2) == .failed(reason: "三台都連不上"))
+    check("按下前就有的失敗訊號不算", G.judge(s(failures: 3, reason: "舊的失敗"), failuresBefore: 3) == .waiting)
+    check("連線意圖被取消即失敗", G.judge(s(want: false, error: "分流尚未允許"), failuresBefore: 0) == .failed(reason: "分流尚未允許"))
+    check("有錯誤但沒有失敗訊號（連上後的路由提示）不當失敗", G.judge(s(error: "路由仍未走 VPN"), failuresBefore: 0) == .waiting)
     check("沒有原因寫 60 秒內沒有連上", G.failureMessage(reason: nil) == "公司 VPN 連不上：60 秒內沒有連上，未執行此動作")
     check("原因句尾句號不重複", G.failureMessage(reason: "三台都連不上。") == "公司 VPN 連不上：三台都連不上，未執行此動作")
-    check("按下前不想連線才還原意圖", G.shouldRestoreIntent(wantConnectedBefore: false) && !G.shouldRestoreIntent(wantConnectedBefore: true))
+    check("按下前不想連線才還原意圖",
+          G.shouldRestoreIntent(wantConnectedBefore: false, ownIntent: 1, currentIntent: 1)
+          && !G.shouldRestoreIntent(wantConnectedBefore: true, ownIntent: 1, currentIntent: 1))
+    check("意圖已被別人改過就不還原", !G.shouldRestoreIntent(wantConnectedBefore: false, ownIntent: 1, currentIntent: 2))
 
     // 設定視窗流程
     let action = declared.actions[0]
@@ -139,9 +161,7 @@ func runTests() async throws {
         vpn.status.busy = true
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(50))
-            vpn.status.busy = false
-            vpn.status.lastError = "VPN1、VPN2 都連不上"
-            vpn.status.retryNote = "連線中斷，15 秒後重試"
+            vpn.fail("VPN1、VPN2 都連不上", retryNote: "連線中斷，15 秒後重試")
         }
     }
     m = await model(wanted)
@@ -150,7 +170,7 @@ func runTests() async throws {
     check("按下前已想連線：失敗不還原意圖", wanted.cancels == 0 && wanted.status.wantConnected)
 
     let noGateway = FakeVPN()
-    noGateway.onConnect = { $0.status.lastError = "尚未設定閘道" }
+    noGateway.onConnect = { $0.fail("尚未設定閘道") }
     m = await model(noGateway)
     await m.userAction(action)
     check("協調器當場拒絕：立即失敗並還原", calls.isEmpty && m.error == "公司 VPN 連不上：尚未設定閘道，未執行此動作" && noGateway.cancels == 1)
@@ -187,6 +207,112 @@ func runTests() async throws {
     m.cancelVPNWait()
     await stopping.value
     check("停止等待：視窗不關、不執行；按下前已想連線就不還原", calls.isEmpty && stopButton.cancels == 0 && !m.busy)
+
+    // 問題 1：暫時性重試（協調器忙碌的 1 秒短重試、網路恢復的 retrySoon）不是失敗，要繼續等
+    let busyRetry = FakeVPN()
+    busyRetry.onConnect = { vpn in
+        vpn.status.busy = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(50))
+            vpn.status.busy = false
+            vpn.retryNote = "連線中斷，1 秒後重試"
+            try? await Task.sleep(for: .milliseconds(80))
+            vpn.status.busy = true
+            vpn.retryNote = nil
+            try? await Task.sleep(for: .milliseconds(50))
+            vpn.status.busy = false
+            vpn.status.connected = true
+        }
+    }
+    m = await model(busyRetry)
+    await m.userAction(action)
+    check("協調器忙碌排 1 秒重試：繼續等，連上後執行", calls.count == 1 && calls.first?.connected == true && m.error == nil)
+    check("協調器忙碌排 1 秒重試：不取消那次重試", busyRetry.cancels == 0 && busyRetry.status.wantConnected)
+
+    let soonRetry = FakeVPN()
+    soonRetry.onConnect = { vpn in
+        // 網路剛恢復：還沒開始執行就排了 1 秒後重試
+        vpn.retryNote = "連線中斷，1 秒後重試"
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(80))
+            vpn.retryNote = nil
+            vpn.status.connected = true
+        }
+    }
+    m = await model(soonRetry)
+    await m.userAction(action)
+    check("網路恢復的短重試：繼續等，連上後執行", calls.count == 1 && soonRetry.cancels == 0 && m.error == nil)
+
+    let retryThenFail = FakeVPN()
+    retryThenFail.onConnect = { vpn in
+        vpn.status.busy = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(50))
+            vpn.status.busy = false
+            vpn.retryNote = "連線中斷，1 秒後重試"
+            try? await Task.sleep(for: .milliseconds(80))
+            vpn.status.busy = true
+            try? await Task.sleep(for: .milliseconds(50))
+            vpn.fail("VPN1、VPN2、VPN3 都連不上", retryNote: "連線中斷，15 秒後重試")
+        }
+    }
+    m = await model(retryThenFail)
+    await m.userAction(action)
+    check("短重試後一輪全部失敗：才判失敗並還原",
+          calls.isEmpty && m.error == "公司 VPN 連不上：VPN1、VPN2、VPN3 都連不上，未執行此動作" && retryThenFail.cancels == 1)
+
+    let busyTimeout = FakeVPN()
+    busyTimeout.onConnect = { $0.retryNote = "連線中斷，1 秒後重試" }
+    m = await model(busyTimeout, timeout: .milliseconds(150))
+    await m.userAction(action)
+    check("一直在短重試直到逾時：原因不拿重試提示當失敗原因",
+          calls.isEmpty && m.error == "公司 VPN 連不上：60 秒內沒有連上，未執行此動作" && busyTimeout.cancels == 1)
+
+    // 問題 2：停止等待與連上同時發生，仍不執行
+    let race = FakeVPN()
+    var raceModel: PluginConfigurationModel?
+    race.onConnect = { vpn in
+        vpn.status.busy = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(50))
+            vpn.status.busy = false
+            vpn.status.connected = true
+            raceModel?.cancelVPNWait()
+        }
+    }
+    m = await model(race)
+    raceModel = m
+    await m.userAction(action)
+    raceModel = nil
+    check("停止等待與連上同時發生：不執行", calls.isEmpty && !m.busy && m.vpnWaitingAction == nil)
+
+    // 問題 3：等待期間使用者自己按了連線，失敗或逾時都不還原意圖
+    let userPressed = FakeVPN()
+    userPressed.onConnect = { vpn in
+        vpn.status.busy = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(30))
+            vpn.userConnect()
+        }
+    }
+    m = await model(userPressed, timeout: .milliseconds(150))
+    await m.userAction(action)
+    check("等待中使用者按連線：逾時不還原意圖", calls.isEmpty && userPressed.cancels == 0 && userPressed.status.wantConnected)
+
+    let userPressedFail = FakeVPN()
+    userPressedFail.onConnect = { vpn in
+        vpn.status.busy = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(30))
+            vpn.userConnect()
+            try? await Task.sleep(for: .milliseconds(30))
+            vpn.fail("VPN1 連不上")
+        }
+    }
+    m = await model(userPressedFail)
+    await m.userAction(action)
+    check("等待中使用者按連線：失敗也不還原意圖",
+          calls.isEmpty && m.error == "公司 VPN 連不上：VPN1 連不上，未執行此動作" && userPressedFail.cancels == 0)
 
     let background = FakeVPN()
     m = await model(background)

@@ -22,7 +22,8 @@ final class VPNControllerPluginGate: PluginActionVPN {
     init(_ vpn: VPNController) { self.vpn = vpn }
     var gateStatus: PluginVPNGate.Status {
         .init(connected: vpn.state.isConnected, busy: vpn.busy, wantConnected: vpn.wantConnected,
-              lastError: vpn.lastError, retryNote: vpn.retryNote)
+              lastError: vpn.lastError, failureGeneration: vpn.failureGeneration, failureReason: vpn.failureReason,
+              intentGeneration: vpn.intentGeneration)
     }
     func connectAuto() { vpn.connect("auto") }
     func cancelConnectionIntent() { vpn.cancelConnectionIntent() }

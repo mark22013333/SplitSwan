@@ -185,7 +185,8 @@ final class PluginConfigurationModel: ObservableObject {
         vpnWaitingAction = nil
         busy = false
         switch outcome {
-        case .ready: if visible { await action(a, input: input) }
+        // 停止等待與連上同時發生時，等待可能已回 ready 才被取消；取消過就一律不執行。
+        case .ready: if visible, !wait.isCancelled { await action(a, input: input) }
         case .failed(let message): if visible { error = message }
         case .cancelled: break
         }

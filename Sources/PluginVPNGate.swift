@@ -23,7 +23,12 @@ enum PluginVPNGate {
         var busy: Bool
         var wantConnected: Bool
         var lastError: String?
-        var retryNote: String?
+        /// 協調器真正放棄連線時遞增（見 `VPNController.failureGeneration`）。`retryNote` 也會出現在
+        /// 1 秒短重試等暫時狀態，不能拿來判斷失敗。
+        var failureGeneration = 0
+        var failureReason: String?
+        /// 連線意圖每被設定或取消一次就遞增，用來分辨意圖是不是還停在我們設的那一次。
+        var intentGeneration = 0
     }
     enum Verdict: Equatable { case waiting, connected, failed(reason: String?) }
     enum Outcome: Equatable { case ready, failed(String), cancelled }
@@ -32,16 +37,12 @@ enum PluginVPNGate {
         action.requiresVPN == true && !status.connected
     }
 
-    /// `sawBusy`：發起連線後是否看過協調器在執行。執行過的連線成功時，`lastError` 可能先帶著路由提示、
-    /// 狀態要等下一次 status 才變成已連線，所以只有沒執行過（例：尚未設定閘道）才把 `lastError` 直接當失敗。
-    static func judge(_ s: Status, sawBusy: Bool) -> Verdict {
+    /// `failuresBefore`：發起連線前的 `failureGeneration`。
+    static func judge(_ s: Status, failuresBefore: Int) -> Verdict {
         if s.connected { return .connected }
+        if s.failureGeneration != failuresBefore { return .failed(reason: s.failureReason) }
         // 連線意圖被取消：公司分流不允許連線，或使用者在選單按了斷線
         if !s.wantConnected { return .failed(reason: s.lastError) }
-        if s.busy { return .waiting }
-        // 協調器排定重試或等網路恢復，代表這一輪已經失敗
-        if let note = s.retryNote { return .failed(reason: s.lastError ?? note) }
-        if let error = s.lastError, !sawBusy { return .failed(reason: error) }
         return .waiting
     }
 
@@ -51,8 +52,10 @@ enum PluginVPNGate {
         return "公司 VPN 連不上：\(text.isEmpty ? "60 秒內沒有連上" : text)，未執行此動作"
     }
 
-    /// 只有我們發起的連線才在失敗或放棄時還原；按下前本來就想連線的不動。
-    static func shouldRestoreIntent(wantConnectedBefore: Bool) -> Bool { !wantConnectedBefore }
+    /// 只有按下前不想連線、而且意圖仍是我們設的那一次才還原；等待期間使用者自己按了連線就不動。
+    static func shouldRestoreIntent(wantConnectedBefore: Bool, ownIntent: Int, currentIntent: Int) -> Bool {
+        !wantConnectedBefore && ownIntent == currentIntent
+    }
 
     /// 已連線直接回 ready；否則發起連線並等到連上、失敗、逾時，或呼叫端的 Task 被取消。
     @MainActor
@@ -66,12 +69,8 @@ enum PluginVPNGate {
         defer { observation.cancel(); timer.cancel(); continuation.finish() }
 
         vpn.connectAuto()
-        var sawBusy = false
-        func evaluate() -> Verdict {
-            let s = vpn.gateStatus
-            sawBusy = sawBusy || s.busy
-            return judge(s, sawBusy: sawBusy)
-        }
+        let ownIntent = vpn.gateStatus.intentGeneration
+        func evaluate() -> Verdict { judge(vpn.gateStatus, failuresBefore: before.failureGeneration) }
         // 通知發生在屬性改變之前；下一輪才讀，拿到的是同一批改動完成後的狀態。
         var verdict = evaluate()
         if verdict == .waiting {
@@ -80,7 +79,8 @@ enum PluginVPNGate {
                 if verdict != .waiting { break }
             }
         }
-        let restore = shouldRestoreIntent(wantConnectedBefore: before.wantConnected)
+        let restore = shouldRestoreIntent(wantConnectedBefore: before.wantConnected, ownIntent: ownIntent,
+                                          currentIntent: vpn.gateStatus.intentGeneration)
         switch verdict {
         case .connected:
             vpn.publishToPlugins()
@@ -89,11 +89,10 @@ enum PluginVPNGate {
             if restore { vpn.cancelConnectionIntent() }
             return .failed(failureMessage(reason: reason))
         case .waiting:
-            // 還原意圖會清掉 retryNote，所以先讀原因
-            let s = vpn.gateStatus
+            let reason = vpn.gateStatus.lastError
             if restore { vpn.cancelConnectionIntent() }
             if Task.isCancelled { return .cancelled }
-            return .failed(failureMessage(reason: s.lastError ?? s.retryNote))
+            return .failed(failureMessage(reason: reason))
         }
     }
 }
