@@ -149,7 +149,9 @@ final class ExternalVPNController: ObservableObject {
             }
             let previous = status
             status = decoded
-            if let failure = decoded.latestFailure { lastFailure = failure }
+            // 自動重試成功後 session 仍帶著第一次的失敗；分流已啟用就不再是使用者要處理的原因。
+            if decoded.phase == .active { lastFailure = nil }
+            else if let failure = decoded.latestFailure { lastFailure = failure }
             if ExternalFailureLog.shouldRecord(operation: operation, previous: previous, next: decoded) { recordFailure(output) }
         }
         else {

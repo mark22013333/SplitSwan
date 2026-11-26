@@ -306,6 +306,29 @@ func runExternalUI() async throws -> Int {
     await adviceModel.start()
     check("重新開始後清除上次失敗原因", adviceModel.lastFailure == nil)
     await adviceModel.stop()
+
+    // 自動重試成功後 session 仍帶著第一次的失敗；分流成功就不該再顯示它，停止後也不該冒出來。
+    var recovered = false
+    let recoveredModel = ExternalVPNController(preferences: preferences, autoRefresh: false, transport: { operation, _ in
+        var status: ExternalVPNStatus
+        switch operation {
+        case "restore": status = .idle
+        case "tick" where recovered:
+            status = ExternalVPNStatus(phase: .active, message: "已啟用", interface: "en0", tunnel: "utun4", routeCount: 3)
+            status.latestFailure = adviceFailure; status.autoRetried = true
+        default:
+            status = ExternalVPNStatus(phase: .waiting, message: "等待外部 VPN", interface: "en0", tunnel: nil, routeCount: 0)
+            status.latestFailure = adviceFailure; status.autoRetried = true
+        }
+        return (0, String(decoding: try! JSONEncoder().encode(status), as: UTF8.self))
+    }, recordFailure: { _ in })
+    await recoveredModel.start()
+    check("自動重試等待中仍保留第一次失敗原因", recoveredModel.lastFailure?.advice == advised)
+    recovered = true
+    await settle { recoveredModel.status.phase == .active }
+    check("重試後分流成功就清除失敗原因", recoveredModel.lastFailure == nil)
+    await recoveredModel.stop()
+    check("成功後停止並復原不再冒出舊失敗原因", recoveredModel.status.phase == .idle && recoveredModel.lastFailure == nil)
     print("通過 \(passed)，失敗 \(failed)")
     return failed
 }

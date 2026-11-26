@@ -964,6 +964,7 @@ overlayRuntime.state.defaultDNSServers = ["198.51.100.53", "100.100.100.100"]
 let overlayResult = attempt(overlayEngine, overlayPending)
 let overlayAdvice = overlayResult.latestFailure?.advice
 check("預設 DNS 歸屬不明時列出位址與提供它的介面", overlayAdvice?.finding?.contains("100.100.100.100") == true && overlayAdvice?.finding?.contains("utun6") == true)
+check("100.100.100.100 點名是 Tailscale，一般 VPN DNS 不加註", overlayAdvice?.finding?.contains("100.100.100.100 由 utun6 提供（Tailscale 的 MagicDNS）") == true && overlayAdvice?.finding?.contains("Tailscale") == true && ExternalVPNIssue.unattributedDefaultDNS([.init(address: "198.51.100.9", interfaces: ["utun3"])]).advice.finding?.contains("Tailscale") == false)
 check("預設 DNS 歸屬不明的建議含可操作步驟", (overlayAdvice?.steps.count ?? 0) >= 2 && overlayAdvice?.steps.contains { $0.contains("Use Tailscale DNS") } == true)
 check("建議不改變原本的錯誤訊息", overlayResult.latestFailure?.message == "VPN 的預設 DNS 無法確定服務歸屬，未套用分流")
 

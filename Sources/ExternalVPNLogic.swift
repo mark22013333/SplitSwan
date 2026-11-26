@@ -333,10 +333,12 @@ enum ExternalVPNIssue: LocalizedError {
         switch self {
         case .unattributedDefaultDNS(let owners):
             let lines = owners.map { owner in
-                owner.interfaces.isEmpty ? "預設 DNS \(owner.address) 找不到提供它的網路服務"
+                let line = owner.interfaces.isEmpty ? "預設 DNS \(owner.address) 找不到提供它的網路服務"
                     : "預設 DNS \(owner.address) 由 \(Self.list(owner.interfaces)) 提供"
+                // utun 介面名稱看不出是哪個程式；100.100.100.100 是 Tailscale MagicDNS 的固定位址，直接點名。
+                return owner.address == "100.100.100.100" ? line + "（Tailscale 的 MagicDNS）" : line
             }
-            return ("VPN 的預設 DNS 無法確定服務歸屬，未套用分流", lines.joined(separator: "；"),
+            return ("VPN 的預設 DNS 無法確定服務歸屬，未套用分流", lines.joined(separator: "\n"),
                     ["暫時關閉該通道的 DNS 覆寫（例如 Tailscale 的 Use Tailscale DNS），再重新開始",
                      "或把「DNS 處理」改成「依網域分流 DNS」",
                      "或先\(stop)，在該通道已連線的狀態下再按「開始等待 VPN 並自動分流」",
