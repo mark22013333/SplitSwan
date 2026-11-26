@@ -114,8 +114,11 @@ do {
        let failed = try? ExternalVPNEngine(runtime: system).failed(session, error: error, stage: failureStage) {
         emit(ExternalVPNStatus(session: failed))
     } else {
-        emit(ExternalVPNStatus(phase: activeSystem == nil ? .failed : .recoveryRequired,
-                               message: error.localizedDescription, interface: nil, tunnel: nil, routeCount: 0))
+        // 還沒有紀錄可存（例如準備階段就失敗）時，建議也要隨狀態送到 App。
+        var status = ExternalVPNStatus(phase: activeSystem == nil ? .failed : .recoveryRequired,
+                                       message: error.localizedDescription, interface: nil, tunnel: nil, routeCount: 0)
+        status.latestFailure = ExternalVPNFailure(stage: failureStage, message: error.localizedDescription, advice: (error as? ExternalVPNIssue)?.advice)
+        emit(status)
     }
     exit(1)
 }

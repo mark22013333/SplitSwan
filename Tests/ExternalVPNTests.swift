@@ -311,6 +311,22 @@ for (name, servers, extra) in [
     let result = attempt(engine, pending)
     check("保留模式拒絕\(name)且路由與 DNS 零寫入", stopped(result) && runtime.adds == 0 && runtime.dnsWrites == 0)
 }
+// 例：Tailscale 等其他通道在連 VPN 前就是全域預設 DNS，VPN 沒有改動它。
+let overlayDNS = ExternalDNSEntry(key: "State:/Network/Service/overlay/DNS", interface: "utun6", value: plist(["ServerAddresses": ["100.100.100.100"], "SearchDomains": ["overlay.example.com"]]))
+for (name, inBaseline, changed, accepted) in [
+    ("接受連線前就是全域預設且未變動的其他服務 DNS", true, false, true),
+    ("拒絕連線前不是全域預設的其他服務 DNS", false, false, false),
+    ("拒絕連線後內容被改動的其他服務 DNS", true, true, false)
+] {
+    let runtime = FakeRuntime(); let engine = ExternalVPNEngine(runtime: runtime)
+    runtime.state.dns.append(overlayDNS)
+    if inBaseline { runtime.state.defaultDNSServers = ["100.100.100.100"] }
+    let pending = try! engine.prepare(owner: 501, profile: preserveProfile)
+    runtime.state = noSuffix(); runtime.state.defaultDNSServers = ["100.100.100.100"]; runtime.state.defaultDNSDomains = []
+    runtime.state.dns.append(changed ? ExternalDNSEntry(key: overlayDNS.key, interface: "utun6", value: plist(["ServerAddresses": ["100.100.100.100"]])) : overlayDNS)
+    let result = attempt(engine, pending)
+    check("保留模式\(name)", accepted ? (result.phase == .active && runtime.dnsWrites == 0) : (stopped(result) && runtime.adds == 0 && runtime.dnsWrites == 0))
+}
 for (name, change) in [
     ("未知歸屬", { (state: inout ExternalNetworkSnapshot) in state.dns[1] = ExternalDNSEntry(key: vpnDNS.key, interface: nil, value: state.dns[1].value) }),
     ("只有全域解析器", { (state: inout ExternalNetworkSnapshot) in state.dns = [physicalDNS] }),
@@ -937,6 +953,49 @@ let hugeStatusBytes = try! JSONEncoder().encode(ExternalVPNStatus(session: hugeF
 check("engine 記錄失敗時就截短差異", hugeFailed.latestFailure?.dnsDifferences?.count == 20 && hugeFailed.latestFailure?.dnsDifferences?.last == "另有 21 項差異未列出")
 check("status JSON 編碼後遠小於 64 KB（實際 \(hugeStatusBytes) bytes）", hugeStatusBytes < 16_384)
 check("截短後的 status 仍可解回", (try? JSONDecoder().decode(ExternalVPNStatus.self, from: JSONEncoder().encode(ExternalVPNStatus(session: hugeFailed)))) != nil)
+
+// 其他通道（utun6）連線前就存在但不是全域預設，連線後才成為預設 DNS 之一，無法歸屬到 VPN 或原本網卡。
+let overlayRuntime = FakeRuntime(); let overlayEngine = ExternalVPNEngine(runtime: overlayRuntime)
+overlayRuntime.state.dns.append(overlayDNS)
+let overlayPending = try! overlayEngine.prepare(owner: 501, profile: preserveProfile)
+overlayRuntime.state = noSuffix()
+overlayRuntime.state.dns.append(overlayDNS)
+overlayRuntime.state.defaultDNSServers = ["198.51.100.53", "100.100.100.100"]
+let overlayResult = attempt(overlayEngine, overlayPending)
+let overlayAdvice = overlayResult.latestFailure?.advice
+check("預設 DNS 歸屬不明時列出位址與提供它的介面", overlayAdvice?.finding?.contains("100.100.100.100") == true && overlayAdvice?.finding?.contains("utun6") == true)
+check("100.100.100.100 點名是 Tailscale，一般 VPN DNS 不加註", overlayAdvice?.finding?.contains("100.100.100.100 由 utun6 提供（Tailscale 的 MagicDNS）") == true && overlayAdvice?.finding?.contains("Tailscale") == true && ExternalVPNIssue.unattributedDefaultDNS([.init(address: "198.51.100.9", interfaces: ["utun3"])]).advice.finding?.contains("Tailscale") == false)
+check("預設 DNS 歸屬不明的建議含可操作步驟", (overlayAdvice?.steps.count ?? 0) >= 2 && overlayAdvice?.steps.contains { $0.contains("Use Tailscale DNS") } == true)
+check("建議不改變原本的錯誤訊息", overlayResult.latestFailure?.message == "VPN 的預設 DNS 無法確定服務歸屬，未套用分流")
+
+let adviceV6 = FakeRuntime(); let adviceV6Engine = ExternalVPNEngine(runtime: adviceV6)
+let adviceV6Pending = try! adviceV6Engine.prepare(owner: 501, profile: ExternalVPNProfile())
+adviceV6.state = connected(); adviceV6.state.ipv6TunnelDefault = true
+let adviceV6Result = attempt(adviceV6Engine, adviceV6Pending)
+check("IPv6 被接管時失敗帶出建議步驟", stopped(adviceV6Result) && adviceV6Result.latestFailure?.advice?.finding?.contains("IPv6") == true && adviceV6Result.latestFailure?.advice?.steps.isEmpty == false)
+
+let adviceNoDomain = FakeRuntime(); let adviceNoDomainEngine = ExternalVPNEngine(runtime: adviceNoDomain)
+let adviceNoDomainPending = try! adviceNoDomainEngine.prepare(owner: 501, profile: ExternalVPNProfile())
+adviceNoDomain.state = connected()
+adviceNoDomain.state.dns[1] = ExternalDNSEntry(key: vpnDNS.key, interface: "ppp0", value: plist(["ServerAddresses": ["198.51.100.53"], "SupplementalMatchDomains": [""]]))
+let adviceNoDomainResult = attempt(adviceNoDomainEngine, adviceNoDomainPending)
+check("VPN DNS 沒有內部網域時指向填寫網域或沿用 VPN DNS", adviceNoDomainResult.latestFailure?.advice?.steps.contains { $0.contains("保留使用 VPN DNS 的網域") } == true
+    && adviceNoDomainResult.latestFailure?.advice?.steps.contains { $0.contains("沿用 VPN DNS") } == true)
+
+let plainRuntime = FakeRuntime(); let plainEngine = ExternalVPNEngine(runtime: plainRuntime)
+let plainSession = try! plainEngine.prepare(owner: 501, profile: ExternalVPNProfile())
+let plainFailed = try! plainEngine.failed(plainSession, error: ExternalVPNError.invalid("內部驗證證據不一致"), stage: .verifying)
+check("內部一致性錯誤不帶建議", plainFailed.latestFailure?.advice == nil && plainFailed.latestFailure?.message == "內部驗證證據不一致")
+
+let adviceStatus = ExternalVPNStatus(session: overlayResult)
+let adviceData = try! JSONEncoder().encode(adviceStatus)
+check("status JSON 往返保留建議", (try? JSONDecoder().decode(ExternalVPNStatus.self, from: adviceData))?.latestFailure?.advice == overlayAdvice)
+var legacyStatus = try! JSONSerialization.jsonObject(with: adviceData) as! [String: Any]
+var legacyFailure = legacyStatus["latestFailure"] as! [String: Any]
+legacyFailure.removeValue(forKey: "advice")
+legacyStatus["latestFailure"] = legacyFailure
+let adviceLegacyDecoded = try? JSONDecoder().decode(ExternalVPNStatus.self, from: JSONSerialization.data(withJSONObject: legacyStatus))
+check("缺少 advice 欄位的舊 JSON 仍可解碼", adviceLegacyDecoded?.latestFailure?.advice == nil && adviceLegacyDecoded?.latestFailure?.message == overlayResult.latestFailure?.message)
 
 print("通過 \(pass)，失敗 \(fail)")
 exit(fail == 0 ? 0 : 1)

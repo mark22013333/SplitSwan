@@ -7,6 +7,8 @@ final class ExternalVPNController: ObservableObject {
     static let shared = ExternalVPNController()
     @Published private(set) var status = ExternalVPNStatus.idle
     @Published private(set) var busy = false
+    // 狀態回到 idle（停止並復原）後 status 不再帶失敗，但使用者仍需要看到上次為什麼失敗，直到下次開始。
+    @Published private(set) var lastFailure: ExternalVPNFailure?
     @Published var protectedNetworks = ""
     @Published var dnsDomains = ""
     @Published var directIPv4 = ""
@@ -43,6 +45,8 @@ final class ExternalVPNController: ObservableObject {
         if autoRefresh { Task { await refresh() } }
     }
 
+    var failureLogDirectory: URL { ExternalFailureLog.directory(preferences) }
+
     var isManaging: Bool { [.waiting, .applying, .active, .restoring, .recoveryRequired].contains(status.phase) }
     var canRetry: Bool { status.canRetry == true }
     var canPrepare: Bool { !isManaging || canRetry }
@@ -57,6 +61,7 @@ final class ExternalVPNController: ObservableObject {
             preferences.set(protectedNetworks, forKey: "ExternalVPNProtectedNetworks")
             preferences.set(dnsDomains, forKey: "ExternalVPNDNSDomains")
             preferences.set(dnsMode.rawValue, forKey: "ExternalVPNDNSMode")
+            lastFailure = nil
             await perform("prepare", input: try JSONEncoder().encode(profile))
             startMonitoring()
         } catch { status = ExternalVPNStatus(phase: .failed, message: error.localizedDescription, interface: nil, tunnel: nil, routeCount: 0) }
@@ -144,6 +149,18 @@ final class ExternalVPNController: ObservableObject {
             }
             let previous = status
             status = decoded
+            // session 在重試與成功後仍帶著舊失敗，只有現在確實失敗、或自動重試中才算使用者要處理的原因。
+            switch decoded.phase {
+            case .failed, .recoveryRequired:
+                // 舊系統元件準備失敗時 status 沒有 latestFailure，用訊息補一筆，畫面才有原因與通用建議。
+                lastFailure = decoded.latestFailure ?? (operation == "prepare" ? ExternalVPNFailure(stage: .preparing, message: decoded.message) : lastFailure)
+            case .waiting where decoded.autoRetried == true:
+                lastFailure = decoded.latestFailure ?? lastFailure
+            case .active:
+                lastFailure = nil
+            case .idle, .waiting, .applying, .restoring:
+                break
+            }
             if ExternalFailureLog.shouldRecord(operation: operation, previous: previous, next: decoded) { recordFailure(output) }
         }
         else {

@@ -19,6 +19,11 @@ struct ExternalVPNTab: View {
                 SectionHeader("VPN 自動分流", systemImage: "arrow.triangle.branch")
                 statusCard
 
+                if let failure = failureToShow {
+                    ExternalFailureCard(failure: failure, folder: model.failureLogDirectory)
+                        .transition(DSMotion.transition(reduceMotion))
+                }
+
                 if fortiBusy && !model.isManaging {
                     ErrorBanner(message: "請先停止 SplitSwan 的 FortiGate 連線，再使用自動分流。",
                                 nextStep: "到「連線」頁按「斷線」後再回來。")
@@ -87,6 +92,16 @@ struct ExternalVPNTab: View {
         }
     }
 
+    // 自動重試等待中仍要顯示第一次失敗的原因；停止並復原回到 idle 後也保留，直到下次開始。
+    private var failureToShow: ExternalVPNFailure? {
+        guard let failure = model.lastFailure else { return nil }
+        switch phase {
+        case .failed, .recoveryRequired, .idle: return failure
+        case .waiting: return model.status.autoRetried == true ? failure : nil
+        case .applying, .active, .restoring: return nil
+        }
+    }
+
     private var statusCard: some View {
         StatusCard(title: statusMessage, tone: phase.tone, badge: phase.badge) {
             Image(systemName: statusIcon).font(.system(size: 26, weight: .medium))
@@ -100,8 +115,8 @@ struct ExternalVPNTab: View {
                 }
                 if phase == .active { Text("已加入 \(model.status.routeCount) 筆分流路由") }
                 if phase == .failed || phase == .recoveryRequired {
-                    Text(model.canRetry ? "可調整下方進階範圍後按「重新嘗試分流」。" : "按「停止並復原」撤回本次變更後再試一次。")
-                        .foregroundStyle(.red)
+                    Text(model.canRetry ? "已保留連線前的上網快照，排除原因後可按「重新嘗試分流」，不必先中斷 VPN。" : "按「停止並復原」撤回本次變更後再試一次。")
+                        .foregroundStyle(.secondary)
                 }
             }
             .textSelection(.enabled)
@@ -153,6 +168,41 @@ struct ExternalVPNTab: View {
         case .waiting: return "clock"
         case .failed, .recoveryRequired: return "exclamationmark.triangle.fill"
         default: return "network"
+        }
+    }
+}
+
+struct ExternalFailureCard: View {
+    let failure: ExternalVPNFailure
+    let folder: URL
+
+    var body: some View {
+        let advice = ExternalVPNAdvice.display(for: failure)
+        DSCard("失敗原因", systemImage: "exclamationmark.triangle") {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(failure.message).font(.callout.weight(.medium)).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let finding = advice.finding {
+                    Text("偵測到：\(finding)").font(.callout).monospaced()
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if !advice.steps.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("可以這樣處理").font(.callout.weight(.medium)).foregroundStyle(.secondary)
+                        ForEach(Array(advice.steps.enumerated()), id: \.offset) { index, text in
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Image(systemName: "\(index + 1).circle").foregroundStyle(.secondary)
+                                Text(text).font(.callout).fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                }
+                Button {
+                    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                    NSWorkspace.shared.open(folder)
+                } label: { Label("打開失敗紀錄資料夾", systemImage: "folder") }
+            }
+            .textSelection(.enabled)
         }
     }
 }
