@@ -329,6 +329,32 @@ func runExternalUI() async throws -> Int {
     check("重試後分流成功就清除失敗原因", recoveredModel.lastFailure == nil)
     await recoveredModel.stop()
     check("成功後停止並復原不再冒出舊失敗原因", recoveredModel.status.phase == .idle && recoveredModel.lastFailure == nil)
+
+    // 手動「重新嘗試分流」時系統元件沿用上次 session，等待狀態仍帶著舊失敗，但這不是自動重試。
+    let manualRetryModel = ExternalVPNController(preferences: preferences, autoRefresh: false, transport: { operation, _ in
+        var status: ExternalVPNStatus
+        switch operation {
+        case "restore": status = .idle
+        default:
+            status = ExternalVPNStatus(phase: .waiting, message: "等待外部 VPN", interface: "en0", tunnel: nil, routeCount: 0)
+            status.latestFailure = adviceFailure
+        }
+        return (0, String(decoding: try! JSONEncoder().encode(status), as: UTF8.self))
+    }, recordFailure: { _ in })
+    await manualRetryModel.start()
+    check("手動重試後的等待狀態不帶回舊失敗原因", manualRetryModel.status.phase == .waiting && manualRetryModel.lastFailure == nil)
+    await manualRetryModel.stop()
+    check("手動重試後停止並復原不冒出舊失敗原因", manualRetryModel.status.phase == .idle && manualRetryModel.lastFailure == nil)
+
+    // 舊系統元件在準備階段失敗時 status 沒有 latestFailure，仍要顯示原因與通用建議。
+    let legacyModel = ExternalVPNController(preferences: preferences, autoRefresh: false, transport: { operation, _ in
+        let status = operation == "prepare"
+            ? ExternalVPNStatus(phase: .failed, message: "請先中斷外部 VPN，再開始等待，才能記住正常上網出口", interface: nil, tunnel: nil, routeCount: 0)
+            : ExternalVPNStatus.idle
+        return (1, String(decoding: try! JSONEncoder().encode(status), as: UTF8.self))
+    }, recordFailure: { _ in })
+    await legacyModel.start()
+    check("舊系統元件準備失敗也顯示原因", legacyModel.lastFailure?.message == "請先中斷外部 VPN，再開始等待，才能記住正常上網出口" && legacyModel.lastFailure?.stage == .preparing)
     print("通過 \(passed)，失敗 \(failed)")
     return failed
 }

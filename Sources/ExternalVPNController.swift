@@ -149,9 +149,18 @@ final class ExternalVPNController: ObservableObject {
             }
             let previous = status
             status = decoded
-            // 自動重試成功後 session 仍帶著第一次的失敗；分流已啟用就不再是使用者要處理的原因。
-            if decoded.phase == .active { lastFailure = nil }
-            else if let failure = decoded.latestFailure { lastFailure = failure }
+            // session 在重試與成功後仍帶著舊失敗，只有現在確實失敗、或自動重試中才算使用者要處理的原因。
+            switch decoded.phase {
+            case .failed, .recoveryRequired:
+                // 舊系統元件準備失敗時 status 沒有 latestFailure，用訊息補一筆，畫面才有原因與通用建議。
+                lastFailure = decoded.latestFailure ?? (operation == "prepare" ? ExternalVPNFailure(stage: .preparing, message: decoded.message) : lastFailure)
+            case .waiting where decoded.autoRetried == true:
+                lastFailure = decoded.latestFailure ?? lastFailure
+            case .active:
+                lastFailure = nil
+            case .idle, .waiting, .applying, .restoring:
+                break
+            }
             if ExternalFailureLog.shouldRecord(operation: operation, previous: previous, next: decoded) { recordFailure(output) }
         }
         else {
