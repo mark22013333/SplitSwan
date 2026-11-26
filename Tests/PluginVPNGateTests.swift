@@ -285,6 +285,35 @@ func runTests() async throws {
     await m.userAction(action)
     raceModel = nil
     check("停止等待與連上同時發生：不執行", calls.isEmpty && !m.busy && m.vpnWaitingAction == nil)
+    check("停止等待與連上同時發生：照一般取消還原意圖", race.cancels == 1 && !race.status.wantConnected)
+
+    // 同樣的競態，但按下前就想連線：不還原
+    let raceWanted = FakeVPN(wantConnected: true)
+    raceWanted.onConnect = race.onConnect
+    m = await model(raceWanted)
+    raceModel = m
+    await m.userAction(action)
+    raceModel = nil
+    check("停止等待與連上同時發生、按下前已想連線：不還原", calls.isEmpty && raceWanted.cancels == 0 && raceWanted.status.wantConnected)
+
+    // 同樣的競態，但等待中使用者自己按了連線：不還原
+    let raceUser = FakeVPN()
+    raceUser.onConnect = { vpn in
+        vpn.status.busy = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(30))
+            vpn.userConnect()
+            try? await Task.sleep(for: .milliseconds(30))
+            vpn.status.busy = false
+            vpn.status.connected = true
+            raceModel?.cancelVPNWait()
+        }
+    }
+    m = await model(raceUser)
+    raceModel = m
+    await m.userAction(action)
+    raceModel = nil
+    check("停止等待與連上同時發生、等待中使用者按了連線：不還原", calls.isEmpty && raceUser.cancels == 0 && raceUser.status.wantConnected)
 
     // 問題 3：等待期間使用者自己按了連線，失敗或逾時都不還原意圖
     let userPressed = FakeVPN()

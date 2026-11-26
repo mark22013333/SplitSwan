@@ -31,7 +31,19 @@ enum PluginVPNGate {
         var intentGeneration = 0
     }
     enum Verdict: Equatable { case waiting, connected, failed(reason: String?) }
-    enum Outcome: Equatable { case ready, failed(String), cancelled }
+    /// gate 為了這次動作設下的連線意圖；ready 之後才發現等待已被取消時，憑它決定要不要還原。
+    struct IntentClaim: Equatable {
+        var wantConnectedBefore: Bool
+        var ownIntent: Int
+        @MainActor func restoreIfOwned(_ vpn: PluginActionVPN) {
+            if shouldRestoreIntent(wantConnectedBefore: wantConnectedBefore, ownIntent: ownIntent,
+                                   currentIntent: vpn.gateStatus.intentGeneration) {
+                vpn.cancelConnectionIntent()
+            }
+        }
+    }
+    /// `ready` 的 claim：本來就已連線、沒有發起連線時為 nil。
+    enum Outcome: Equatable { case ready(IntentClaim?), failed(String), cancelled }
 
     static func needsConnection(_ action: PluginSettingsProtocol.Action, status: Status) -> Bool {
         action.requiresVPN == true && !status.connected
@@ -61,7 +73,7 @@ enum PluginVPNGate {
     @MainActor
     static func ensureConnected(_ vpn: PluginActionVPN, timeout: Duration = timeout) async -> Outcome {
         let before = vpn.gateStatus
-        if before.connected { vpn.publishToPlugins(); return .ready }
+        if before.connected { vpn.publishToPlugins(); return .ready(nil) }
         if Task.isCancelled { return .cancelled }
         let (changes, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
         let observation = vpn.observeChanges { continuation.yield() }
@@ -69,7 +81,7 @@ enum PluginVPNGate {
         defer { observation.cancel(); timer.cancel(); continuation.finish() }
 
         vpn.connectAuto()
-        let ownIntent = vpn.gateStatus.intentGeneration
+        let claim = IntentClaim(wantConnectedBefore: before.wantConnected, ownIntent: vpn.gateStatus.intentGeneration)
         func evaluate() -> Verdict { judge(vpn.gateStatus, failuresBefore: before.failureGeneration) }
         // 通知發生在屬性改變之前；下一輪才讀，拿到的是同一批改動完成後的狀態。
         var verdict = evaluate()
@@ -79,18 +91,16 @@ enum PluginVPNGate {
                 if verdict != .waiting { break }
             }
         }
-        let restore = shouldRestoreIntent(wantConnectedBefore: before.wantConnected, ownIntent: ownIntent,
-                                          currentIntent: vpn.gateStatus.intentGeneration)
         switch verdict {
         case .connected:
             vpn.publishToPlugins()
-            return .ready
+            return .ready(claim)
         case .failed(let reason):
-            if restore { vpn.cancelConnectionIntent() }
+            claim.restoreIfOwned(vpn)
             return .failed(failureMessage(reason: reason))
         case .waiting:
             let reason = vpn.gateStatus.lastError
-            if restore { vpn.cancelConnectionIntent() }
+            claim.restoreIfOwned(vpn)
             if Task.isCancelled { return .cancelled }
             return .failed(failureMessage(reason: reason))
         }
