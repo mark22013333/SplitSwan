@@ -157,7 +157,7 @@ final class ExternalVPNSystem: ExternalVPNRuntime {
             let ip = ExternalIPv4(value: value)
             return (ip.description, ExternalIPv4Network(address: ip, prefix: prefix))
         }
-        throw ExternalVPNError.invalid("原本的實體網卡已離線，請停止後重新開始")
+        throw ExternalVPNIssue.physicalOffline
     }
 
     private func bootID() throws -> String {
@@ -188,14 +188,14 @@ final class ExternalVPNSystem: ExternalVPNRuntime {
                 output.split(separator: "\n").first(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix(name + ":") })?.split(separator: ":", maxSplits: 1).last?.trimmingCharacters(in: .whitespaces)
             }
             guard let name = field("interface"), ExternalVPNPlanner.isPhysical(name), let next = field("gateway"),
-                  (try? ExternalIPv4(next)) != nil else { throw ExternalVPNError.invalid("找不到可保留的實體 IPv4 上網出口") }
+                  (try? ExternalIPv4(next)) != nil else { throw ExternalVPNIssue.noPhysicalExit }
             physical = name; gateway = next
         }
         let local = try? localIPv4(physical)
-        guard let (address, network) = local ?? baseline.map({ ("", $0.localNetwork) }) else { throw ExternalVPNError.invalid("找不到實體 IPv4 位址") }
+        guard let (address, network) = local ?? baseline.map({ ("", $0.localNetwork) }) else { throw ExternalVPNIssue.noPhysicalAddress }
         let dns = try serviceDNS()
         guard baseline != nil || dns.contains(where: { $0.interface == physical && !$0.servers.isEmpty }) else {
-            throw ExternalVPNError.invalid("找不到原本網卡的 DNS，無法安全準備分流")
+            throw ExternalVPNIssue.noBaselineDNS
         }
         return ExternalNetworkSnapshot(bootID: try bootID(), interface: physical, address: address, gateway: gateway,
                                        localNetwork: network, routes: routes, dns: dns, ipv6TunnelDefault: ipv6Default,

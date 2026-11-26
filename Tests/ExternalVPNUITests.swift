@@ -273,6 +273,39 @@ func runExternalUI() async throws -> Int {
     await settle { recorded.count == 2 }
     check("重新開始後再次失敗才另記一份", recorded.count == 2)
     await failureModel.stop()
+
+    let advised = ExternalVPNAdvice(finding: "預設 DNS 100.100.100.100 由 utun6 提供", steps: ["暫時關閉該通道的 DNS 覆寫"])
+    let adviceFailure = ExternalVPNFailure(stage: .planning, message: "VPN 的預設 DNS 無法確定服務歸屬，未套用分流", advice: advised)
+    check("有建議的失敗原樣顯示", ExternalVPNAdvice.display(for: adviceFailure) == advised)
+    let stages: [ExternalVPNFailure.Stage] = [.preparing, .observing, .planning, .applyingRoutes, .applyingDNS, .verifying, .restoring]
+    check("舊系統元件沒有建議時每個階段都給通用步驟", stages.allSatisfy { stage in
+        let shown = ExternalVPNAdvice.display(for: ExternalVPNFailure(stage: stage, message: "舊版訊息"))
+        return shown.finding == nil && !shown.steps.isEmpty && shown.steps.contains { $0.contains("失敗紀錄") || $0.contains("停止並復原") }
+    })
+
+    var failNow = false
+    let adviceModel = ExternalVPNController(preferences: preferences, autoRefresh: false, transport: { operation, _ in
+        var status: ExternalVPNStatus
+        switch operation {
+        case "tick" where failNow:
+            status = ExternalVPNStatus(phase: .failed, message: adviceFailure.message, interface: "en0", tunnel: "utun4", routeCount: 0, canRetry: true)
+            status.latestFailure = adviceFailure
+        case "restore": status = .idle
+        default: status = ExternalVPNStatus(phase: .waiting, message: "等待外部 VPN", interface: "en0", tunnel: nil, routeCount: 0)
+        }
+        return (0, String(decoding: try! JSONEncoder().encode(status), as: UTF8.self))
+    }, recordFailure: { _ in })
+    await adviceModel.start()
+    check("尚未失敗時沒有失敗原因", adviceModel.lastFailure == nil)
+    failNow = true
+    await settle { adviceModel.status.phase == .failed }
+    check("失敗時控制器帶出失敗原因與建議", adviceModel.lastFailure?.advice == advised)
+    await adviceModel.stop()
+    check("停止並復原回到 idle 後仍保留失敗原因", adviceModel.status.phase == .idle && adviceModel.lastFailure?.advice == advised)
+    failNow = false
+    await adviceModel.start()
+    check("重新開始後清除上次失敗原因", adviceModel.lastFailure == nil)
+    await adviceModel.stop()
     print("通過 \(passed)，失敗 \(failed)")
     return failed
 }
