@@ -311,6 +311,22 @@ for (name, servers, extra) in [
     let result = attempt(engine, pending)
     check("保留模式拒絕\(name)且路由與 DNS 零寫入", stopped(result) && runtime.adds == 0 && runtime.dnsWrites == 0)
 }
+// 例：Tailscale 等其他通道在連 VPN 前就是全域預設 DNS，VPN 沒有改動它。
+let overlayDNS = ExternalDNSEntry(key: "State:/Network/Service/overlay/DNS", interface: "utun6", value: plist(["ServerAddresses": ["100.100.100.100"], "SearchDomains": ["overlay.example.com"]]))
+for (name, inBaseline, changed, accepted) in [
+    ("接受連線前就是全域預設且未變動的其他服務 DNS", true, false, true),
+    ("拒絕連線前不是全域預設的其他服務 DNS", false, false, false),
+    ("拒絕連線後內容被改動的其他服務 DNS", true, true, false)
+] {
+    let runtime = FakeRuntime(); let engine = ExternalVPNEngine(runtime: runtime)
+    runtime.state.dns.append(overlayDNS)
+    if inBaseline { runtime.state.defaultDNSServers = ["100.100.100.100"] }
+    let pending = try! engine.prepare(owner: 501, profile: preserveProfile)
+    runtime.state = noSuffix(); runtime.state.defaultDNSServers = ["100.100.100.100"]; runtime.state.defaultDNSDomains = []
+    runtime.state.dns.append(changed ? ExternalDNSEntry(key: overlayDNS.key, interface: "utun6", value: plist(["ServerAddresses": ["100.100.100.100"]])) : overlayDNS)
+    let result = attempt(engine, pending)
+    check("保留模式\(name)", accepted ? (result.phase == .active && runtime.dnsWrites == 0) : (stopped(result) && runtime.adds == 0 && runtime.dnsWrites == 0))
+}
 for (name, change) in [
     ("未知歸屬", { (state: inout ExternalNetworkSnapshot) in state.dns[1] = ExternalDNSEntry(key: vpnDNS.key, interface: nil, value: state.dns[1].value) }),
     ("只有全域解析器", { (state: inout ExternalNetworkSnapshot) in state.dns = [physicalDNS] }),

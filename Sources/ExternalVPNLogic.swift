@@ -616,9 +616,15 @@ enum ExternalVPNPlanner {
         }
         if session.profile.dnsMode == .preserveVPN {
             let knownDNS = tunnelDNS + [entry]
+            // 連線前就是全域預設、且內容未被 VPN 改動的其他具名服務（例：Tailscale），沿用不影響分流。
+            let untouched = current.dns.filter { candidate in
+                candidate.interface != nil && candidate.interface != tunnel &&
+                    ExternalDNSEntry.equalValues(session.baseline.dns.first(where: { $0.key == candidate.key })?.value, candidate.value)
+            }
             for server in current.defaultDNSServers {
                 let owners = current.dns.filter { $0.servers.contains(server) }
-                guard !owners.isEmpty, owners.allSatisfy({ knownDNS.contains($0) }) else {
+                let preexisting = session.baseline.defaultDNSServers.contains(server)
+                guard !owners.isEmpty, owners.allSatisfy({ knownDNS.contains($0) || (preexisting && untouched.contains($0)) }) else {
                     throw ExternalVPNError.invalid("VPN 的預設 DNS 無法確定服務歸屬，未套用分流")
                 }
             }
