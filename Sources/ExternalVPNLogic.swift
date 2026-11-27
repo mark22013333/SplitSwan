@@ -268,6 +268,7 @@ struct ExternalDNSPlan {
     let changes: [ExternalDNSChange]
     let preserved: ExternalDNSState?
     var skippedEndpointDNS: [String] = []
+    var reroutedDNS: [String] = []
 }
 
 // finding 是偵測到的環境事實（含介面與位址），steps 是使用者能自己做的調整。
@@ -525,6 +526,9 @@ struct ExternalVPNRoutingEvidence: Codable, Equatable {
     let directHosts: [ExternalIPv4Network]
     let borrowedRoutes: [ExternalRoute]
     let physicalInterfaceIndex: UInt32
+    // 原本上網 DNS 被 VPN 較寬網段涵蓋時另加的 /32；與 directHosts 分開，因為 directHosts 不得與任何 DNS 重疊。
+    // 選填才能讀舊紀錄。
+    var baselineDNSHosts: [ExternalIPv4Network]? = nil
 
     static func validateNetwork(_ session: ExternalVPNSession, _ current: ExternalNetworkSnapshot) throws {
         let baseline = session.baseline
@@ -592,7 +596,7 @@ struct ExternalVPNRoutingEvidence: Codable, Equatable {
                 && (borrowedRoutes.contains { $0.sameIdentity(as: route) } || session.addedRoutes.contains { $0.sameIdentity(as: route) })
         }
         try verify(publicNetworks, exclusions: exemptions, accepts: physical)
-        try verify(directHosts, accepts: physical)
+        try verify(directHosts + (baselineDNSHosts ?? []), accepts: physical)
         try verify([session.baseline.localNetwork]) { isLANRoute($0, session: session) }
     }
 }
@@ -684,10 +688,11 @@ enum ExternalVPNPlanner {
         let required = publicNetworks(excluding: protected + vpnPrecise + vpnDNS + [baseline.localNetwork])
         // 限定介面（I）的路由只給綁定該介面的流量用，覆蓋驗證也不採計；若當成既有細部路由略過，會留下沒有實體路由的缺口。
         let precise = current.routes.filter { $0.network.prefix >= 2 && !$0.isInterfaceScoped }.map(\.network)
-        let networks = publicNetworks(excluding: protected + precise + vpnDNS + [baseline.localNetwork] + direct)
+        let dnsHosts = reroutedBaselineDNS(session, current: current, tunnel: tunnel)
+        let networks = publicNetworks(excluding: protected + precise + vpnDNS + [baseline.localNetwork] + direct + dnsHosts)
         guard required.count <= 2048, networks.count <= 2048 else { throw ExternalVPNError.invalid("外網路由範圍無法安全分流") }
         var additions = networks.map { ExternalRoute(network: $0, gateway: baseline.gateway, interface: baseline.interface, flags: "UGS1") }
-        for host in direct {
+        for host in direct + dnsHosts {
             let exact = current.routes.filter { $0.network == host && !$0.isInterfaceScoped }
             if exact.isEmpty {
                 additions.append(ExternalRoute(network: host, gateway: baseline.gateway, interface: baseline.interface, flags: "UGHS1"))
@@ -707,7 +712,8 @@ enum ExternalVPNPlanner {
               expectedIndex == physicalInterfaceIndex else {
             throw ExternalVPNError.invalid("無法確認原本實體網路的介面編號，未套用分流")
         }
-        let evidence = ExternalVPNRoutingEvidence(publicNetworks: required, directHosts: direct, borrowedRoutes: borrowed, physicalInterfaceIndex: physicalInterfaceIndex)
+        let evidence = ExternalVPNRoutingEvidence(publicNetworks: required, directHosts: direct, borrowedRoutes: borrowed, physicalInterfaceIndex: physicalInterfaceIndex,
+                                                  baselineDNSHosts: dnsHosts.isEmpty ? nil : dnsHosts)
         let lanRoutes = current.routes.filter { $0.carriesGeneralTraffic && $0.network.prefix >= lan.prefix && CompanyVPNPlanner.overlaps($0.network, lan) }
         let foreignLAN = lanRoutes.filter { !evidence.isLANRoute($0, session: session) }
         guard foreignLAN.isEmpty else {
@@ -772,19 +778,19 @@ enum ExternalVPNPlanner {
             throw ExternalVPNIssue.baselineDNSOwnerUnknown
         }
         let endpoints = tunnelEndpoints(current.routes, interface: tunnel)
-        var skipped: [String] = []
+        var skipped: [String] = [], rerouted: [String] = []
         for server in entry.servers {
             guard let ip = try? ExternalIPv4(server) else { throw ExternalVPNIssue.baselineDNSIPv6(server) }
             guard !tunnelDNS.contains(where: { $0.servers.contains(server) }) else {
                 throw ExternalVPNIssue.dnsOverlap(server)
             }
-            let covering = current.routes.filter { $0.isTunnel && !$0.isInterfaceScoped && $0.network.prefix >= 2 && $0.network.contains(ip) }
-            guard let finest = covering.max(by: { $0.network.prefix < $1.network.prefix }) else { continue }
-            let host = ExternalIPv4Network(address: ip, prefix: 32)
-            guard endpoints.contains(ip), covering.allSatisfy({ $0.interface == tunnel && $0.network == host }) else {
+            switch baselineDNSRoute(ip, session: session, current: current, tunnel: tunnel, endpoints: endpoints) {
+            case .unaffected: continue
+            case .endpoint: skipped.append(server)
+            case .widerTunnelNetwork: rerouted.append(server)
+            case .captured(let finest):
                 throw ExternalVPNIssue.baselineDNSCaptured(server: server, interface: finest.interface, network: finest.network.description)
             }
-            skipped.append(server)
         }
         guard skipped.count < entry.servers.count else {
             throw ExternalVPNIssue.baselineDNSAllEndpoints(skipped)
@@ -805,7 +811,7 @@ enum ExternalVPNPlanner {
                 }
             }
             guard unattributed.isEmpty else { throw ExternalVPNIssue.unattributedDefaultDNS(unattributed) }
-            return ExternalDNSPlan(changes: [], preserved: ExternalDNSState(current), skippedEndpointDNS: skipped)
+            return ExternalDNSPlan(changes: [], preserved: ExternalDNSState(current), skippedEndpointDNS: skipped, reroutedDNS: rerouted)
         }
         var changes = try tunnelDNS.map { entry in
             var dictionary = entry.dictionary
@@ -831,7 +837,45 @@ enum ExternalVPNPlanner {
         dictionary["SearchOrder"] = 1
         let after = try PropertyListSerialization.data(fromPropertyList: dictionary, format: .binary, options: 0)
         changes.append(ExternalDNSChange(key: entry.key, before: entry.value, after: after))
-        return ExternalDNSPlan(changes: changes, preserved: nil, skippedEndpointDNS: skipped)
+        return ExternalDNSPlan(changes: changes, preserved: nil, skippedEndpointDNS: skipped, reroutedDNS: rerouted)
+    }
+
+    enum BaselineDNSRoute: Equatable {
+        case unaffected, endpoint, widerTunnelNetwork
+        case captured(ExternalRoute)
+    }
+
+    // 原本上網 DNS 位址在 VPN 連線後的處境。只看 /2 以上的通道路由：/1 全通道本來就會被分流的外網路由蓋過。
+    static func baselineDNSRoute(_ ip: ExternalIPv4, session: ExternalVPNSession, current: ExternalNetworkSnapshot,
+                                 tunnel: String, endpoints: Set<ExternalIPv4>) -> BaselineDNSRoute {
+        let covering = current.routes.filter { $0.isTunnel && !$0.isInterfaceScoped && $0.network.prefix >= 2 && $0.network.contains(ip) }
+        guard let finest = covering.max(by: { $0.network.prefix < $1.network.prefix }) else { return .unaffected }
+        let host = ExternalIPv4Network(address: ip, prefix: 32)
+        let hostRoutes = covering.filter { $0.network == host }
+        // 通道上有這個位址的 /32 時一般流量必走它，系統也不接受同目的地再加一條；只有 F5 自己的端點可以略過。
+        if !hostRoutes.isEmpty {
+            return endpoints.contains(ip) && hostRoutes.allSatisfy({ $0.interface == tunnel }) ? .endpoint : .captured(finest)
+        }
+        // 改走原本網卡等同使用者填的「指定 IP」，沿用同一套公用位址限制；落在使用者要求保留走 VPN 的網段、
+        // 公司通道網段、本機網段，或較寬網段屬於其他通道時，無法判斷哪一邊才對，照舊拒絕。
+        let protected = session.profile.protectedNetworks.compactMap { try? ExternalIPv4Network($0) }
+        guard covering.allSatisfy({ $0.interface == tunnel }),
+              (try? ExternalVPNProfile(directIPv4: [ip.description]).validated()) != nil,
+              !session.baseline.localNetwork.contains(ip),
+              !protected.contains(where: { $0.contains(ip) }),
+              session.company?.policy.selectors.contains(where: { $0.contains(ip) }) != true else { return .captured(finest) }
+        return .widerTunnelNetwork
+    }
+
+    // plan 與 dnsPlan 對同一份快照做相同分類，dnsPlan 判定可用的位址才會在 plan 裡有對應的 /32。
+    static func reroutedBaselineDNS(_ session: ExternalVPNSession, current: ExternalNetworkSnapshot, tunnel: String) -> [ExternalIPv4Network] {
+        let physical = current.dns.filter { $0.interface == session.baseline.interface && !$0.servers.isEmpty }
+        guard physical.count == 1, let entry = physical.first else { return [] }
+        let endpoints = tunnelEndpoints(current.routes, interface: tunnel)
+        let hosts = entry.servers.compactMap { try? ExternalIPv4($0) }.filter {
+            baselineDNSRoute($0, session: session, current: current, tunnel: tunnel, endpoints: endpoints) == .widerTunnelNetwork
+        }
+        return Array(Set(hosts)).sorted { $0.value < $1.value }.map { ExternalIPv4Network(address: $0, prefix: 32) }
     }
 }
 
@@ -1008,6 +1052,9 @@ final class ExternalVPNEngine {
                 : "IPv4 分流已套用；請確認外網與 VPN 系統皆可使用"
             if !dns.skippedEndpointDNS.isEmpty {
                 session.message += "；\(dns.skippedEndpointDNS.joined(separator: "、")) 是 VPN 通道端點，這段期間改用其他 DNS 查詢"
+            }
+            if !dns.reroutedDNS.isEmpty {
+                session.message += "；原本的 DNS \(dns.reroutedDNS.joined(separator: "、")) 落在 VPN 網段內，這段期間改經原本網卡 \(session.baseline.interface) 連線"
             }
             try runtime.save(session)
             return session
