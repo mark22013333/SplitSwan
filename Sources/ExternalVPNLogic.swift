@@ -766,7 +766,7 @@ enum ExternalVPNPlanner {
             guard !tunnelDNS.contains(where: { $0.servers.contains(server) }) else {
                 throw ExternalVPNIssue.dnsOverlap(server)
             }
-            let covering = current.routes.filter { $0.isTunnel && $0.network.prefix >= 2 && $0.network.contains(ip) }
+            let covering = current.routes.filter { $0.isTunnel && !$0.flags.contains("I") && $0.network.prefix >= 2 && $0.network.contains(ip) }
             guard let finest = covering.max(by: { $0.network.prefix < $1.network.prefix }) else { continue }
             let host = ExternalIPv4Network(address: ip, prefix: 32)
             guard endpoints.contains(ip), covering.allSatisfy({ $0.interface == tunnel && $0.network == host }) else {
