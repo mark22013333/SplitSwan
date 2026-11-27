@@ -827,6 +827,9 @@ let oneWay = dnsError(f5Session(companyDNS), f5Connected(companyDNS, tunnel: "0/
 check("(d) 只有單向主機路由不認定為端點且照舊拒絕", oneWay == "原本的 DNS 1.1.1.1 被 utun4 的 1.1.1.1/32 路由接管，未套用分流")
 let otherTunnel = dnsError(f5Session(companyDNS), f5Connected(companyDNS, tunnel: f5Tunnel + "\n1.1.1.1/32 10.0.0.9 USc utun9\n"))
 check("端點另被其他通道介面的 /32 覆蓋時拒絕", otherTunnel != nil)
+// Tailscale 轉送 DNS 時會在 utun6 留下限定介面（I）的 1.1.1.1 主機路由；一般流量不走它，不算接管原本 DNS。
+let tailscaleScoped = dnsError(f5Session(companyDNS), f5Connected(companyDNS, tunnel: f5Tunnel + "\n1.1.1.1 link#39 UHWIig utun6\n"))
+check("端點另有其他通道的限定介面主機路由時照常規劃", tailscaleScoped == nil)
 let failedRuntime = FakeRuntime(); failedRuntime.state = f5Baseline(["1.1.1.1"])
 let failedF5Engine = ExternalVPNEngine(runtime: failedRuntime)
 let failedF5Pending = try! failedF5Engine.prepare(owner: 501, profile: ExternalVPNProfile())
