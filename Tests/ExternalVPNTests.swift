@@ -627,7 +627,7 @@ let directPending = try! directEngine.prepare(owner: 501, profile: directProfile
 directRuntime.state = connected(); directRuntime.state.routes.append(route("203.0.0.0/16", "198.51.100.1", "ppp0"))
 let directActive = attempt(directEngine, directPending)
 check("保留 /16 只新增明確指定 /32", directActive.phase == .active && directActive.addedRoutes.contains { $0.network == network("203.0.113.8/32") && $0.interface == "en0" })
-check("指定 IP 旁的同網段位址仍走 VPN", CompanyVPNPlanner.winners(try! ExternalIPv4("203.0.113.9"), routes: directRuntime.state.routes).allSatisfy { $0.interface == "ppp0" })
+check("指定 IP 旁的同網段位址仍走 VPN", ExternalVPNPlanner.generalWinners(try! ExternalIPv4("203.0.113.9"), routes: directRuntime.state.routes).allSatisfy { $0.interface == "ppp0" })
 let conflictingDNSProfile = ExternalVPNProfile(dnsMode: .preserveVPN, directIPv4: ["198.51.100.53"])
 let conflictingDNSSession = ExternalVPNSession(owner: 501, baseline: baseline(), profile: conflictingDNSProfile)
 check("指定 IP 不得繞過 VPN DNS", rejected { try ExternalVPNPlanner.plan(conflictingDNSSession, current: connected(), tunnel: "ppp0") })
@@ -999,6 +999,19 @@ legacyFailure.removeValue(forKey: "advice")
 legacyStatus["latestFailure"] = legacyFailure
 let adviceLegacyDecoded = try? JSONDecoder().decode(ExternalVPNStatus.self, from: JSONSerialization.data(withJSONObject: legacyStatus))
 check("缺少 advice 欄位的舊 JSON 仍可解碼", adviceLegacyDecoded?.latestFailure?.advice == nil && adviceLegacyDecoded?.latestFailure?.message == overlayResult.latestFailure?.message)
+
+// 結構守門：限定介面（I）只在 ExternalRoute.isInterfaceScoped 判斷一次。各處自行過濾曾漏掉 I（Tailscale 的 UHWIig 主機路由），
+// 新程式要判斷「一般流量會不會走」請用 carriesGeneralTraffic 或 ExternalVPNPlanner.generalWinners。run-tests.sh 在 repo 根目錄執行。
+let scopedFlagNeedle = "contains(\"I\")"
+let sourceFiles = (try? FileManager.default.contentsOfDirectory(atPath: "Sources"))?.filter { $0.hasSuffix(".swift") } ?? []
+let scopedFlagLines = sourceFiles.sorted().flatMap { name -> [String] in
+    let text = (try? String(contentsOfFile: "Sources/\(name)", encoding: .utf8)) ?? ""
+    return text.split(separator: "\n").filter { $0.contains(scopedFlagNeedle) }.map { "\(name): \($0.trimmingCharacters(in: .whitespaces))" }
+}
+let lookupRoutes = ExternalVPNPlanner.parseRoutes("0/1 10.0.0.127 UScg utun4\n1.1.1/24 10.0.0.127 USc utun4\n1.1.1.1 link#39 UHWIig utun6\n")
+check("一般流量查詢略過限定介面並取最長前綴", ExternalVPNPlanner.generalWinners(try! ExternalIPv4("1.1.1.1"), routes: lookupRoutes).map(\.network.description) == ["1.1.1.0/24"])
+check("結構守門讀得到 Sources", sourceFiles.contains("ExternalVPNLogic.swift") && sourceFiles.contains("VPNCoexistenceLogic.swift"))
+check("限定介面旗標只在 isInterfaceScoped 判斷：\(scopedFlagLines)", scopedFlagLines.count == 1 && scopedFlagLines[0].hasPrefix("ExternalVPNLogic.swift: static func isInterfaceScoped"))
 
 print("通過 \(pass)，失敗 \(fail)")
 exit(fail == 0 ? 0 : 1)

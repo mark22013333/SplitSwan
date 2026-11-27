@@ -126,10 +126,16 @@ struct ExternalRoute: Codable, Equatable {
     let flags: String
     var nextHopKind: ExternalRouteNextHop?
     var kind: ExternalRouteNextHop { nextHopKind ?? (gateway.hasPrefix("link#") && !flags.contains("G") ? .directInterface : .gateway) }
-    var isUsable: Bool { flags.contains("U") && !flags.contains("I") && !flags.contains("R") && !flags.contains("B") }
+    // 限定介面（I）的路由只給綁定該介面的 socket 用，一般流量選路看不到它。這是全檔唯一判斷 I 的地方，
+    // 「一般流量會不會走這條」一律經 carriesGeneralTraffic 或 ExternalVPNPlanner.generalWinners，不要再手寫旗標。
+    static func isInterfaceScoped(_ flags: String) -> Bool { flags.contains("I") }
+    static func carriesGeneralTraffic(_ flags: String) -> Bool { flags.contains("U") && !isInterfaceScoped(flags) }
+    var isInterfaceScoped: Bool { Self.isInterfaceScoped(flags) }
+    var carriesGeneralTraffic: Bool { Self.carriesGeneralTraffic(flags) }
+    var isUsable: Bool { carriesGeneralTraffic && !flags.contains("R") && !flags.contains("B") }
     func sameIdentity(as other: Self) -> Bool {
         network == other.network && gateway == other.gateway && interface == other.interface
-            && kind == other.kind && isOwned == other.isOwned && flags.contains("I") == other.flags.contains("I")
+            && kind == other.kind && isOwned == other.isOwned && isInterfaceScoped == other.isInterfaceScoped
     }
     var isTunnel: Bool { ExternalVPNPlanner.isTunnel(interface) }
     var isOwned: Bool { flags.contains("1") }
@@ -574,7 +580,7 @@ struct ExternalVPNRoutingEvidence: Codable, Equatable {
                 for point in boundaries.sorted().dropLast() {
                     let ip = ExternalIPv4(value: UInt32(point))
                     if exclusions.contains(where: { $0.contains(ip) }) { continue }
-                    let winners = CompanyVPNPlanner.winners(ip, routes: current.routes)
+                    let winners = ExternalVPNPlanner.generalWinners(ip, routes: current.routes)
                     guard !winners.isEmpty, winners.allSatisfy({ $0.isUsable && accepts($0) }) else {
                         throw ExternalVPNError.invalid("外網、指定 IP 或本機網段的完整路由覆蓋已變更")
                     }
@@ -618,16 +624,23 @@ enum ExternalVPNPlanner {
 
     static func tunnel(in snapshot: ExternalNetworkSnapshot) throws -> String? {
         if snapshot.ipv6TunnelDefault { throw ExternalVPNIssue.ipv6Takeover }
-        let candidates = Set(snapshot.routes.filter { $0.isTunnel && $0.network.prefix <= 1 && $0.flags.contains("U") && !$0.flags.contains("I") }.map(\.interface))
+        let candidates = Set(snapshot.routes.filter { $0.isTunnel && $0.network.prefix <= 1 && $0.carriesGeneralTraffic }.map(\.interface))
         guard candidates.count <= 1 else { throw ExternalVPNIssue.multipleTunnels(candidates.sorted()) }
         return candidates.first
+    }
+
+    // 目的地 ip 的一般流量依最長前綴會命中的路由；同前綴可能有多條，全部回傳由呼叫端判斷。
+    static func generalWinners(_ ip: ExternalIPv4, routes: [ExternalRoute]) -> [ExternalRoute] {
+        let matches = routes.filter { $0.carriesGeneralTraffic && $0.network.contains(ip) }
+        guard let prefix = matches.map(\.network.prefix).max() else { return [] }
+        return matches.filter { $0.network.prefix == prefix }
     }
 
     static func hasIPv6TunnelDefault(_ text: String) -> Bool {
         text.split(separator: "\n").contains { line in
             let fields = line.split(whereSeparator: \.isWhitespace).map(String.init)
             return fields.count >= 4 && ["default", "::/0", "::/1", "8000::/1"].contains(fields[0])
-                && fields[2].contains("U") && !fields[2].contains("I")
+                && ExternalRoute.carriesGeneralTraffic(fields[2])
                 && fields.dropFirst(3).contains(where: isTunnel)
         }
     }
@@ -655,7 +668,7 @@ enum ExternalVPNPlanner {
         }
         guard clashing.isEmpty else { throw ExternalVPNIssue.directOverlap(clashing.map { $0.address.description }) }
         let physicalRanges = current.routes.filter {
-            $0.interface == baseline.interface && $0.network.prefix >= 2 && !$0.flags.contains("I")
+            $0.interface == baseline.interface && $0.network.prefix >= 2 && !$0.isInterfaceScoped
                 && !direct.contains($0.network)
         }.map(\.network) + [baseline.localNetwork]
         let overlapping = protected.filter { requested in
@@ -663,19 +676,19 @@ enum ExternalVPNPlanner {
         }
         guard overlapping.isEmpty else { throw ExternalVPNIssue.protectedOverlap(overlapping.map(\.description)) }
         let vpnPrecise = current.routes.filter {
-            $0.interface == tunnel && $0.network.prefix >= 2 && $0.flags.contains("U") && !$0.flags.contains("I")
+            $0.interface == tunnel && $0.network.prefix >= 2 && $0.carriesGeneralTraffic
         }.map(\.network)
         let vpnDNS = try current.dns.filter { $0.interface == tunnel }.flatMap(\.servers).map {
             ExternalIPv4Network(address: try ExternalIPv4($0), prefix: 32)
         }
         let required = publicNetworks(excluding: protected + vpnPrecise + vpnDNS + [baseline.localNetwork])
         // 限定介面（I）的路由只給綁定該介面的流量用，覆蓋驗證也不採計；若當成既有細部路由略過，會留下沒有實體路由的缺口。
-        let precise = current.routes.filter { $0.network.prefix >= 2 && !$0.flags.contains("I") }.map(\.network)
+        let precise = current.routes.filter { $0.network.prefix >= 2 && !$0.isInterfaceScoped }.map(\.network)
         let networks = publicNetworks(excluding: protected + precise + vpnDNS + [baseline.localNetwork] + direct)
         guard required.count <= 2048, networks.count <= 2048 else { throw ExternalVPNError.invalid("外網路由範圍無法安全分流") }
         var additions = networks.map { ExternalRoute(network: $0, gateway: baseline.gateway, interface: baseline.interface, flags: "UGS1") }
         for host in direct {
-            let exact = current.routes.filter { $0.network == host && !$0.flags.contains("I") }
+            let exact = current.routes.filter { $0.network == host && !$0.isInterfaceScoped }
             if exact.isEmpty {
                 additions.append(ExternalRoute(network: host, gateway: baseline.gateway, interface: baseline.interface, flags: "UGHS1"))
             }
@@ -695,7 +708,7 @@ enum ExternalVPNPlanner {
             throw ExternalVPNError.invalid("無法確認原本實體網路的介面編號，未套用分流")
         }
         let evidence = ExternalVPNRoutingEvidence(publicNetworks: required, directHosts: direct, borrowedRoutes: borrowed, physicalInterfaceIndex: physicalInterfaceIndex)
-        let lanRoutes = current.routes.filter { $0.flags.contains("U") && !$0.flags.contains("I") && $0.network.prefix >= lan.prefix && CompanyVPNPlanner.overlaps($0.network, lan) }
+        let lanRoutes = current.routes.filter { $0.carriesGeneralTraffic && $0.network.prefix >= lan.prefix && CompanyVPNPlanner.overlaps($0.network, lan) }
         let foreignLAN = lanRoutes.filter { !evidence.isLANRoute($0, session: session) }
         guard foreignLAN.isEmpty else {
             throw ExternalVPNIssue.foreignLocalRoutes(Array(Set(foreignLAN.map(\.interface))).sorted())
@@ -747,9 +760,8 @@ enum ExternalVPNPlanner {
             guard !entry.servers.isEmpty else { throw ExternalVPNError.invalid("VPN 未提供可辨識的 DNS 伺服器，未套用分流") }
             for server in entry.servers {
                 let ip = try ExternalIPv4(server)
-                let matches = current.routes.filter { $0.flags.contains("U") && !$0.flags.contains("I") && $0.network.contains(ip) }
-                let longest = matches.map(\.network.prefix).max()
-                guard let longest, matches.filter({ $0.network.prefix == longest }).allSatisfy({ $0.interface == tunnel }) else {
+                let winners = generalWinners(ip, routes: current.routes)
+                guard !winners.isEmpty, winners.allSatisfy({ $0.interface == tunnel }) else {
                     throw ExternalVPNError.invalid("VPN DNS 的路由不在通道內，未套用分流")
                 }
             }
@@ -766,7 +778,7 @@ enum ExternalVPNPlanner {
             guard !tunnelDNS.contains(where: { $0.servers.contains(server) }) else {
                 throw ExternalVPNIssue.dnsOverlap(server)
             }
-            let covering = current.routes.filter { $0.isTunnel && !$0.flags.contains("I") && $0.network.prefix >= 2 && $0.network.contains(ip) }
+            let covering = current.routes.filter { $0.isTunnel && !$0.isInterfaceScoped && $0.network.prefix >= 2 && $0.network.contains(ip) }
             guard let finest = covering.max(by: { $0.network.prefix < $1.network.prefix }) else { continue }
             let host = ExternalIPv4Network(address: ip, prefix: 32)
             guard endpoints.contains(ip), covering.allSatisfy({ $0.interface == tunnel && $0.network == host }) else {
@@ -1044,7 +1056,7 @@ final class ExternalVPNEngine {
                 func nativeLAN(_ actual: ExternalRoute) -> Bool {
                     route.kind == .directInterface && route.network == session.baseline.localNetwork && !actual.isOwned
                         && actual.interface == route.interface && actual.gateway == route.gateway && actual.kind == .directInterface
-                        && actual.flags.contains("C") && !actual.flags.contains("I")
+                        && actual.flags.contains("C") && !actual.isInterfaceScoped
                 }
                 if !exact.allSatisfy({ actual in original.contains(actual) || nativeLAN(actual) }) { remainingRoutes.append(route) }
             }

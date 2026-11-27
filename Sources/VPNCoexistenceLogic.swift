@@ -145,7 +145,7 @@ enum CompanyVPNPlanner {
             guard !([current.localNetwork] + reserved + dns + direct).contains(where: { overlaps(selector, $0) }) else {
                 throw CompanyVPNError.admission("公司網段與本機、保留的 F5 網段或 DNS 重疊")
             }
-            for route in current.routes where route.flags.contains("U") && !route.flags.contains("I") && overlaps(selector, route.network) {
+            for route in current.routes where route.carriesGeneralTraffic && overlaps(selector, route.network) {
                 if session.addedRoutes.contains(where: { $0.network == route.network && $0.gateway == route.gateway && $0.interface == route.interface && route.isOwned }) {
                     if route.network.prefix >= selector.prefix { throw CompanyVPNError.requiresReprepare }
                 } else if route.network.prefix >= 2 {
@@ -162,7 +162,7 @@ enum CompanyVPNPlanner {
     }
 
     static func underlay(_ peer: ExternalIPv4, session: ExternalVPNSession, current: ExternalNetworkSnapshot) throws {
-        let routes = winners(peer, routes: current.routes)
+        let routes = ExternalVPNPlanner.generalWinners(peer, routes: current.routes)
         guard !routes.isEmpty, routes.allSatisfy({ $0.isUsable && $0.interface == session.baseline.interface && $0.gateway == session.baseline.gateway }) else {
             throw CompanyVPNError.requiresReprepare
         }
@@ -183,12 +183,6 @@ enum CompanyVPNPlanner {
             throw CompanyVPNError.recovery("無法讀取完整路由表，未確認公司路由已移除")
         }
         return current.routes.filter { actual in actual.isOwned && owned.contains { $0.network == actual.network } }
-    }
-
-    static func winners(_ ip: ExternalIPv4, routes: [ExternalRoute]) -> [ExternalRoute] {
-        let matches = routes.filter { $0.flags.contains("U") && !$0.flags.contains("I") && $0.network.contains(ip) }
-        guard let prefix = matches.map(\.network.prefix).max() else { return [] }
-        return matches.filter { $0.network.prefix == prefix }
     }
 
     static func coverage(_ policy: CompanyPolicy, identity: CompanyIdentity, session: ExternalVPNSession, current: ExternalNetworkSnapshot) throws -> [ExternalIPv4] {
@@ -213,7 +207,7 @@ enum CompanyVPNPlanner {
             guard probes.count + boundaries.count <= 4096 else { throw CompanyVPNError.admission("公司路由區間超過驗證上限") }
             for boundary in boundaries.sorted().dropLast() {
                 let ip = ExternalIPv4(value: UInt32(boundary))
-                let routes = winners(ip, routes: current.routes)
+                let routes = ExternalVPNPlanner.generalWinners(ip, routes: current.routes)
                 guard !routes.isEmpty, routes.allSatisfy({ $0.isUsable && $0.interface == identity.interface }) else {
                     throw CompanyVPNError.admission("公司通道未涵蓋全部網段，已取消公司連線")
                 }
