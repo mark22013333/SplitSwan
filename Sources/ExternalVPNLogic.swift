@@ -688,7 +688,11 @@ enum ExternalVPNPlanner {
         let required = publicNetworks(excluding: protected + vpnPrecise + vpnDNS + [baseline.localNetwork])
         // 限定介面（I）的路由只給綁定該介面的流量用，覆蓋驗證也不採計；若當成既有細部路由略過，會留下沒有實體路由的缺口。
         let precise = current.routes.filter { $0.network.prefix >= 2 && !$0.isInterfaceScoped }.map(\.network)
-        let dnsHosts = reroutedBaselineDNS(session, current: current, tunnel: tunnel)
+        // 改走原本網卡的 DNS 只取 dnsPlan 的分類結果。VPN 沒推 DNS 時 dnsPlan 不分類，原本 DNS 照舊經通道；
+        // dnsPlan 失敗時 tick 隨即拋出同一錯誤、不會套用，這裡不另加 /32。
+        let rerouted = (try? dnsPlan(session, current: current, tunnel: tunnel))?.reroutedDNS ?? []
+        let dnsHosts = Array(Set(rerouted.compactMap { try? ExternalIPv4($0) })).sorted { $0.value < $1.value }
+            .map { ExternalIPv4Network(address: $0, prefix: 32) }
         let networks = publicNetworks(excluding: protected + precise + vpnDNS + [baseline.localNetwork] + direct + dnsHosts)
         guard required.count <= 2048, networks.count <= 2048 else { throw ExternalVPNError.invalid("外網路由範圍無法安全分流") }
         var additions = networks.map { ExternalRoute(network: $0, gateway: baseline.gateway, interface: baseline.interface, flags: "UGS1") }
@@ -858,24 +862,17 @@ enum ExternalVPNPlanner {
         }
         // 改走原本網卡等同使用者填的「指定 IP」，沿用同一套公用位址限制；落在使用者要求保留走 VPN 的網段、
         // 公司通道網段、本機網段，或較寬網段屬於其他通道時，無法判斷哪一邊才對，照舊拒絕。
+        // 實際命中的若是其他介面更細的一般路由（不是這條通道），改走原本網卡會改變它原本的出口，也照舊拒絕。
         let protected = session.profile.protectedNetworks.compactMap { try? ExternalIPv4Network($0) }
+        // 作用中重新驗證時，命中的是自己加的 /32，不算其他介面的路由。
+        let winners = generalWinners(ip, routes: current.routes.filter { route in !session.addedRoutes.contains { $0.sameIdentity(as: route) } })
         guard covering.allSatisfy({ $0.interface == tunnel }),
+              !winners.isEmpty, winners.allSatisfy({ $0.interface == tunnel }),
               (try? ExternalVPNProfile(directIPv4: [ip.description]).validated()) != nil,
               !session.baseline.localNetwork.contains(ip),
               !protected.contains(where: { $0.contains(ip) }),
               session.company?.policy.selectors.contains(where: { $0.contains(ip) }) != true else { return .captured(finest) }
         return .widerTunnelNetwork
-    }
-
-    // plan 與 dnsPlan 對同一份快照做相同分類，dnsPlan 判定可用的位址才會在 plan 裡有對應的 /32。
-    static func reroutedBaselineDNS(_ session: ExternalVPNSession, current: ExternalNetworkSnapshot, tunnel: String) -> [ExternalIPv4Network] {
-        let physical = current.dns.filter { $0.interface == session.baseline.interface && !$0.servers.isEmpty }
-        guard physical.count == 1, let entry = physical.first else { return [] }
-        let endpoints = tunnelEndpoints(current.routes, interface: tunnel)
-        let hosts = entry.servers.compactMap { try? ExternalIPv4($0) }.filter {
-            baselineDNSRoute($0, session: session, current: current, tunnel: tunnel, endpoints: endpoints) == .widerTunnelNetwork
-        }
-        return Array(Set(hosts)).sorted { $0.value < $1.value }.map { ExternalIPv4Network(address: $0, prefix: 32) }
     }
 }
 

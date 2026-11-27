@@ -225,7 +225,7 @@ final class ExternalVPNSystem: ExternalVPNRuntime {
             }
         }
         let routes = ExternalVPNPlanner.parseRoutes(try Self.command("/usr/sbin/netstat", ["-rn", "-f", "inet"]))
-        guard !routes.contains(where: { $0.network == route.network && !$0.flags.contains("I") }) else {
+        guard !routes.contains(where: { $0.network == route.network && !$0.isInterfaceScoped }) else {
             throw ExternalVPNRouteError.notAdded("有相同目的地的既有路由，未取代其他程式的設定")
         }
         do {
