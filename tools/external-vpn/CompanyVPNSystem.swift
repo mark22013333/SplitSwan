@@ -135,7 +135,7 @@ extension ExternalVPNSystem: CompanyVPNRuntime {
             throw CompanyVPNError.admission("公司通道介面已消失，未新增公司路由")
         }
         let routes = ExternalVPNPlanner.parseRoutes(try Self.command("/usr/sbin/netstat", ["-rn", "-f", "inet"]))
-        guard !routes.contains(where: { $0.network == route.network && !$0.flags.contains("I") }) else {
+        guard !routes.contains(where: { $0.network == route.network && !$0.isInterfaceScoped }) else {
             throw CompanyVPNError.admission("公司網段已有相同目的地路由，未取代其他程式的設定")
         }
         // -ifp 的介面名稱要帶冒號，libc link_addr 才會填入名稱；不帶時 IFP 會是空的。

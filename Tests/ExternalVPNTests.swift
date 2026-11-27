@@ -627,7 +627,7 @@ let directPending = try! directEngine.prepare(owner: 501, profile: directProfile
 directRuntime.state = connected(); directRuntime.state.routes.append(route("203.0.0.0/16", "198.51.100.1", "ppp0"))
 let directActive = attempt(directEngine, directPending)
 check("保留 /16 只新增明確指定 /32", directActive.phase == .active && directActive.addedRoutes.contains { $0.network == network("203.0.113.8/32") && $0.interface == "en0" })
-check("指定 IP 旁的同網段位址仍走 VPN", CompanyVPNPlanner.winners(try! ExternalIPv4("203.0.113.9"), routes: directRuntime.state.routes).allSatisfy { $0.interface == "ppp0" })
+check("指定 IP 旁的同網段位址仍走 VPN", ExternalVPNPlanner.generalWinners(try! ExternalIPv4("203.0.113.9"), routes: directRuntime.state.routes).allSatisfy { $0.interface == "ppp0" })
 let conflictingDNSProfile = ExternalVPNProfile(dnsMode: .preserveVPN, directIPv4: ["198.51.100.53"])
 let conflictingDNSSession = ExternalVPNSession(owner: 501, baseline: baseline(), profile: conflictingDNSProfile)
 check("指定 IP 不得繞過 VPN DNS", rejected { try ExternalVPNPlanner.plan(conflictingDNSSession, current: connected(), tunnel: "ppp0") })
@@ -819,10 +819,46 @@ for mode in [ExternalVPNDNSMode.splitDomains, .preserveVPN] {
 }
 let onlyEndpoint = dnsError(f5Session(["1.1.1.1"]), f5Connected(["1.1.1.1"]))
 check("(b) 原本 DNS 只有通道端點時拒絕", onlyEndpoint?.contains("全部") == true && onlyEndpoint?.contains("1.1.1.1") == true)
-let coveredOnly = dnsError(f5Session(companyDNS), f5Connected(companyDNS, tunnel: "0/1 10.0.0.127 UScg utun4\n1.1.1/24 10.0.0.127 USc utun4\n10/8 10.0.0.127 UGSc utun4\n128.0/1 10.0.0.127 USc utun4\n"))
-check("(c) 原本 DNS 被一般通道網段接管照舊拒絕並寫出細節", coveredOnly == "原本的 DNS 1.1.1.1 被 utun4 的 1.1.1.0/24 路由接管，未套用分流")
-let coveredEndpoint = dnsError(f5Session(companyDNS), f5Connected(companyDNS, tunnel: f5Tunnel + "\n1.1.1/24 10.0.0.127 USc utun4\n"))
-check("(c) 端點同時被較寬通道網段覆蓋仍拒絕", coveredEndpoint?.contains("原本的 DNS 1.1.1.1 被 utun4") == true)
+// 原本 DNS 只被 VPN 通道的較寬網段涵蓋：改讓它以 /32 經原本網卡與閘道出去，照常分流。
+let widerTunnel = "0/1 10.0.0.127 UScg utun4\n1.1.1/24 10.0.0.127 USc utun4\n10/8 10.0.0.127 UGSc utun4\n128.0/1 10.0.0.127 USc utun4\n"
+let one = try! ExternalIPv4("1.1.1.1")
+let coveredOnly = dnsError(f5Session(companyDNS), f5Connected(companyDNS, tunnel: widerTunnel))
+check("(b) 原本 DNS 只被通道較寬網段涵蓋時不再拒絕", coveredOnly == nil)
+let widerPlan = try? ExternalVPNPlanner.plan(f5Session(companyDNS), current: f5Connected(companyDNS, tunnel: widerTunnel), tunnel: "utun4")
+check("(b) 規劃替被涵蓋的 DNS 加一條經原本網卡與閘道的 /32", widerPlan?.additions.contains { $0.network == network("1.1.1.1/32") && $0.interface == "en0" && $0.gateway == "192.0.2.1" && $0.kind == .gateway } == true)
+for mode in [ExternalVPNDNSMode.splitDomains, .preserveVPN] {
+    let runtime = FakeRuntime(); runtime.state = f5Baseline(companyDNS)
+    let engine = ExternalVPNEngine(runtime: runtime)
+    let pending = try! engine.prepare(owner: 501, profile: ExternalVPNProfile(dnsMode: mode))
+    runtime.state = f5Connected(companyDNS, tunnel: widerTunnel)
+    let active = attempt(engine, pending)
+    check("(b) \(mode.rawValue) 原本 DNS 被較寬網段涵蓋時啟用分流", active.phase == .active)
+    let winners = ExternalVPNPlanner.generalWinners(one, routes: runtime.state.routes)
+    check("(b) \(mode.rawValue) 到原本 DNS 1.1.1.1 的一般流量改走 en0", !winners.isEmpty && winners.allSatisfy { $0.interface == "en0" && $0.network == network("1.1.1.1/32") })
+    check("(b) \(mode.rawValue) 訊息說明哪些 DNS 改走原本網卡", active.message.contains("1.1.1.1") && active.message.contains("原本網卡") && !active.message.contains("通道端點"))
+    let again = try! engine.tick(active)
+    check("(b) \(mode.rawValue) 作用中重新驗證維持 active 且不重複新增", again.phase == .active && again.message == active.message && runtime.adds == active.addedRoutes.count)
+    let restored = try! engine.restore(again)
+    check("(b) \(mode.rawValue) 撤回時移除那條 /32", restored.phase == .idle && !runtime.state.routes.contains { $0.network == network("1.1.1.1/32") })
+}
+check("(d) 唯一的原本 DNS 只被較寬網段涵蓋也算可用", dnsError(f5Session(["1.1.1.1"]), f5Connected(["1.1.1.1"], tunnel: widerTunnel)) == nil)
+let pushedHost = dnsError(f5Session(companyDNS), f5Connected(companyDNS, tunnel: widerTunnel + "1.1.1.1/32 10.0.0.127 USc utun4\n"))
+check("(c) VPN 另推非端點的 /32 主機路由仍拒絕", pushedHost == "原本的 DNS 1.1.1.1 被 utun4 的 1.1.1.1/32 路由接管，未套用分流")
+// 端點的 /32 比較寬網段精確，一般流量照樣進通道端點；無法再加同目的地的 /32，所以視同端點略過，改用其他 DNS。
+let coveredEndpointSession = f5Session(companyDNS), coveredEndpointState = f5Connected(companyDNS, tunnel: f5Tunnel + "\n1.1.1/24 10.0.0.127 USc utun4\n")
+let coveredEndpoint = try? ExternalVPNPlanner.dnsPlan(coveredEndpointSession, current: coveredEndpointState, tunnel: "utun4")
+check("端點同時被較寬通道網段覆蓋時視同端點略過", coveredEndpoint?.skippedEndpointDNS == ["1.1.1.1"])
+let coveredEndpointPlan = try? ExternalVPNPlanner.plan(coveredEndpointSession, current: coveredEndpointState, tunnel: "utun4")
+check("端點同時被較寬通道網段覆蓋時不另加 /32", coveredEndpointPlan != nil && coveredEndpointPlan?.additions.contains { $0.network == network("1.1.1.1/32") } == false)
+let tailscaleWider = f5Connected(companyDNS, tunnel: widerTunnel + "1.1.1.1 link#39 UHWIig utun6\n")
+check("(b) 另有 Tailscale 限定介面主機路由時仍照常規劃", dnsError(f5Session(companyDNS), tailscaleWider) == nil)
+check("(b) 另有 Tailscale 限定介面主機路由時仍加 /32 經原本網卡", (try? ExternalVPNPlanner.plan(f5Session(companyDNS), current: tailscaleWider, tunnel: "utun4"))?.additions.contains { $0.network == network("1.1.1.1/32") && $0.interface == "en0" } == true)
+let protectedDNS = dnsError(f5Session(companyDNS, ExternalVPNProfile(protectedNetworks: ["1.1.1.0/24"])), f5Connected(companyDNS, tunnel: widerTunnel))
+check("原本 DNS 落在使用者保留走 VPN 的網段時仍拒絕", protectedDNS == "原本的 DNS 1.1.1.1 被 utun4 的 1.1.1.0/24 路由接管，未套用分流")
+let privateDNS = dnsError(f5Session(["10.20.0.1", "8.8.8.8"]), f5Connected(["10.20.0.1", "8.8.8.8"], tunnel: widerTunnel))
+check("非公用位址的原本 DNS 被較寬網段涵蓋時仍拒絕", privateDNS == "原本的 DNS 10.20.0.1 被 utun4 的 10.0.0.0/8 路由接管，未套用分流")
+let otherWider = dnsError(f5Session(companyDNS), f5Connected(companyDNS, tunnel: "0/1 10.0.0.127 UScg utun4\n128.0/1 10.0.0.127 USc utun4\n1.1.1/24 10.0.0.9 USc utun9\n"))
+check("較寬網段在其他通道介面時仍拒絕", otherWider == "原本的 DNS 1.1.1.1 被 utun9 的 1.1.1.0/24 路由接管，未套用分流")
 let oneWay = dnsError(f5Session(companyDNS), f5Connected(companyDNS, tunnel: "0/1 10.0.0.127 UScg utun4\n1.1.1.1 10.0.0.127 UHr utun4\n10/8 10.0.0.127 UGSc utun4\n128.0/1 10.0.0.127 USc utun4\n"))
 check("(d) 只有單向主機路由不認定為端點且照舊拒絕", oneWay == "原本的 DNS 1.1.1.1 被 utun4 的 1.1.1.1/32 路由接管，未套用分流")
 let otherTunnel = dnsError(f5Session(companyDNS), f5Connected(companyDNS, tunnel: f5Tunnel + "\n1.1.1.1/32 10.0.0.9 USc utun9\n"))
@@ -836,6 +872,55 @@ let failedF5Pending = try! failedF5Engine.prepare(owner: 501, profile: ExternalV
 failedRuntime.state = f5Connected(["1.1.1.1"])
 let failedF5 = attempt(failedF5Engine, failedF5Pending)
 check("(b) 只有端點 DNS 時 tick 失敗且零寫入", stopped(failedF5) && failedRuntime.adds == 0 && failedRuntime.dnsWrites == 0)
+// VPN 沒推 DNS 時 dnsPlan 不分類原本 DNS，原本 DNS 照舊經通道查詢（公司可能靠它解析內部名稱）；plan 不能另外替它加 /32。
+var noPushDNS = f5Connected(companyDNS, tunnel: widerTunnel)
+noPushDNS.dns.removeAll { $0.interface == "utun4" }
+let noPushDNSPlan = try? ExternalVPNPlanner.dnsPlan(f5Session(companyDNS), current: noPushDNS, tunnel: "utun4")
+check("VPN 沒推 DNS 時不分類原本 DNS", noPushDNSPlan != nil && noPushDNSPlan?.reroutedDNS.isEmpty == true && noPushDNSPlan?.skippedEndpointDNS.isEmpty == true)
+let noPushRoutes = try? ExternalVPNPlanner.plan(f5Session(companyDNS), current: noPushDNS, tunnel: "utun4")
+check("VPN 沒推 DNS 時不替被較寬網段涵蓋的原本 DNS 加路由", noPushRoutes != nil && noPushRoutes?.additions.contains { $0.network.contains(one) } == false && noPushRoutes?.evidence.baselineDNSHosts == nil)
+for mode in [ExternalVPNDNSMode.splitDomains, .preserveVPN] {
+    let runtime = FakeRuntime(); runtime.state = f5Baseline(companyDNS)
+    let engine = ExternalVPNEngine(runtime: runtime)
+    let pending = try! engine.prepare(owner: 501, profile: ExternalVPNProfile(dnsMode: mode))
+    runtime.state = noPushDNS
+    let active = attempt(engine, pending)
+    let winners = ExternalVPNPlanner.generalWinners(one, routes: runtime.state.routes)
+    check("VPN 沒推 DNS \(mode.rawValue) 照常啟用，原本 DNS 仍經通道且訊息不提原本網卡",
+          active.phase == .active && !winners.isEmpty && winners.allSatisfy { $0.interface == "utun4" && $0.network == network("1.1.1.0/24") } && !active.message.contains("原本網卡"))
+}
+// 實際命中的是其他介面更細的一般路由（en1 的 /28）而不是通道：改走 en0 會改變它原本的出口，照舊拒絕。
+let finerOtherState = f5Connected(companyDNS, tunnel: widerTunnel + "1.1.1.0/28 198.51.100.1 UGSc en1\n")
+check("測試前提：1.1.1.1 的一般流量命中 en1 的 /28", ExternalVPNPlanner.generalWinners(one, routes: finerOtherState.routes).map(\.interface) == ["en1"])
+check("原本 DNS 實際命中其他介面更細路由時照舊拒絕", dnsError(f5Session(companyDNS), finerOtherState) == "原本的 DNS 1.1.1.1 被 utun4 的 1.1.1.0/24 路由接管，未套用分流")
+check("原本 DNS 實際命中其他介面更細路由時不加 /32", (try? ExternalVPNPlanner.plan(f5Session(companyDNS), current: finerOtherState, tunnel: "utun4"))?.additions.contains { $0.network == network("1.1.1.1/32") } != true)
+// b 類啟用後的紀錄與公司 VPN 准入。
+let bRuntime = FakeRuntime(); bRuntime.state = f5Baseline(companyDNS)
+let bEngine = ExternalVPNEngine(runtime: bRuntime)
+let bPending = try! bEngine.prepare(owner: 501, profile: ExternalVPNProfile(dnsMode: .preserveVPN))
+bRuntime.state = f5Connected(companyDNS, tunnel: widerTunnel)
+let bActive = attempt(bEngine, bPending)
+var bJournal = try! JSONSerialization.jsonObject(with: ExternalVPNJournal.encode(bActive)) as! [String: Any]
+var bJournalSession = bJournal["session"] as! [String: Any]
+var bJournalEvidence = bJournalSession["routingEvidence"] as! [String: Any]
+check("b 類啟用後 journal 記下 baselineDNSHosts", bActive.phase == .active && bJournalEvidence["baselineDNSHosts"] != nil)
+bJournalEvidence.removeValue(forKey: "baselineDNSHosts")
+bJournalSession["routingEvidence"] = bJournalEvidence
+bJournal["session"] = bJournalSession
+let legacyEvidenceSession = try? ExternalVPNJournal.decode(JSONSerialization.data(withJSONObject: bJournal))
+check("缺 baselineDNSHosts 鍵的舊 journal 可解碼，其他證據不變",
+      legacyEvidenceSession != nil && legacyEvidenceSession?.routingEvidence?.baselineDNSHosts == nil
+          && legacyEvidenceSession?.routingEvidence?.publicNetworks == bActive.routingEvidence?.publicNetworks
+          && legacyEvidenceSession?.routingEvidence?.directHosts == bActive.routingEvidence?.directHosts
+          && legacyEvidenceSession?.addedRoutes == bActive.addedRoutes)
+// 公司閘道要經原本網卡才能准入；9.9.9.9 在分流後由 en0 的外網路由涵蓋。
+func companyPolicy(_ selectors: [String]) -> CompanyPolicy {
+    try! CompanyPolicy(revision: String(repeating: "a", count: 64), slot: 1, selectors: selectors, peer: "9.9.9.9")
+}
+let admitOverDNS: String? = { do { try CompanyVPNPlanner.admit(companyPolicy(["1.1.1.1/32"]), session: bActive, current: bRuntime.state); return nil } catch { return error.localizedDescription } }()
+check("b 類啟用後公司網段涵蓋改走原本網卡的 DNS 時拒絕准入：\(admitOverDNS ?? "nil")", admitOverDNS?.contains("DNS") == true)
+let admitElsewhere: String? = { do { try CompanyVPNPlanner.admit(companyPolicy(["203.0.113.8/32"]), session: bActive, current: bRuntime.state); return nil } catch { return error.localizedDescription } }()
+check("b 類啟用後公司網段不涵蓋該 DNS 時接受准入：\(admitElsewhere ?? "nil")", admitElsewhere == nil)
 
 // VPN 先建通道與路由、DNS 晚幾秒才設定完：要等設定連續穩定才套用。
 func lateDNS(_ server: String) -> ExternalNetworkSnapshot {
@@ -999,6 +1084,26 @@ legacyFailure.removeValue(forKey: "advice")
 legacyStatus["latestFailure"] = legacyFailure
 let adviceLegacyDecoded = try? JSONDecoder().decode(ExternalVPNStatus.self, from: JSONSerialization.data(withJSONObject: legacyStatus))
 check("缺少 advice 欄位的舊 JSON 仍可解碼", adviceLegacyDecoded?.latestFailure?.advice == nil && adviceLegacyDecoded?.latestFailure?.message == overlayResult.latestFailure?.message)
+
+// 結構守門：限定介面（I）只在 ExternalRoute.isInterfaceScoped 判斷一次。各處自行過濾曾漏掉 I（Tailscale 的 UHWIig 主機路由），
+// 新程式要判斷「一般流量會不會走」請用 carriesGeneralTraffic 或 ExternalVPNPlanner.generalWinners。run-tests.sh 在 repo 根目錄執行。
+// 比對 "I" 字面值（contains、firstIndex(of:)、== 等寫法都要寫出它），以及同一行提到 flags 且字串含 I 的旗標組合。
+let scopedFlagPattern = ##"#?"I"#?|flags.*"[A-Z]*I[A-Z]*""##
+func flagsScopedCheck(_ line: String) -> Bool { line.range(of: scopedFlagPattern, options: .regularExpression) != nil }
+let guardFiles = ["Sources", "tools/external-vpn"].flatMap { directory in
+    ((try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? []).filter { $0.hasSuffix(".swift") }.sorted().map { "\(directory)/\($0)" }
+}
+let scopedFlagLines = guardFiles.flatMap { path -> [String] in
+    let text = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+    return text.split(separator: "\n").map(String.init).filter(flagsScopedCheck).map { "\(path): \($0.trimmingCharacters(in: .whitespaces))" }
+}
+let lookupRoutes = ExternalVPNPlanner.parseRoutes("0/1 10.0.0.127 UScg utun4\n1.1.1/24 10.0.0.127 USc utun4\n1.1.1.1 link#39 UHWIig utun6\n")
+check("一般流量查詢略過限定介面並取最長前綴", ExternalVPNPlanner.generalWinners(try! ExternalIPv4("1.1.1.1"), routes: lookupRoutes).map(\.network.description) == ["1.1.1.0/24"])
+let handWritten = [#"$0.flags.contains("I")"#, #"flags.contains( "I" )"#, #"route.flags.firstIndex(of: "I") != nil"#, #"flags.contains { $0 == "I" }"#, #"flags.contains(Character("I"))"#, #"$0.flags.contains("UI")"#]
+check("結構守門抓得到各種手寫限定介面判斷", handWritten.allSatisfy(flagsScopedCheck))
+check("結構守門不誤抓改用 isInterfaceScoped 的寫法", !flagsScopedCheck("guard !routes.contains(where: { $0.network == route.network && !$0.isInterfaceScoped }) else {") && !flagsScopedCheck(#"ExternalRoute(network: host, gateway: g, interface: i, flags: "UGHS1")"#))
+check("結構守門讀得到 Sources 與 tools/external-vpn", ["Sources/ExternalVPNLogic.swift", "Sources/VPNCoexistenceLogic.swift", "tools/external-vpn/ExternalVPNSystem.swift", "tools/external-vpn/CompanyVPNSystem.swift"].allSatisfy(guardFiles.contains))
+check("限定介面旗標只在 isInterfaceScoped 判斷：\(scopedFlagLines)", scopedFlagLines.count == 1 && scopedFlagLines[0].hasPrefix("Sources/ExternalVPNLogic.swift: static func isInterfaceScoped"))
 
 print("通過 \(pass)，失敗 \(fail)")
 exit(fail == 0 ? 0 : 1)
