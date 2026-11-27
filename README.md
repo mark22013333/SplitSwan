@@ -7,7 +7,7 @@ macOS 狀態列的 VPN 工具，用開源的 [strongSwan](https://www.strongswan
 - **自動重連**：睡眠喚醒、切換網路、通道失聯後自動接回；按「斷線」後就不會再自動連線
 - **斷線通知**：非預期中斷超過 30 秒時發 macOS 通知，恢復時再通知一次
 - **診斷報告**：一鍵產生報告檔給管理者排查，不含密碼與 PSK
-- **有圖形介面**：狀態列一鍵連線，主視窗有連線、設定、環境檢查、關於四個分頁，缺的元件可以一鍵安裝
+- **有圖形介面**：狀態列一鍵連線，主視窗有連線、自動分流、設定、環境檢查、關於五個分頁，缺的元件可以一鍵安裝
 - **公司設定與程式分開**：閘道與網段放在各自電腦的設定檔，原始碼不含任何公司位址
 
 > 版本：1.9.26
@@ -415,7 +415,7 @@ swanctl ──vici──▶ charon（strongSwan daemon，root）──IKEv2─�
 |------|------|
 | `app.env` | App 名稱與 bundle id |
 | `Sources/main.swift` | 程式進入點、狀態列選單、視窗管理 |
-| `Sources/MainView.swift` | 主視窗四個分頁（SwiftUI） |
+| `Sources/MainView.swift` | 主視窗五個分頁（SwiftUI） |
 | `Sources/VPNController.swift` | 呼叫輔助程式、定時更新連線狀態、自動重連、斷線通知判定 |
 | `Sources/DropNotifier.swift` | 發送 macOS 斷線／恢復通知 |
 | `Sources/GatewayHistory.swift` | 閘道連線紀錄與自動輪替排序 |
